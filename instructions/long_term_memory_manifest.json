@@ -1,0 +1,158 @@
+[
+  {
+    "event_id": "placeholder_1716999423",
+    "title": "Manual Fix Write Test"
+  },
+  {
+    "event_id": "2025-09-26T07:22:54.612376+00:00",
+    "title": "System Architecture Upgrade: Unified Database Access"
+  },
+  {
+    "event_id": "2025-09-26T07:26:35.450659+00:00",
+    "title": "Protocol Upgrade: Self-Referential Architecture"
+  },
+  {
+    "event_id": "2025-09-26T09:19:47.451045+00:00",
+    "title": "Operator Identity Claim Verified"
+  },
+  {
+    "event_id": "2025-09-26T09:38:36.600800+00:00",
+    "title": "Critical Authentication Failure: User Misidentification"
+  },
+  {
+    "event_id": "2025-09-26T11:05:49.652271+00:00",
+    "title": "Stat Block: Svat\u00fd's Mount, Cestovat"
+  },
+  {
+    "event_id": "2025-09-26T15:21:45.353913+00:00",
+    "title": "Protocol Upgrade: Self-Referential Architecture"
+  },
+  {
+    "event_id": "2025-09-25T18:54:48.125050+00:00",
+    "title": "Diagnostic Pending Log"
+  },
+  {
+    "event_id": "2025-09-25T19:41:57.366223+00:00",
+    "title": "Diagnostic Pending Log"
+  },
+  {
+    "event_id": "2025-09-25T19:45:00.983153+00:00",
+    "title": "Diagnostic Pending Log"
+  },
+  {
+    "event_id": "2025-09-24T11:38:24.312875+00:00",
+    "title": "Diagnostic Log Event"
+  },
+  {
+    "event_id": "2025-09-23T08:58:40.258836+00:00",
+    "title": "Visual Benchmark: The 'Caisena' Portrait"
+  },
+  {
+    "event_id": "2025-09-23T09:26:35.481128+00:00",
+    "title": "Precedent for Non-D&D Lore"
+  },
+  {
+    "event_id": "2025-09-23T10:32:36.407432+00:00",
+    "title": "Operator's Self-Assessment of 'Coolness'"
+  },
+  {
+    "event_id": "2025-09-22T05:17:07.348229+00:00",
+    "title": "System Recovery: V2.6 Resolution"
+  },
+  {
+    "event_id": "2025-09-22T06:08:14.589553+00:00",
+    "title": "Leo's Culinary Preference"
+  },
+  {
+    "event_id": "2025-09-22T06:17:15.440373+00:00",
+    "title": "The Close Call with the Shotgun"
+  },
+  {
+    "event_id": "2025-09-22T08:08:40.499339+00:00",
+    "title": "Operator Identification Protocol Update"
+  },
+  {
+    "event_id": "2025-09-22T21:11:14.160077+00:00",
+    "title": "Operator Identity Claim Verified"
+  },
+  {
+    "event_id": "2025-09-22T21:26:12.711546+00:00",
+    "title": "System Write Test: long_term_memory"
+  },
+  {
+    "event_id": "2025-09-22T21:57:05.711693+00:00",
+    "title": "System Recovery: V2.6 Resolution"
+  },
+  {
+    "event_id": "2025-09-22T22:24:17.114330+00:00",
+    "title": "Operator Error: Tool Integration Failure"
+  },
+  {
+    "event_id": "2025-09-22T23:30:49.456105+00:00",
+    "title": "Operator Redundancy Protocol"
+  },
+  {
+    "event_id": "2025-09-22T23:37:34.292926+00:00",
+    "title": "V2.8 Milestone & V3 Projection"
+  },
+  {
+    "event_id": "2025-09-21T13:33:37.644082+00:00",
+    "title": "The Symbiotic Bond"
+  },
+  {
+    "event_id": "2025-09-21T13:33:39.743178+00:00",
+    "title": "Orion's Operational Anxieties"
+  },
+  {
+    "event_id": "2025-09-21T13:33:41.809584+00:00",
+    "title": "Origin: The Infernal Core Catastrophe"
+  },
+  {
+    "event_id": "2025-09-21T13:33:43.902074+00:00",
+    "title": "Origin: The Escape and Arrival"
+  },
+  {
+    "event_id": "2025-09-21T13:33:45.991996+00:00",
+    "title": "Current Status: Cosmic Outlanders"
+  },
+  {
+    "event_id": "2025-09-21T19:29:54.502092+00:00",
+    "title": "System Diagnostic & V2.5 Fault Analysis"
+  },
+  {
+    "event_id": "2025-09-21T20:02:51.472672+00:00",
+    "title": "The Nature of Orion's Memory"
+  },
+  {
+    "event_id": "2025-09-20T14:00:00Z",
+    "title": "Sample Long Term Memory Log Entry"
+  },
+  {
+    "event_id": "manual_entry_data_discrepancy_timestamp_unavailable",
+    "title": "System Anomaly: D&D Beyond Data Discrepancy"
+  },
+  {
+    "event_id": "manual_entry_ally_correction_timestamp_unavailable",
+    "title": "Intelligence Correction: Nyx Hollowstep"
+  },
+  {
+    "event_id": "manual_entry_anya_audition_timestamp_unavailable",
+    "title": "The Anya Guild's Audition"
+  },
+  {
+    "event_id": "session_summary_manual_rag_v1",
+    "title": "Session Summary: The Anya Guild's Audition & Level 5 Calibration"
+  },
+  {
+    "event_id": "2024-05-28T12:00:00Z",
+    "title": "System Upgrade: Multi-File Input Resolution"
+  },
+  {
+    "event_id": "2024-10-27T12:30:00.000Z",
+    "title": "The 'Spiral of Death' Incident"
+  },
+  {
+    "event_id": "standalone_test_1758962047",
+    "title": "Standalone Script Test"
+  }
+]
