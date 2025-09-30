@@ -1,5 +1,6 @@
 # --- START OF FILE functions.py (Unified Access Model) ---
 
+from git import Repo, GitCommandError
 # --- PUBLIC TOOL DEFINITION ---
 __all__ = [
     "search_knowledge_base",
@@ -12,9 +13,8 @@ __all__ = [
     "list_project_files",
     "read_file",
     "execute_sql_read",
-    "execute_sql_write",
-    "propose_file_change",
-    "apply_proposed_change"
+    "execute_sql_write", # Retained for other DB operations
+    "create_git_commit_proposal" # New unified Git tool
 ]
 # --- END OF PUBLIC TOOL DEFINITION ---
 
@@ -130,99 +130,64 @@ def execute_sql_write(query: str, params: list[str], user_id: str) -> str:
 
 # --- HIGH-LEVEL SELF-REFERENTIAL TOOLS ---
 
-def propose_file_change(proposal_name: str, file_path: str, new_content: str, user_id: str) -> str:
+def create_git_commit_proposal(file_path: str, new_content: str, commit_message: str, user_id: str) -> str:
     """
-    (Pillar 3) Creates a file change proposal and saves it to the database.
-    Internally uses execute_sql_write.
+    (Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,
+    commits the change, and pushes the branch to the remote 'origin'.
+    This is a protected, high-level action restricted to the Primary Operator.
     """
-    print(f"--- Proposing file change '{proposal_name}' for '{file_path}' ---")
+    print(f"--- Git Commit Proposal received for '{file_path}' ---")
+
+    # 1. Authorization Check
+    owner_id = os.getenv("DISCORD_OWNER_ID")
+    if str(user_id) != owner_id:
+        return "Error: Authorization failed. This tool is restricted to the Primary Operator."
+
     try:
+        # 2. Initialize Repo and Sanitize Paths
+        repo = Repo(PROJECT_ROOT)
         target_path = (PROJECT_ROOT / file_path).resolve()
         if not target_path.is_relative_to(PROJECT_ROOT):
             return "Error: Access denied. Cannot access files outside the project directory."
 
-        old_content = ""
-        is_new_file = not target_path.is_file()
-        if not is_new_file:
-            with open(target_path, 'r', encoding='utf-8') as f:
-                old_content = f.read()
+        # 3. Create a unique branch name
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+        sanitized_message = re.sub(r'[^a-zA-Z0-9\-]', '-', commit_message.splitlines()[0]).strip('-')
+        branch_name = f"orion-changes/{timestamp}-{sanitized_message[:50]}"
 
-        diff_text = "".join(difflib.unified_diff(
-            old_content.splitlines(keepends=True),
-            new_content.splitlines(keepends=True),
-            fromfile=f"a/{file_path}",
-            tofile=f"b/{file_path}"
-        ))
+        print(f"  - Creating new branch: {branch_name}")
+        new_branch = repo.create_head(branch_name)
+        new_branch.checkout()
 
-        if not diff_text:
-            return "No changes detected."
-
-        sql = """
-            INSERT INTO staged_proposals (proposal_name, file_path, new_content, diff_text, is_new_file, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(proposal_name) DO UPDATE SET
-                file_path=excluded.file_path, new_content=excluded.new_content, diff_text=excluded.diff_text,
-                is_new_file=excluded.is_new_file, timestamp=excluded.timestamp;
-        """
-        params = [proposal_name, file_path, new_content, diff_text, 1 if is_new_file else 0, datetime.now(timezone.utc).isoformat()]
-        
-        # This is the crucial handoff to the general write tool
-        write_result = execute_sql_write(sql, params, user_id=user_id)
-
-        if "Error" in write_result:
-            return f"Error staging proposal in database: {write_result}"
-
-        return f"Proposal '{proposal_name}' for `{file_path}` has been successfully staged.\n```diff\n{diff_text}```\nTo apply, use `apply_proposed_change`."
-
-    except Exception as e:
-        return f"An unexpected error occurred during proposal creation: {e}"
-
-def apply_proposed_change(proposal_name: str, user_id: str) -> str:
-    """
-    (Pillar 4) Applies a staged file change from the database to the filesystem.
-    This is a protected, high-level action.
-    """
-    print(f"--- Applying file change proposal '{proposal_name}' ---")
-    
-    # Authorization check is implicitly handled by execute_sql_write later
-    owner_id = os.getenv("DISCORD_OWNER_ID")
-    if str(user_id) != owner_id:
-        return "Error: Authorization failed."
-
-    # 1. Fetch
-    read_sql = "SELECT file_path, new_content FROM staged_proposals WHERE proposal_name = ?;"
-    read_result = execute_sql_read(read_sql, [proposal_name])
-    
-    try:
-        data = json.loads(read_result)
-        if not data:
-            return f"Error: Proposal '{proposal_name}' not found in the database."
-        proposal = data[0]
-        file_path_str = proposal['file_path']
-        new_content = proposal['new_content']
-    except (json.JSONDecodeError, IndexError) as e:
-        return f"Error parsing proposal data from database: {e}. Raw response: {read_result}"
-
-    # 2. Apply
-    try:
-        target_path = (PROJECT_ROOT / file_path_str).resolve()
-        if not target_path.is_relative_to(PROJECT_ROOT):
-            return "Error: Proposal contains a dangerous file path."
-        
+        # 4. Write the file change
+        print(f"  - Writing {len(new_content)} bytes to {file_path}")
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with open(target_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
+
+        # 5. Stage and Commit
+        print("  - Staging and committing changes...")
+        repo.index.add([str(target_path)])
+        repo.index.commit(commit_message)
+
+        # 6. Push to remote
+        print(f"  - Pushing branch '{branch_name}' to origin...")
+        origin = repo.remote(name='origin')
+        origin.push(branch_name)
+
+        # 7. Return to the main branch
+        # This is important so the bot's runtime isn't on a feature branch
+        repo.heads.master.checkout()
+
+        return (f"Success. A new branch '{branch_name}' was created and pushed to the remote repository "
+                f"with your changes for `{file_path}`. Please review and merge the pull request on GitHub.")
+
+    except GitCommandError as e:
+        print(f"ERROR: A Git command failed: {e}")
+        return f"An error occurred during a Git operation: {e}"
     except Exception as e:
-        return f"Error writing file to filesystem: {e}"
-
-    # 3. Clean Up
-    delete_sql = "DELETE FROM staged_proposals WHERE proposal_name = ?;"
-    delete_result = execute_sql_write(delete_sql, [proposal_name], user_id=user_id)
-
-    if "Error" in delete_result:
-        return f"File has been changed, but a CRITICAL error occurred while cleaning up the proposal from the database: {delete_result}"
-
-    return f"Successfully applied proposal '{proposal_name}'. The file `{file_path_str}` has been modified."
+        print(f"ERROR: An unexpected error occurred in create_git_commit_proposal: {e}")
+        return f"An unexpected error occurred: {e}"
 
 # --- RETAINED SPECIALIZED & EXTERNAL TOOLS ---
 
