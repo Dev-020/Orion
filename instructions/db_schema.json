@@ -1,0 +1,57 @@
+{
+  "knowledge_base": [
+    "id",
+    "type",
+    "name",
+    "source",
+    "data"
+  ],
+  "deep_memory": [
+    "id",
+    "session_id",
+    "user_id",
+    "user_name",
+    "timestamp",
+    "prompt_text",
+    "response_text",
+    "attachments_metadata"
+  ],
+  "user_profiles": [
+    "user_id",
+    "user_name",
+    "aliases",
+    "first_seen",
+    "notes"
+  ],
+  "long_term_memory": [
+    "event_id",
+    "date",
+    "title",
+    "category",
+    "description",
+    "snippet"
+  ],
+  "active_memory": [
+    "topic",
+    "prompt",
+    "ruling",
+    "status",
+    "last_modified"
+  ],
+  "pending_logs": [
+    "event_id",
+    "date",
+    "title",
+    "category",
+    "description",
+    "snippet"
+  ],
+  "staged_proposals": [
+    "proposal_name",
+    "file_path",
+    "new_content",
+    "diff_text",
+    "is_new_file",
+    "timestamp"
+  ]
+}

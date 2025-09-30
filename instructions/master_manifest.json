@@ -1,0 +1,9 @@
+[
+  "active_memory_manifest.json",
+  "character_schema.json",
+  "db_schema.json",
+  "long_term_memory_manifest.json",
+  "pending_logs.json",
+  "tool_schema.json",
+  "user_profile_manifest.json"
+]

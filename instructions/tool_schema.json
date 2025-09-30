@@ -1,0 +1,200 @@
+{
+  "search_knowledge_base": {
+    "description": "Searches the knowledge base. Has two modes:\n- 'summary': Returns a lightweight list of matching entries (id, name, type, source). Use this for initial discovery.\n- 'full': Returns the complete data for a single, specific entry. Requires a unique 'id' for best results.",
+    "parameters": [
+      {
+        "name": "query",
+        "type": "typing.Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "typing.Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "item_type",
+        "type": "typing.Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "typing.Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "mode",
+        "type": "<class 'str'>",
+        "required": false,
+        "default": "summary"
+      },
+      {
+        "name": "max_results",
+        "type": "<class 'int'>",
+        "required": false,
+        "default": 25
+      }
+    ]
+  },
+  "manual_sync_instructions": {
+    "description": "Triggers a manual synchronization of the AI's core instruction files from Google Docs.\nSECURITY: This is a restricted tool. It will only execute if the requesting user_id\nmatches the Primary Operator's ID specified in the .env file.",
+    "parameters": [
+      {
+        "name": "user_id",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
+  "rebuild_manifests": {
+    "description": "Rebuilds specified manifest JSON files. Handles manifests that require a database\nconnection and those that do not.",
+    "parameters": [
+      {
+        "name": "manifest_names",
+        "type": "list[str]",
+        "required": true
+      }
+    ]
+  },
+  "update_character_from_web": {
+    "description": "Downloads the character sheet JSON from D&D Beyond.",
+    "parameters": []
+  },
+  "search_dnd_rules": {
+    "description": "Performs a web search and updates the quota tracker with file locking.",
+    "parameters": [
+      {
+        "name": "query",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "num_results",
+        "type": "<class 'int'>",
+        "required": false,
+        "default": 5
+      }
+    ]
+  },
+  "browse_website": {
+    "description": "Reads the full text content of a single webpage URL.",
+    "parameters": [
+      {
+        "name": "url",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
+  "lookup_character_data": {
+    "description": "Retrieves a specific piece of data from the local 'character_sheet_raw.json' file\nusing a dot-notation query string (e.g., 'data.name').",
+    "parameters": [
+      {
+        "name": "query",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
+  "list_project_files": {
+    "description": "Lists all files and directories within the project.",
+    "parameters": [
+      {
+        "name": "subdirectory",
+        "type": "<class 'str'>",
+        "required": false,
+        "default": "."
+      }
+    ]
+  },
+  "read_file": {
+    "description": "Reads the contents of a specific file within the project.",
+    "parameters": [
+      {
+        "name": "file_path",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
+  "execute_sql_read": {
+    "description": "(Pillar 1) Executes a read-only SQL query (SELECT) against the database.\nReturns results as a JSON string.",
+    "parameters": [
+      {
+        "name": "query",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "params",
+        "type": "typing.List[str]",
+        "required": false,
+        "default": []
+      }
+    ]
+  },
+  "execute_sql_write": {
+    "description": "Executes a write query (INSERT, UPDATE, DELETE) on the database using a\ntiered security model.\n\nArgs:\n    query (str): The SQL query string with '?' placeholders.\n    parameters (list): A list of values to be safely inserted.\n    user_id (str): The Discord ID of the user who initiated the prompt. This is mandatory.",
+    "parameters": [
+      {
+        "name": "query",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "params",
+        "type": "list[str]",
+        "required": true
+      },
+      {
+        "name": "user_id",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
+  "propose_file_change": {
+    "description": "(Pillar 3) Creates a file change proposal and saves it to the database.\nInternally uses execute_sql_write.",
+    "parameters": [
+      {
+        "name": "proposal_name",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "file_path",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "new_content",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "user_id",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
+  "apply_proposed_change": {
+    "description": "(Pillar 4) Applies a staged file change from the database to the filesystem.\nThis is a protected, high-level action.",
+    "parameters": [
+      {
+        "name": "proposal_name",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "user_id",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  }
+}
