@@ -109,6 +109,7 @@ This section documents critical failures identified during live stress-testing. 
 
 ## **Completed Milestones**
 
+*   **V3.2: Native Git Integration for Co-Pilot Workflow:** Replaced the internal database-driven file proposal system with a new toolset that allows Orion to directly create branches, commit changes, and push to the remote GitHub repository, enabling a true version-controlled Co-Pilot workflow.
 *   **V3.0: Unified Database Access Model:** Replaced specific database functions with the powerful, general-purpose `execute_sql_read` and `execute_sql_write` tools.
 *   **V3.0: Integrated Co-Pilot Workflow:** Established the core loop for self-modification (`list_project_files` -> `read_file` -> `propose_file_change` -> `apply_proposed_change`). Full automation is pending the Orchestrated System Restart.
 *   **V3.1: `active_memory.json` to Manifest:** Converted the `active_memory.json` file into a lightweight manifest of ruling IDs. This significantly reduces the token count of my base prompt, fetching full ruling text from the database only when needed.
