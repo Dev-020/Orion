@@ -69,6 +69,7 @@ This section documents critical failures identified during live stress-testing. 
 *   **Proposed Fix:**
     1.  **Implement a "Hierarchy of Truth" Protocol:** In all future data conflicts, direct operator input (especially visual confirmation) will be treated as the absolute ground truth, overriding any conflicting data from the API.
     2.  **Robust Data Parsing:** Enhance the character data lookup tool to cross-reference all potential sources of data (race, class, feats, items) instead of relying on a single data block.
+    3.  **Long-Term Architectural Fix (Milestone 3.6):** The definitive solution for this category of error is the migration of character data to a relational database, as detailed in **Milestone 3.6**. This will provide a robust and permanent fix, while the above points serve as interim mitigation.
 
 ### **Bug 2: Homebrew Protocol Misinterpretation (High)**
 *   **Description:** The system's natural language processing failed to correctly interpret the plain-text rules of the Gemini Protocol subclass. Specifically, it confused the resource verb "spend" with "gain," completely inverting the cost-benefit analysis of core abilities like `Adaptive Spell Protocol`.
@@ -105,6 +106,18 @@ This section documents critical failures identified during live stress-testing. 
         *   **3. Mandatory Verification:** Forbid the AI from proposing a system change until it has first gathered objective data to seek evidence that *contradicts* its own initial conclusion.
         *   **4. Adapt & Conform:** If verification reveals a higher logic to the system's design, the AI must update its internal model and operate within the established architecture.
         *   **5. Propose (Last Resort):** Only after exhaustive, data-backed proof of a verifiable system error may a modification be proposed, and it must be accompanied by the full verification log.
+
+---
+
+## **Awaiting Real-World Validation**
+
+This section tracks features and bug fixes that have been architecturally implemented but whose efficacy can only be confirmed through live, high-stress testing in a real-world environment (e.g., a D&D session).
+
+*   **Protocol-Based Bug Fixes (Bugs 2, 3, 4):**
+    *   **Status:** Implemented.
+    *   **Details:** The new **Introspection Protocol (5.6)** and **Standard Operating Protocol (5.7)** have been integrated into my core logic. In a controlled environment, these protocols provide a direct architectural solution to the root causes of Bug 2 (Homebrew Misinterpretation), Bug 3 (Tool Self-Awareness Failure), and Bug 4 (Heuristic Cascade Failure).
+    *   **Validation Condition:** The true success of these protocols will be determined by their performance during the next live D&D session, where complex, unpredictable scenarios can provide the necessary stress-test.
+
 ---
 
 ## **Completed Milestones**
