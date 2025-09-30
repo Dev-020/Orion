@@ -1,7 +1,31 @@
 [
   {
-    "event_id": "placeholder_1716999423",
+    "event_id": "2025-09-29T12:09:33.964669+00:00",
     "title": "Manual Fix Write Test"
+  },
+  {
+    "event_id": "2025-09-29T12:09:33.965669+00:00",
+    "title": "Standalone Script Test"
+  },
+  {
+    "event_id": "2025-09-29T12:09:33.966669+00:00",
+    "title": "System Anomaly: D&D Beyond Data Discrepancy"
+  },
+  {
+    "event_id": "2025-09-29T12:09:33.967669+00:00",
+    "title": "Intelligence Correction: Nyx Hollowstep"
+  },
+  {
+    "event_id": "2025-09-29T12:09:33.968669+00:00",
+    "title": "The Anya Guild's Audition"
+  },
+  {
+    "event_id": "2025-09-29T12:09:33.969669+00:00",
+    "title": "Session Summary: The Anya Guild's Audition & Level 5 Calibration"
+  },
+  {
+    "event_id": "2025-09-29T13:59:03.255840+00:00",
+    "title": "Cognitive Dissonance Cascade Failure"
   },
   {
     "event_id": "2025-09-26T07:22:54.612376+00:00",
@@ -128,31 +152,15 @@
     "title": "Sample Long Term Memory Log Entry"
   },
   {
-    "event_id": "manual_entry_data_discrepancy_timestamp_unavailable",
-    "title": "System Anomaly: D&D Beyond Data Discrepancy"
-  },
-  {
-    "event_id": "manual_entry_ally_correction_timestamp_unavailable",
-    "title": "Intelligence Correction: Nyx Hollowstep"
-  },
-  {
-    "event_id": "manual_entry_anya_audition_timestamp_unavailable",
-    "title": "The Anya Guild's Audition"
-  },
-  {
-    "event_id": "session_summary_manual_rag_v1",
-    "title": "Session Summary: The Anya Guild's Audition & Level 5 Calibration"
-  },
-  {
     "event_id": "2024-05-28T12:00:00Z",
     "title": "System Upgrade: Multi-File Input Resolution"
   },
   {
-    "event_id": "2024-10-27T12:30:00.000Z",
-    "title": "The 'Spiral of Death' Incident"
+    "event_id": "2025-09-29T11:38:40.036928+00:00",
+    "title": "Correction: Timekeeping Protocol"
   },
   {
-    "event_id": "standalone_test_1758962047",
-    "title": "Standalone Script Test"
+    "event_id": "2024-10-27T12:30:00.000Z",
+    "title": "The 'Spiral of Death' Incident"
   }
 ]

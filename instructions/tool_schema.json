@@ -157,14 +157,9 @@
       }
     ]
   },
-  "propose_file_change": {
-    "description": "(Pillar 3) Creates a file change proposal and saves it to the database.\nInternally uses execute_sql_write.",
+  "create_git_commit_proposal": {
+    "description": "(Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,\ncommits the change, and pushes the branch to the remote 'origin'.\nThis is a protected, high-level action restricted to the Primary Operator.",
     "parameters": [
-      {
-        "name": "proposal_name",
-        "type": "<class 'str'>",
-        "required": true
-      },
       {
         "name": "file_path",
         "type": "<class 'str'>",
@@ -176,17 +171,7 @@
         "required": true
       },
       {
-        "name": "user_id",
-        "type": "<class 'str'>",
-        "required": true
-      }
-    ]
-  },
-  "apply_proposed_change": {
-    "description": "(Pillar 4) Applies a staged file change from the database to the filesystem.\nThis is a protected, high-level action.",
-    "parameters": [
-      {
-        "name": "proposal_name",
+        "name": "commit_message",
         "type": "<class 'str'>",
         "required": true
       },
