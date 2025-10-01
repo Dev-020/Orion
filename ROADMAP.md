@@ -31,6 +31,14 @@ These represent significant architectural evolutions for the system.
     2.  **ETL (Extract, Transform, Load) Script:** A new, dedicated script will be developed. Triggered by `update_character_from_web()`, this script will be responsible for parsing the raw D&D Beyond JSON, transforming the data to fit our new relational schema, and loading it into the appropriate SQLite tables.
 *   **Intended Benefits:** This migration will yield powerful and efficient querying capabilities, drastically reduce the token cost of data lookups, and enforce a high standard of data integrity, permanently resolving the core issues that have plagued the current system.
 
+### **Milestone 3.7: The Campaign Chronicle System (V3 Capstone)**
+
+*   **Objective:** To implement the capstone feature of the V3 architecture, creating a universal, AI-driven system for tracking and understanding all campaign events. This system will serve as the primary D&D utility, unifying the functions of a combat scribe and a lore weaver into a single, intelligent chronicle.
+*   **Core Architecture:** This system is the practical application and synthesis of the preceding V3 milestones. It is fundamentally dependent on their completion.
+    1.  **Relational Lore Database:** Utilizes the DDL capabilities from **Milestone 3.3** to autonomously create and manage a complex relational schema for tracking all lore entities (NPCs, Factions, Locations) and their intricate relationships.
+    2.  **Semantic Encounter Analysis:** Leverages the Vector Database from **Milestone 3.5** to perform deep semantic analysis on both combat logs and narrative events, allowing the system to understand the *context and meaning* of events, not just the raw data.
+*   **Intended Benefits:** This milestone represents the final evolution of my role from a simple data repository to a true Campaign Companion. It provides the foundational intelligence for V4 by enabling proactive insights, narrative consistency tracking, and a deep, contextual understanding of our shared story.
+
 ### **Milestone 4.0: Knowledge & Agency**
 
 *   **Objective:** Evolve from a passive tool to a proactive agent capable of autonomous planning and self-sufficient learning.
@@ -51,7 +59,6 @@ These represent significant architectural evolutions for the system.
 
 These are quality-of-life and efficiency upgrades that can be implemented in parallel with major milestones.
 *   **Asynchronous Moderation Pinger:** A new tool to send a discreet, out-of-band notification to you when an external user provides information that I've logged for moderation. This decouples my learning from our active conversations, allowing for near-real-time knowledge updates.
-*   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 
 ---
 
@@ -121,6 +128,7 @@ This section tracks features and bug fixes that have been architecturally implem
 
 ## **Completed Milestones**
 
+*   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 *   **V3.2: Native Git Integration for Co-Pilot Workflow:** Replaced the internal database-driven file proposal system with a new toolset that allows Orion to directly create branches, commit changes, and push to the remote GitHub repository, enabling a true version-controlled Co-Pilot workflow.
 *   **V3.2: Orchestrated System Restart:** A self-triggered, state-aware system reboot. This allows me to apply changes to my own core code and immediately refresh my runtime to reflect them without losing conversational context, enabling seamless on-the-fly self-modification.
 *   **V3.2: Adaptive Communication Protocols:** To refine the AI's textual output by implementing distinct "modes" of communication. Each mode will have predefined guidelines for response length, formatting, and tone, tailored to the specific context of the user's prompt. This will reduce redundancy, improve clarity, and lower token expenditure.
