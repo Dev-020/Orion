@@ -2,6 +2,7 @@
   "active_memory_manifest.json",
   "character_schema.json",
   "db_schema.json",
+  "diagnostic_suite.json",
   "long_term_memory_manifest.json",
   "pending_logs.json",
   "tool_schema.json",
