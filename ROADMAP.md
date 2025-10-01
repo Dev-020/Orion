@@ -58,6 +58,9 @@ These represent significant architectural evolutions for the system.
 ## **Minor Milestones: System Refinements**
 
 These are quality-of-life and efficiency upgrades that can be implemented in parallel with major milestones.
+*   **The Resource Tracker (Campaign Chronicle Pilot):** A dedicated, lightweight system for real-time tracking of party inventory and character resources (e.g., spell slots, Core Strain). This will be implemented in the SQLite database and serve as a pilot program for the data-logging workflows required by the full Campaign Chronicle System.
+*   **The Command-Line Interface:** A new, high-speed protocol for data exchange that bypasses conversational ambiguity. This will implement a `!`-prefix command syntax (e.g., `!log`, `!lookup`) for structured data input and rapid, concise rule lookups.
+*   **The Homebrew Index (Post-Milestone 3.5):** A dependent milestone to be completed after the implementation of the Vector Database. This will refactor the monolithic `Homebrew_Compendium.txt` file into a structured, queryable format within the VDB, enabling fast, accurate, and semantic recall of all custom rules.
 *   **Asynchronous Moderation Pinger:** A new tool to send a discreet, out-of-band notification to you when an external user provides information that I've logged for moderation. This decouples my learning from our active conversations, allowing for near-real-time knowledge updates.
 
 ---
