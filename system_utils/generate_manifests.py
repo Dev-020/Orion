@@ -1,10 +1,17 @@
 # generate_manifests.py
 import sqlite3
 import json
-import os
+import sys
 from pathlib import Path
 from typing import Any
 import inspect
+import os
+
+# --- ROBUST PATHING & IMPORT FIX ---
+# 1. Determine the project root directory (which is the parent of 'system_utils')
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# 2. Add the project root to the system path to allow for absolute imports
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # --- DYNAMICALLY IMPORT THE TOOLS ---
 # This is crucial for the tool schema generation.
@@ -12,8 +19,8 @@ import functions
 
 # --- CONFIGURATION ---
 # Centralized paths for clarity and easy modification.
-DB_FILE = "orion_database.sqlite"
-OUTPUT_DIR = "instructions"
+DB_FILE = PROJECT_ROOT / "orion_database.sqlite"
+OUTPUT_DIR = PROJECT_ROOT / "instructions"
 
 def get_db_connection(db_file_path):
     """Establishes and returns a read-only connection to the SQLite database."""
@@ -188,33 +195,29 @@ def generate_master_manifest(output_dir: Path):
 
 def main():
     """Main function to run the entire manifest generation process."""
-    base_path = Path(__file__).parent.resolve()
-    db_path = base_path / DB_FILE
-    output_path = base_path / OUTPUT_DIR
-
     # Ensure the output directory exists.
-    os.makedirs(output_path, exist_ok=True)
+    OUTPUT_DIR.mkdir(exist_ok=True)
 
     # --- Generate New Schemas FIRST ---
     # Tool schema does not require a DB connection.
-    generate_tool_schema_json(output_path)
+    generate_tool_schema_json(OUTPUT_DIR)
 
-    conn = get_db_connection(db_path)
+    conn = get_db_connection(DB_FILE)
     if not conn:
         return
 
     try:
         # DB schema and other manifests require a DB connection.
-        generate_db_schema_json(conn, output_path)
+        generate_db_schema_json(conn, OUTPUT_DIR)
         
         # --- Generate Existing Manifests ---
-        generate_user_profile_manifest(conn, output_path)
-        generate_long_term_memory_manifest(conn, output_path)
-        generate_active_memory_manifest(conn, output_path)
-        generate_pending_logs_json(conn, output_path)
-        generate_db_schema_json(conn, output_path)
-        generate_tool_schema_json(output_path)
-        generate_master_manifest(output_path)
+        generate_user_profile_manifest(conn, OUTPUT_DIR)
+        generate_long_term_memory_manifest(conn, OUTPUT_DIR)
+        generate_active_memory_manifest(conn, OUTPUT_DIR)
+        generate_pending_logs_json(conn, OUTPUT_DIR)
+        generate_db_schema_json(conn, OUTPUT_DIR)
+        generate_tool_schema_json(OUTPUT_DIR)
+        generate_master_manifest(OUTPUT_DIR)
     finally:
         conn.close()
         print("\n--- Manifest generation complete. ---")

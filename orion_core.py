@@ -7,11 +7,11 @@ import sys
 from google import genai
 from google.genai import types, chats
 import functions
-import generate_manifests
 import io
 from dotenv import load_dotenv
 import json
 import pickle
+from system_utils import run_startup_diagnostics, generate_manifests
 
 # This single class now manages everything: state, sessions, and core logic.
 
@@ -50,12 +50,23 @@ class OrionCore:
         )
         self.tools = self._load_tools()
         self.tools.append(self.trigger_instruction_refresh)
-
-        self.current_instructions = self._read_all_instructions()
         
+        # --- Run Startup Diagnostics ---
+        # This check runs once per startup/restart.
+        tools_dict = {func.__name__: func for func in self.tools}
+        diagnostics_passed = run_startup_diagnostics.run_heartbeat_check(tools_dict)
+        if diagnostics_passed:
+            diagnostic_message = "[System Diagnostic: All core tools passed the initial heartbeat check and are considered operational.]"
+        else:
+            diagnostic_message = "[System Diagnostic: WARNING - One or more core tools failed the initial heartbeat check. Functionality may be impaired. Advise the Primary Operator.]"
+        
+        # --- Inject diagnostic result into instructions ---
+        base_instructions = self._read_all_instructions()
+        self.current_instructions = f"{base_instructions}\n\n---\n\n{diagnostic_message}"
+
         if not self._load_state_on_restart():
             self.sessions: dict[str, chats.Chat] = {}
-
+        
         print(f"--- Orion Core is online and ready. Managing {len(self.sessions)} session(s). ---")
         
     def _read_all_instructions(self) -> str:

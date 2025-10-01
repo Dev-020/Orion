@@ -21,7 +21,6 @@ __all__ = [
 import difflib
 import re
 import os
-import sync_docs
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -32,8 +31,8 @@ from datetime import datetime, timezone
 from filelock import FileLock
 from typing import Optional, List, Any, Tuple
 import sqlite3
-import generate_manifests
 from pathlib import Path
+from system_utils import sync_docs, generate_manifests
 
 # --- CONSTANTS ---
 DAILY_SEARCH_QUOTA = 10000

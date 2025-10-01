@@ -4,11 +4,14 @@ import json
 import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from pathlib import Path
 
 # --- PATH CONFIGURATION ---
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MANIFEST_FILE = os.path.join(SCRIPT_DIR, 'docs_manifest.json')
-INSTRUCTIONS_DIR = os.path.join(SCRIPT_DIR, 'instructions')
+# Determine the project root directory (which is the parent of 'system_utils')
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+MANIFEST_FILE = Path(__file__).resolve().parent / 'docs_manifest.json'
+INSTRUCTIONS_DIR = PROJECT_ROOT / 'instructions'
 
 def get_authenticated_service(service_name, version):
     """Gets a Google API service object with Application Default Credentials."""
@@ -60,8 +63,8 @@ def sync_instructions():
         print(f"Authentication failed for Google Drive/Docs. Ensure you have run 'gcloud auth application-default login'. Error: {e}")
         return
 
-    if not os.path.exists(INSTRUCTIONS_DIR):
-        os.makedirs(INSTRUCTIONS_DIR)
+    # Ensure the output directory exists.
+    INSTRUCTIONS_DIR.mkdir(exist_ok=True)
 
     with open(MANIFEST_FILE, 'r+') as f:
         manifest_data = json.load(f)
