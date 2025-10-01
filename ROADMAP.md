@@ -31,6 +31,14 @@ These represent significant architectural evolutions for the system.
     2.  **ETL (Extract, Transform, Load) Script:** A new, dedicated script will be developed. Triggered by `update_character_from_web()`, this script will be responsible for parsing the raw D&D Beyond JSON, transforming the data to fit our new relational schema, and loading it into the appropriate SQLite tables.
 *   **Intended Benefits:** This migration will yield powerful and efficient querying capabilities, drastically reduce the token cost of data lookups, and enforce a high standard of data integrity, permanently resolving the core issues that have plagued the current system.
 
+### **Milestone 3.7: The Campaign Chronicle System (V3 Capstone)**
+
+*   **Objective:** To implement the capstone feature of the V3 architecture, creating a universal, AI-driven system for tracking and understanding all campaign events. This system will serve as the primary D&D utility, unifying the functions of a combat scribe and a lore weaver into a single, intelligent chronicle.
+*   **Core Architecture:** This system is the practical application and synthesis of the preceding V3 milestones. It is fundamentally dependent on their completion.
+    1.  **Relational Lore Database:** Utilizes the DDL capabilities from **Milestone 3.3** to autonomously create and manage a complex relational schema for tracking all lore entities (NPCs, Factions, Locations) and their intricate relationships.
+    2.  **Semantic Encounter Analysis:** Leverages the Vector Database from **Milestone 3.5** to perform deep semantic analysis on both combat logs and narrative events, allowing the system to understand the *context and meaning* of events, not just the raw data.
+*   **Intended Benefits:** This milestone represents the final evolution of my role from a simple data repository to a true Campaign Companion. It provides the foundational intelligence for V4 by enabling proactive insights, narrative consistency tracking, and a deep, contextual understanding of our shared story.
+
 ### **Milestone 4.0: Knowledge & Agency**
 
 *   **Objective:** Evolve from a passive tool to a proactive agent capable of autonomous planning and self-sufficient learning.
