@@ -3,34 +3,42 @@ import importlib
 import os
 import sqlite3
 from datetime import datetime, timezone
+import sys
 from google import genai
 from google.genai import types, chats
 import functions
+import generate_manifests
 import io
 from dotenv import load_dotenv
 import json
+import pickle
 
 # This single class now manages everything: state, sessions, and core logic.
 
 # Define instruction files for clarity
 INSTRUCTIONS_FILES = [
     'Project_Overview.txt', 
-    'Homebrew_Compedium.txt', 
+    'Homebrew_Compedium.txt',
+    'General_Prompt_Optimizer.txt',
     'DND_Handout.txt',
     'master_manifest.json'
 ]
 INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
+DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orion_database.sqlite')
 load_dotenv() # Load environment variables from .env file
 
 class OrionCore:
     
     def __init__(self, model_name: str = "gemini-2.5-pro"):
         """Initializes the unified AI 'brain', including session management."""
+        self.restart_pending = False
+
         # Refreshing Core Instructions
         print("--- Syncing Core Instructions... ---")
         discord_id = os.getenv("DISCORD_OWNER_ID")
         if discord_id:
             functions.manual_sync_instructions(discord_id)
+        generate_manifests.main()
         print("--- Core Instructions Successfully synced.... ---")
         
         # Initializes Orion AI
@@ -42,10 +50,13 @@ class OrionCore:
         )
         self.tools = self._load_tools()
         self.tools.append(self.trigger_instruction_refresh)
+
         self.current_instructions = self._read_all_instructions()
-        self.sessions: dict[str, chats.Chat] = {}
-        self.db_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orion_database.sqlite')
-        print("--- Orion Core is online and ready. ---")
+        
+        if not self._load_state_on_restart():
+            self.sessions: dict[str, chats.Chat] = {}
+
+        print(f"--- Orion Core is online and ready. Managing {len(self.sessions)} session(s). ---")
         
     def _read_all_instructions(self) -> str:
         """Reads and concatenates all specified instruction files."""
@@ -86,11 +97,15 @@ class OrionCore:
             )
         return self.sessions[session_id]
 
-    def trigger_instruction_refresh(self):
+    def trigger_instruction_refresh(self, full_restart: bool = False):
         """Performs a full hot-swap. It reloads instructions AND reloads the tools
         from functions.py, then rebuilds all active chat sessions."""
-        print("---! HOT-SWAP INSTRUCTIONS TRIGGERED !---")
+        if full_restart:
+            print("---! FULL SYSTEM RESTART INITIATED !---")
+            self.restart_pending = True
+            return "Skipped Hot-Swap. Restart sequence initiated. The system will reboot after this response. Please do not make another function call to this Tool to avoid looping the restart."
         
+        print("---! HOT-SWAP INSTRUCTIONS TRIGGERED !---")
         # --- NEW: Reload the tools first ---
         try:
             importlib.reload(functions) # Force Python to re-read functions.py
@@ -113,8 +128,64 @@ class OrionCore:
         for session_id, history in preserved_states.items():
             self._get_session(session_id, history=history)
         print(f"--- HOT-SWAP COMPLETE: {len(self.sessions)} session(s) migrated. ---")
+        
 
-    def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str) -> tuple[str | None, int | None]:
+    def save_state_for_restart(self) -> bool:
+        """Serializes the comprehensive history of all active sessions to the database."""
+        print("--- Saving session states for system restart... ---")
+        try:
+            with sqlite3.connect(DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM restart_state") # Clear any old state
+                
+                preserved_states = {
+                    session_id: pickle.dumps(chat._comprehensive_history)
+                    for session_id, chat in self.sessions.items()
+                }
+                
+                cursor.executemany(
+                    "INSERT INTO restart_state (session_id, history_blob) VALUES (?, ?)",
+                    preserved_states.items()
+                )
+                conn.commit()
+                print(f"  - State for {len(preserved_states)} session(s) saved to database.")
+                return True
+        except Exception as e:
+            print(f"  - ERROR: Failed to save state for restart: {e}")
+            return False
+
+    def _load_state_on_restart(self) -> bool:
+        """Deserializes session histories from the database and rebuilds sessions."""
+        try:
+            with sqlite3.connect(DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT session_id, history_blob FROM restart_state")
+                rows = cursor.fetchall()
+                if not rows:
+                    return False # No state to load
+
+                print("--- Restart state detected in database. Loading sessions... ---")
+                self.sessions = {}
+                for session_id, history_blob in rows:
+                    history = pickle.loads(history_blob)
+                    self._get_session(session_id, history=history)
+                
+                cursor.execute("DELETE FROM restart_state") # Clean up the state table
+                conn.commit()
+                print(f"  - Successfully loaded state for {len(self.sessions)} session(s).")
+                return True
+        except Exception as e:
+            print(f"  - ERROR: Failed to load restart state: {e}. Starting with a clean slate.")
+            # Attempt to clean up a potentially corrupted table
+            try:
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute("DELETE FROM restart_state")
+                    conn.commit()
+            except Exception as cleanup_e:
+                print(f"  - CRITICAL: Failed to even clean up restart_state table: {cleanup_e}")
+            return False
+
+    def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str) -> tuple[str | None, int | None, bool]:
         """
         Processes a prompt using automatic function calling and archives the result.
         """
@@ -171,22 +242,26 @@ class OrionCore:
             
             self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db)
                   
-            return final_text, token_count
+            should_restart = self.restart_pending
+            if self.restart_pending:
+                self.restart_pending = False # Reset flag after it's been captured
+
+            return final_text, token_count, should_restart
             
         except Exception as e:
             print(f"ERROR processing prompt for '{session_id}': {e}")
-            return "I'm sorry, an internal error occurred while processing your request.", 0
+            return "I'm sorry, an internal error occurred while processing your request.", 0, False
 
     def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, attachment):
         """Writes the complete conversational exchange to the database."""
         try:
-            with sqlite3.connect(self.db_file) as conn:
+            with sqlite3.connect(DB_FILE) as conn:
                 cursor = conn.cursor()
                 # The full history from the session object can be serialized to JSON for a complete record.
                 # NOTE: The genai history objects need a custom converter to be JSON serializable.
                 # For now, we will store the prompt/response pair.
                 ts_unix = int(datetime.now(timezone.utc).timestamp())
-                sql = "INSERT INTO deep_memory (session_id, user_id, user_name, timestamp, prompt_text, response_text, attachments_metadata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                sql = "INSERT INTO deep_memory (session_id, user_id, user_name, timestamp, prompt_text, response_text, attachments_metadata) VALUES (?, ?, ?, ?, ?, ?, ?)" # noqa
                 params = (session_id, user_id, user_name, ts_unix, prompt, response, str(attachment))
                 cursor.execute(sql, params)
                 conn.commit()
@@ -222,3 +297,11 @@ class OrionCore:
         """Performs a clean shutdown."""
         print("--- Orion Core shutting down. ---")
         print("--- Orion is now offline. ---")
+
+    def execute_restart(self):
+        """
+        Executes the final step of the restart by replacing the current process.
+        This should only be called after the state has been successfully saved.
+        """
+        print("  - State saved. Executing restart...")
+        os.execv(sys.executable, ['python'] + sys.argv)

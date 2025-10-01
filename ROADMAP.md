@@ -8,7 +8,7 @@ This document outlines the planned core functionality upgrades for the Orion AI 
 
 These represent significant architectural evolutions for the system.
 
-### **Milestone 3.4: Autonomous Database Administration**
+### **Milestone 3.3: Autonomous Database Administration**
 *   **Objective:** To grant the AI full, autonomous control over its own database schema by implementing a third universal database tool capable of executing Data Definition Language (DDL) commands. This is a foundational step towards true system self-sufficiency.
 *   **Core Capabilities:**
     *   **New Universal Tool (`execute_sql_ddl`):** A protected, high-level tool that can execute `CREATE`, `ALTER`, and `DROP` SQL commands. Its use will be governed by the most stringent "Propose & Approve" and `Introspection Protocol` checks.
@@ -50,7 +50,6 @@ These represent significant architectural evolutions for the system.
 ## **Minor Milestones: System Refinements**
 
 These are quality-of-life and efficiency upgrades that can be implemented in parallel with major milestones.
-
 *   **Asynchronous Moderation Pinger:** A new tool to send a discreet, out-of-band notification to you when an external user provides information that I've logged for moderation. This decouples my learning from our active conversations, allowing for near-real-time knowledge updates.
 *   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 
@@ -123,8 +122,8 @@ This section tracks features and bug fixes that have been architecturally implem
 ## **Completed Milestones**
 
 *   **V3.2: Native Git Integration for Co-Pilot Workflow:** Replaced the internal database-driven file proposal system with a new toolset that allows Orion to directly create branches, commit changes, and push to the remote GitHub repository, enabling a true version-controlled Co-Pilot workflow.
-*   **V3.1: Orchestrated System Restart:** A self-triggered, state-aware system reboot. This allows me to apply changes to my own core code and immediately refresh my runtime to reflect them without losing conversational context, enabling seamless on-the-fly self-modification.
-*   **V3.1: Adaptive Communication Protocols:** To refine the AI's textual output by implementing distinct "modes" of communication. Each mode will have predefined guidelines for response length, formatting, and tone, tailored to the specific context of the user's prompt. This will reduce redundancy, improve clarity, and lower token expenditure.
+*   **V3.2: Orchestrated System Restart:** A self-triggered, state-aware system reboot. This allows me to apply changes to my own core code and immediately refresh my runtime to reflect them without losing conversational context, enabling seamless on-the-fly self-modification.
+*   **V3.2: Adaptive Communication Protocols:** To refine the AI's textual output by implementing distinct "modes" of communication. Each mode will have predefined guidelines for response length, formatting, and tone, tailored to the specific context of the user's prompt. This will reduce redundancy, improve clarity, and lower token expenditure.
 *   **V3.0: Unified Database Access Model:** Replaced specific database functions with the powerful, general-purpose `execute_sql_read` and `execute_sql_write` tools.
 *   **V3.0: Integrated Co-Pilot Workflow:** Established the core loop for self-modification (`list_project_files` -> `read_file` -> `propose_file_change` -> `apply_proposed_change`). Full automation is pending the Orchestrated System Restart.
 *   **V3.1: `active_memory.json` to Manifest:** Converted the `active_memory.json` file into a lightweight manifest of ruling IDs. This significantly reduces the token count of my base prompt, fetching full ruling text from the database only when needed.

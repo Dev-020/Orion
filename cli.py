@@ -39,16 +39,23 @@ def run_cli():
         # We now create a list of Parts, which for the CLI is just the user's text.
 
         # We call the new process_prompt with the correct arguments.
-        response_text = core.process_prompt(
+        response_text, token_count, restart_pending = core.process_prompt(
             user_prompt=user_input,
             session_id=cli_session_id,
             file_check=[],
             user_id=cli_user_id,
             user_name=cli_user_name
         )
-        # --- END OF MODIFICATION ---
         
-        print(f"\nOrion: {response_text}\n")
+        print(f"\nOrion: {response_text}\n\n*(`Tokens: {token_count}`)*\n")
+
+        # --- Orchestrated Restart Logic for CLI ---
+        if restart_pending:
+            print("---! DELAYED RESTART SEQUENCE ACTIVATED !---")
+            if core.save_state_for_restart():
+                # The restart call will terminate this script and start a new one.
+                core.execute_restart()
+        # --- END OF MODIFICATION ---
 
 if __name__ == "__main__":
     run_cli()
