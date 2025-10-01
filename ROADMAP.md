@@ -8,7 +8,7 @@ This document outlines the planned core functionality upgrades for the Orion AI 
 
 These represent significant architectural evolutions for the system.
 
-### **Milestone 3.4: Autonomous Database Administration**
+### **Milestone 3.3: Autonomous Database Administration**
 *   **Objective:** To grant the AI full, autonomous control over its own database schema by implementing a third universal database tool capable of executing Data Definition Language (DDL) commands. This is a foundational step towards true system self-sufficiency.
 *   **Core Capabilities:**
     *   **New Universal Tool (`execute_sql_ddl`):** A protected, high-level tool that can execute `CREATE`, `ALTER`, and `DROP` SQL commands. Its use will be governed by the most stringent "Propose & Approve" and `Introspection Protocol` checks.

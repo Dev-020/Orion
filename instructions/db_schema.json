@@ -53,5 +53,9 @@
     "diff_text",
     "is_new_file",
     "timestamp"
+  ],
+  "restart_state": [
+    "session_id",
+    "history_blob"
   ]
 }
