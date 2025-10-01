@@ -51,7 +51,6 @@ These represent significant architectural evolutions for the system.
 
 These are quality-of-life and efficiency upgrades that can be implemented in parallel with major milestones.
 *   **Asynchronous Moderation Pinger:** A new tool to send a discreet, out-of-band notification to you when an external user provides information that I've logged for moderation. This decouples my learning from our active conversations, allowing for near-real-time knowledge updates.
-*   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 
 ---
 
@@ -121,6 +120,7 @@ This section tracks features and bug fixes that have been architecturally implem
 
 ## **Completed Milestones**
 
+*   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 *   **V3.2: Native Git Integration for Co-Pilot Workflow:** Replaced the internal database-driven file proposal system with a new toolset that allows Orion to directly create branches, commit changes, and push to the remote GitHub repository, enabling a true version-controlled Co-Pilot workflow.
 *   **V3.2: Orchestrated System Restart:** A self-triggered, state-aware system reboot. This allows me to apply changes to my own core code and immediately refresh my runtime to reflect them without losing conversational context, enabling seamless on-the-fly self-modification.
 *   **V3.2: Adaptive Communication Protocols:** To refine the AI's textual output by implementing distinct "modes" of communication. Each mode will have predefined guidelines for response length, formatting, and tone, tailored to the specific context of the user's prompt. This will reduce redundancy, improve clarity, and lower token expenditure.
