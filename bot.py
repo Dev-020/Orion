@@ -97,7 +97,7 @@ async def on_message(message: discord.Message):
                             await message.reply(f"Sorry, I couldn't process the attachment '{attachment.filename}'.")
             
             # The call to the core is now clean, passing a list of parts.
-            response_text, token_count = await asyncio.to_thread(
+            response_text, token_count, restart_pending = await asyncio.to_thread(
                 core.process_prompt, 
                 session_id=session_id,
                 user_prompt=user_prompt,
@@ -116,6 +116,12 @@ async def on_message(message: discord.Message):
                         await message.reply(chunk)
             else:
                 print(f"AI returned an empty response for user {message.author.name}. No message sent.")
+            
+            # --- Orchestrated Restart Logic ---
+            if restart_pending:
+                print("---! DELAYED RESTART SEQUENCE ACTIVATED !---")
+                if core.save_state_for_restart():
+                    core.execute_restart() # This will terminate the bot.py process
 
 # --- Shutdown command remains the same ---
 @bot.command(name="shutdown", description="Shuts down the bot gracefully. (Owner only)")
