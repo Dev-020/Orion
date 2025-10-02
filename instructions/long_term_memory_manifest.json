@@ -156,6 +156,10 @@
     "title": "System Upgrade: Multi-File Input Resolution"
   },
   {
+    "event_id": "2025-10-02T16:15:16.806348+00:00",
+    "title": "System Architecture Proposal: V3.5 Hybrid Memory Model"
+  },
+  {
     "event_id": "2025-10-01T11:32:29Z",
     "title": "Patch for the Orchestrated Restart Loop"
   },
