@@ -156,10 +156,10 @@ def manage_character_resource(user_id: str, resource_name: str, operation: str, 
     """
     Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create'.
     'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.
-    'set' overwrites the current value.
+    'set' overwrites the current value and can optionally update the max_value.
     'add'/'subtract' modifies the current value by the specified amount.
     """
-    print(f"--- RESOURCE MGMT --- User: {user_id}, Resource: {resource_name}, Op: {operation}, Val: {value}")
+    print(f"--- RESOURCE MGMT --- User: {user_id}, Resource: {resource_name}, Op: {operation}, Val: {value}, Max: {max_value}")
 
     valid_ops = ['set', 'add', 'subtract', 'create']
     if operation.lower() not in valid_ops:
@@ -190,14 +190,26 @@ def manage_character_resource(user_id: str, resource_name: str, operation: str, 
             
             if operation == 'set':
                 new_val = value
+                set_clauses = ["current_value = ?", "last_updated = ?"]
+                params = [new_val, timestamp]
+                if max_value is not None:
+                    set_clauses.append("max_value = ?")
+                    params.append(max_value)
+                
+                query = f"UPDATE character_resources SET {', '.join(set_clauses)} WHERE user_id = ? AND resource_name = ?"
+                params.extend([user_id, resource_name])
+
             elif operation == 'add':
                 new_val = current_val + value
+                query = "UPDATE character_resources SET current_value = ?, last_updated = ? WHERE user_id = ? AND resource_name = ?"
+                params = (new_val, timestamp, user_id, resource_name)
+
             else: # subtract
-                new_val = current_val - value
-            
-            query = "UPDATE character_resources SET current_value = ?, last_updated = ? WHERE user_id = ? AND resource_name = ?"
-            params = (new_val, timestamp, user_id, resource_name)
-            cursor.execute(query, params)
+                new_val = current_val + value
+                query = "UPDATE character_resources SET current_value = ?, last_updated = ? WHERE user_id = ? AND resource_name = ?"
+                params = (new_val, timestamp, user_id, resource_name)
+
+            cursor.execute(query, tuple(params))
             conn.commit()
             
             return f"Success: Updated '{resource_name}' for user {user_id}. New value: {new_val}."
