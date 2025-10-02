@@ -15,7 +15,8 @@ __all__ = [
     "execute_sql_read",
     "execute_sql_write",
     "execute_sql_ddl",
-    "manage_character_resource", # Added new tool
+    "manage_character_resource",
+    "manage_character_status", # Added new tool
     "create_git_commit_proposal"
 ]
 # --- END OF PUBLIC TOOL DEFINITION ---
@@ -218,6 +219,45 @@ def manage_character_resource(user_id: str, resource_name: str, operation: str, 
         print(f"ERROR: A database error occurred in manage_character_resource: {e}")
         return f"An unexpected database error occurred: {e}"
 
+def manage_character_status(user_id: str, effect_name: str, operation: str, details: Optional[str] = None, duration: Optional[int] = None) -> str:
+    """
+    Manages a character's temporary status effects. Operations: 'add', 'remove'.
+    'add' applies a new status effect. 'details' and 'duration' are optional.
+    'remove' deletes a status effect from the table based on its name.
+    """
+    print(f"--- STATUS MGMT --- User: {user_id}, Effect: {effect_name}, Op: {operation}")
+
+    valid_ops = ['add', 'remove']
+    if operation.lower() not in valid_ops:
+        return f"Error: Invalid operation '{operation}'. Must be one of {valid_ops}."
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            if operation == 'add':
+                query = "INSERT INTO character_status (user_id, effect_name, effect_details, duration_in_rounds, timestamp) VALUES (?, ?, ?, ?, ?)"
+                params = (user_id, effect_name, details, duration, timestamp)
+                cursor.execute(query, params)
+                conn.commit()
+                return f"Success: Applied status '{effect_name}' to user {user_id}."
+
+            elif operation == 'remove':
+                query = "DELETE FROM character_status WHERE user_id = ? AND effect_name = ?"
+                params = (user_id, effect_name)
+                cursor.execute(query, params)
+                rows_affected = cursor.rowcount
+                conn.commit()
+                if rows_affected > 0:
+                    return f"Success: Removed {rows_affected} instance(s) of status '{effect_name}' for user {user_id}."
+                else:
+                    return f"Info: No active status named '{effect_name}' found for user {user_id} to remove."
+
+    except sqlite3.Error as e:
+        print(f"ERROR: A database error occurred in manage_character_status: {e}")
+        return f"An unexpected database error occurred: {e}"
 
 # --- HIGH-LEVEL SELF-REFERENTIAL TOOLS ---
 
