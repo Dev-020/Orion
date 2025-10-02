@@ -203,6 +203,38 @@
       }
     ]
   },
+  "manage_character_status": {
+    "description": "Manages a character's temporary status effects. Operations: 'add', 'remove', 'update'.\n'add' applies a new status effect. 'details' and 'duration' are optional.\n'remove' deletes a status effect from the table based on its name.\n'update' modifies the details or duration of an existing status effect.",
+    "parameters": [
+      {
+        "name": "user_id",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "effect_name",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "operation",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "details",
+        "type": "typing.Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "duration",
+        "type": "typing.Optional[int]",
+        "required": false,
+        "default": null
+      }
+    ]
+  },
   "create_git_commit_proposal": {
     "description": "(Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,\ncommits the change, and pushes the branch to the remote 'origin'.",
     "parameters": [
