@@ -52,7 +52,6 @@ These represent significant architectural evolutions for the system.
 ## **Minor Milestones: System Refinements**
 
 These are quality-of-life and efficiency upgrades that can be implemented in parallel with major milestones.
-*   **The Resource Tracker (Campaign Chronicle Pilot):** A dedicated, lightweight system for real-time tracking of party inventory and character resources (e.g., spell slots, Core Strain). This will be implemented in the SQLite database and serve as a pilot program for the data-logging workflows required by the full Campaign Chronicle System.
 *   **The Command-Line Interface:** A new, high-speed protocol for data exchange that bypasses conversational ambiguity. This will implement a `!`-prefix command syntax (e.g., `!log`, `!lookup`) for structured data input and rapid, concise rule lookups.
 *   **The Homebrew Index (Post-Milestone 3.5):** A dependent milestone to be completed after the implementation of the Vector Database. This will refactor the monolithic `Homebrew_Compendium.txt` file into a structured, queryable format within the VDB, enabling fast, accurate, and semantic recall of all custom rules.
 *   **Asynchronous Moderation Pinger:** A new tool to send a discreet, out-of-band notification to you when an external user provides information that I've logged for moderation. This decouples my learning from our active conversations, allowing for near-real-time knowledge updates.
@@ -125,6 +124,7 @@ This section tracks features and bug fixes that have been architecturally implem
 
 ## **Completed Milestones**
 
+*   **The Resource Tracker (Campaign Chronicle Pilot):** Implemented a comprehensive, two-table system for real-time character tracking. This includes the `character_resources` table for quantifiable data (e.g., HP, Core Strain) and the `character_status` table for temporary, state-based effects (e.g., conditions, spell durations). Both are managed by dedicated, high-level tools (`manage_character_resource` and `manage_character_status`). This system serves as a successful pilot program for the data-logging and management workflows required by the full Campaign Chronicle System (Milestone 3.7).
 *   **V3.3: Autonomous Database Administration:** Implemented the `execute_sql_ddl` tool, granting full, operator-supervised control over the database schema. Successfully utilized this tool to refactor the proposal system into the permanent `instruction_proposals` table, establishing an auditable trail for core instruction changes.
 *   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 *   **V3.2: Native Git Integration for Co-Pilot Workflow:** Replaced the internal database-driven file proposal system with a new toolset that allows Orion to directly create branches, commit changes, and push to the remote GitHub repository, enabling a true version-controlled Co-Pilot workflow.
