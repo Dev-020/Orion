@@ -13,9 +13,10 @@ __all__ = [
     "list_project_files",
     "read_file",
     "execute_sql_read",
-    "execute_sql_write", # Retained for other DB operations
+    "execute_sql_write",
     "execute_sql_ddl",
-    "create_git_commit_proposal" # New unified Git tool
+    "manage_character_resource", # Added new tool
+    "create_git_commit_proposal"
 ]
 # --- END OF PUBLIC TOOL DEFINITION ---
 
@@ -51,7 +52,6 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
     """
     print(f"--- DB READ --- Query: {query} | Params: {params}")
     
-    # Security: Ensure it's a SELECT query
     if not query.strip().upper().startswith("SELECT"):
         return "Error: This tool is for read-only (SELECT) queries."
 
@@ -66,34 +66,23 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
     except sqlite3.Error as e:
         return f"Database Error: {e}"
 
-# In functions.py, replace the existing execute_sql_write function with this one.
 
 def execute_sql_write(query: str, params: list[str], user_id: str) -> str:
     """
     Executes a write query (INSERT, UPDATE, DELETE) on the database using a
     tiered security model.
-
-    Args:
-        query (str): The SQL query string with '?' placeholders.
-        parameters (list): A list of values to be safely inserted.
-        user_id (str): The Discord ID of the user who initiated the prompt. This is mandatory.
     """
     print(f"--- DB Write Request from User: {user_id} ---")
     print(f"  - Query: {query}")
     print(f"  - Params: {params}")
 
-    # --- Tiered Security Logic ---
     normalized_query = query.strip().upper()
     owner_id = os.getenv("DISCORD_OWNER_ID")
 
-    # Tier 2: High-level, Operator-Only operations
     if normalized_query.startswith('UPDATE') or normalized_query.startswith('DELETE'):
         is_authorized = (owner_id and user_id == owner_id)
 
-        # The User Profile Exception: Allow users to update their own profile.
         if normalized_query.startswith('UPDATE "USER_PROFILES"'):
-             # We need to find the user_id being targeted in the WHERE clause.
-             # This assumes the user_id is the last parameter for a profile update.
             targeted_user_id = str(params[-1])
             if user_id == targeted_user_id:
                 print("  - Authorized as self-update for user_profiles.")
@@ -106,15 +95,13 @@ def execute_sql_write(query: str, params: list[str], user_id: str) -> str:
         
         print("  - Authorized for high-level write.")
 
-    # Tier 1: Low-level, autonomous operations
     elif normalized_query.startswith('INSERT'):
         print("  - Authorized for low-level INSERT.")
-        pass # This action is permitted for any user.
+        pass
 
     else:
         return f"Error: Invalid or disallowed SQL command. Only INSERT, UPDATE, DELETE are supported."
 
-    # --- Database Execution ---
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
@@ -131,28 +118,20 @@ def execute_sql_write(query: str, params: list[str], user_id: str) -> str:
 
 def execute_sql_ddl(query: str, user_id: str) -> str:
     """
-    (Pillar 2) Executes a Data Definition Language (DDL) query (CREATE, ALTER, DROP)
-    against the database. This is a high-level, protected tool restricted to the Primary Operator.
-
-    Args:
-        query (str): The SQL DDL query string.
-        user_id (str): The Discord ID of the user who initiated the prompt. This is mandatory for authorization.
+    (Pillar 2) Executes a Data Definition Language (DDL) query against the database.
+    This is a high-level, protected tool restricted to the Primary Operator.
     """
     print(f"--- DB DDL Request from User: {user_id} ---")
     print(f"  - Query: {query}")
 
-    # --- Tiered Security Logic ---
     owner_id = os.getenv("DISCORD_OWNER_ID")
-    is_authorized = (owner_id and user_id == owner_id)
-
-    if not is_authorized:
+    if not (owner_id and user_id == owner_id):
         error_msg = "Error: Authorization failed. This operation is restricted to the Primary Operator."
         print(f"  - SECURITY ALERT: Denied unauthorized DDL attempt by user {user_id}.")
         return error_msg
     
     print("  - Authorized for high-level DDL operation.")
 
-    # --- Command Validation ---
     normalized_query = query.strip().upper()
     if not (
         normalized_query.startswith("CREATE TABLE")
@@ -161,18 +140,70 @@ def execute_sql_ddl(query: str, user_id: str) -> str:
     ):
         return "Error: Invalid or disallowed SQL command. Only CREATE TABLE, ALTER TABLE, and DROP TABLE are supported."
 
-    # --- Database Execution ---
     try:
-        # Use a new connection to ensure it's not shared with other threads
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
-            cursor.executescript(query) # Use executescript for potentially multi-statement DDL
+            cursor.executescript(query)
             conn.commit()
             print("  - DDL query executed successfully.")
             return "Success. The DDL query was executed and the changes have been committed."
 
     except sqlite3.Error as e:
         print(f"ERROR: A database error occurred in execute_sql_ddl: {e}")
+        return f"An unexpected database error occurred: {e}"
+
+def manage_character_resource(user_id: str, resource_name: str, operation: str, value: int, max_value: Optional[int] = None) -> str:
+    """
+    Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create'.
+    'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.
+    'set' overwrites the current value.
+    'add'/'subtract' modifies the current value by the specified amount.
+    """
+    print(f"--- RESOURCE MGMT --- User: {user_id}, Resource: {resource_name}, Op: {operation}, Val: {value}")
+
+    valid_ops = ['set', 'add', 'subtract', 'create']
+    if operation.lower() not in valid_ops:
+        return f"Error: Invalid operation '{operation}'. Must be one of {valid_ops}."
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT current_value FROM character_resources WHERE user_id = ? AND resource_name = ?", (user_id, resource_name))
+            row = cursor.fetchone()
+            
+            if operation == 'create':
+                if row:
+                    return f"Error: Resource '{resource_name}' already exists for user {user_id}. Use 'set' or 'add' to modify."
+                query = "INSERT INTO character_resources (user_id, resource_name, current_value, max_value, last_updated) VALUES (?, ?, ?, ?, ?)"
+                params = (user_id, resource_name, value, max_value, timestamp)
+                cursor.execute(query, params)
+                conn.commit()
+                return f"Success: Created resource '{resource_name}' for user {user_id} with value {value}."
+
+            if not row:
+                return f"Error: Resource '{resource_name}' not found for user {user_id}. Use 'create' operation first."
+            
+            current_val = row[0]
+            
+            if operation == 'set':
+                new_val = value
+            elif operation == 'add':
+                new_val = current_val + value
+            else: # subtract
+                new_val = current_val - value
+            
+            query = "UPDATE character_resources SET current_value = ?, last_updated = ? WHERE user_id = ? AND resource_name = ?"
+            params = (new_val, timestamp, user_id, resource_name)
+            cursor.execute(query, params)
+            conn.commit()
+            
+            return f"Success: Updated '{resource_name}' for user {user_id}. New value: {new_val}."
+
+    except sqlite3.Error as e:
+        print(f"ERROR: A database error occurred in manage_character_resource: {e}")
         return f"An unexpected database error occurred: {e}"
 
 
@@ -182,23 +213,19 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
     """
     (Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,
     commits the change, and pushes the branch to the remote 'origin'.
-    This is a protected, high-level action restricted to the Primary Operator.
     """
     print(f"--- Git Commit Proposal received for '{file_path}' ---")
 
-    # 1. Authorization Check
     owner_id = os.getenv("DISCORD_OWNER_ID")
     if str(user_id) != owner_id:
         return "Error: Authorization failed. This tool is restricted to the Primary Operator."
 
     try:
-        # 2. Initialize Repo and Sanitize Paths
         repo = Repo(PROJECT_ROOT)
         target_path = (PROJECT_ROOT / file_path).resolve()
         if not target_path.is_relative_to(PROJECT_ROOT):
             return "Error: Access denied. Cannot access files outside the project directory."
 
-        # 3. Create a unique branch name
         timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
         sanitized_message = re.sub(r'[^a-zA-Z0-9\-]', '-', commit_message.splitlines()[0]).strip('-')
         branch_name = f"orion-changes/{timestamp}-{sanitized_message[:50]}"
@@ -207,24 +234,19 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
         new_branch = repo.create_head(branch_name)
         new_branch.checkout()
 
-        # 4. Write the file change
         print(f"  - Writing {len(new_content)} bytes to {file_path}")
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with open(target_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
-        # 5. Stage and Commit
         print("  - Staging and committing changes...")
         repo.index.add([str(target_path)])
         repo.index.commit(commit_message)
 
-        # 6. Push to remote
         print(f"  - Pushing branch '{branch_name}' to origin...")
         origin = repo.remote(name='origin')
         origin.push(branch_name)
 
-        # 7. Return to the main branch
-        # This is important so the bot's runtime isn't on a feature branch
         repo.heads.master.checkout()
 
         return (f"Success. A new branch '{branch_name}' was created and pushed to the remote repository "
@@ -241,14 +263,12 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
 
 def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None, item_type: Optional[str] = None, source: Optional[str] = None, mode: str = 'summary', max_results: int = 25) -> str:
     """
-    Searches the knowledge base. Has two modes:
-    - 'summary': Returns a lightweight list of matching entries (id, name, type, source). Use this for initial discovery.
-    - 'full': Returns the complete data for a single, specific entry. Requires a unique 'id' for best results.
+    Searches the knowledge base. Has two modes: summary and full.
     """
     print(f"--- DB Knowledge Search. Mode: {mode.upper()}. Query: '{query or id}' ---")
 
     if mode == 'full' and not id:
-        return "Error: 'full' mode requires a specific 'id' to retrieve a single entry. Please perform a 'summary' search first."
+        return "Error: 'full' mode requires a specific 'id'. Please perform a 'summary' search first."
     
     if not query and not id:
         return "Error: You must provide either a 'query' or an 'id'."
@@ -291,9 +311,8 @@ def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None,
 
 def manual_sync_instructions(user_id: str) -> str:
     """
-    Triggers a manual synchronization of the AI's core instruction files from Google Docs.
-    SECURITY: This is a restricted tool. It will only execute if the requesting user_id
-    matches the Primary Operator's ID specified in the .env file.
+    Triggers a manual synchronization of the AI's core instruction files.
+    SECURITY: This is a restricted tool.
     """
     print("--- Manual Instruction Sync requested... ---")
     primary_operator_id = os.getenv("DISCORD_OWNER_ID")
@@ -304,22 +323,20 @@ def manual_sync_instructions(user_id: str) -> str:
     try:
         print("--- Operator authorized. Proceeding with manual sync... ---")
         sync_docs.sync_instructions()
-        return "Core instruction files have been successfully synchronized from the source. The changes will be reflected in my next response."
+        return "Core instruction files have been successfully synchronized from the source."
     except Exception as e:
         print(f"ERROR during manual sync: {e}")
         return f"An unexpected error occurred during the manual sync process: {e}"
 
 def rebuild_manifests(manifest_names: list[str]) -> str:
     """
-    Rebuilds specified manifest JSON files. Handles manifests that require a database
-    connection and those that do not.
+    Rebuilds specified manifest JSON files.
     """
     print(f"--- ACTION: Rebuilding manifests: {manifest_names} ---")
     base_path = Path(__file__).parent.resolve()
     db_path = base_path / generate_manifests.DB_FILE
     output_path = base_path / generate_manifests.OUTPUT_DIR
     
-    # Define which generators need a DB connection
     db_required_map = {
         "db_schema": generate_manifests.generate_db_schema_json,
         "user_profile_manifest": generate_manifests.generate_user_profile_manifest,
@@ -327,20 +344,16 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
         "active_memory_manifest": generate_manifests.generate_active_memory_manifest,
         "pending_logs": generate_manifests.generate_pending_logs_json
     }
-    # Define generators that do NOT need a DB connection
     db_not_required_map = {
         "tool_schema": generate_manifests.generate_tool_schema_json
     }
     
-    rebuilt_successfully, invalid_names = [], []
-    db_manifests_to_run = []
+    rebuilt_successfully, invalid_names, db_manifests_to_run = [], [], []
 
-    # First pass: identify and run generators that don't need the DB
     for name in manifest_names:
         name = name.lower().strip()
         if name in db_not_required_map:
             try:
-                # Call with only output_path
                 db_not_required_map[name](output_path)
                 rebuilt_successfully.append(name)
             except Exception as e:
@@ -350,7 +363,6 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
         else:
             invalid_names.append(name)
 
-    # Second pass: connect to DB only if necessary
     if db_manifests_to_run:
         conn = generate_manifests.get_db_connection(db_path)
         if not conn:
@@ -358,7 +370,6 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
         try:
             for name in db_manifests_to_run:
                 try:
-                    # Call with conn and output_path
                     db_required_map[name](conn, output_path)
                     rebuilt_successfully.append(name)
                 except Exception as e:
@@ -374,7 +385,7 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
 
 def update_character_from_web() -> str:
     """
-    Downloads the character sheet JSON from D&D Beyond.
+    Downloads the character sheet JSON from D&D Beyond and generates its schema.
     """
     print("--- ACTION: Updating character sheet from D&D Beyond ---")
     character_url = "https://character-service.dndbeyond.com/character/v5/character/151586987?includeCustomItems=true"
@@ -401,10 +412,10 @@ def update_character_from_web() -> str:
     except requests.exceptions.RequestException as e:
         return f"Error: A network error occurred while fetching the character sheet: {e}"
     except Exception as e:
-        return f"An unexpected error occurred during the update process: {e}"
+        return f"An unexpected error occurred: {e}"
 
 def search_dnd_rules(query: str, num_results: int = 5) -> str:
-    """Performs a web search and updates the quota tracker with file locking."""
+    """Performs a web search using Google's Custom Search API."""
     quota_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'quota_tracker.json')
     lock_file = quota_file + ".lock"
     with FileLock(lock_file, timeout=5):
@@ -432,7 +443,7 @@ def search_dnd_rules(query: str, num_results: int = 5) -> str:
             return f"An error occurred during web search: {e}"
 
 def browse_website(url: str) -> str:
-    """Reads the full text content of a single webpage URL."""
+    """Reads the text content of a single webpage."""
     print(f"--- Browsing website: {url} ---")
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -440,22 +451,20 @@ def browse_website(url: str) -> str:
         soup = BeautifulSoup(response.text, 'html.parser')
         content = "\n".join([p.get_text() for p in soup.find_all('p')])
         if not content: return f"Source: Live Web Browse ({url})\n---\nCould not extract text."
-        print(f"--- Browsing successful. Extracted {len(content)} characters. ---")
         return f"Source: Live Web Browse ({url})\n---\n{content}"
     except Exception as e:
         return f"Source: Live Web Browse\n---\nAn error occurred: {e}"
 
 def lookup_character_data(query: str) -> str:
     """
-    Retrieves a specific piece of data from the local 'character_sheet_raw.json' file
-    using a dot-notation query string (e.g., 'data.name').
+    Retrieves a specific piece of data from the local character sheet file.
     """
     print(f"--- ACTION: Looking up character data with query: '{query}' ---")
     raw_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'character', 'character_sheet_raw.json')
     try:
         with open(raw_file_path, 'r', encoding='utf-8') as f: data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return "Error: 'character_sheet_raw.json' not found or invalid. Run `update_character_from_web`."
+        return "Error: 'character_sheet_raw.json' not found. Run `update_character_from_web`."
     try:
         keys, current_level = query.split('.'), data
         for key in keys:
@@ -469,7 +478,7 @@ def lookup_character_data(query: str) -> str:
     except (KeyError, IndexError, TypeError):
         return f"Error: Query '{query}' is invalid. Check `character_schema.json` for the correct path."
     except Exception as e:
-        return f"An unexpected error occurred during data lookup: {e}"
+        return f"An unexpected error occurred: {e}"
 
 def list_project_files(subdirectory: str = ".") -> str:
     """
