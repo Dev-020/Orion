@@ -16,7 +16,7 @@ __all__ = [
     "execute_sql_write",
     "execute_sql_ddl",
     "manage_character_resource",
-    "manage_character_status", # Added new tool
+    "manage_character_status",
     "create_git_commit_proposal"
 ]
 # --- END OF PUBLIC TOOL DEFINITION ---
@@ -206,7 +206,7 @@ def manage_character_resource(user_id: str, resource_name: str, operation: str, 
                 params = (new_val, timestamp, user_id, resource_name)
 
             else: # subtract
-                new_val = current_val + value
+                new_val = current_val - value
                 query = "UPDATE character_resources SET current_value = ?, last_updated = ? WHERE user_id = ? AND resource_name = ?"
                 params = (new_val, timestamp, user_id, resource_name)
 
@@ -221,17 +221,19 @@ def manage_character_resource(user_id: str, resource_name: str, operation: str, 
 
 def manage_character_status(user_id: str, effect_name: str, operation: str, details: Optional[str] = None, duration: Optional[int] = None) -> str:
     """
-    Manages a character's temporary status effects. Operations: 'add', 'remove'.
+    Manages a character's temporary status effects. Operations: 'add', 'remove', 'update'.
     'add' applies a new status effect. 'details' and 'duration' are optional.
     'remove' deletes a status effect from the table based on its name.
+    'update' modifies the details or duration of an existing status effect.
     """
     print(f"--- STATUS MGMT --- User: {user_id}, Effect: {effect_name}, Op: {operation}")
 
-    valid_ops = ['add', 'remove']
+    valid_ops = ['add', 'remove', 'update']
     if operation.lower() not in valid_ops:
         return f"Error: Invalid operation '{operation}'. Must be one of {valid_ops}."
 
     timestamp = datetime.now(timezone.utc).isoformat()
+    return_message = ""
     
     try:
         with sqlite3.connect(DB_FILE) as conn:
@@ -241,23 +243,47 @@ def manage_character_status(user_id: str, effect_name: str, operation: str, deta
                 query = "INSERT INTO character_status (user_id, effect_name, effect_details, duration_in_rounds, timestamp) VALUES (?, ?, ?, ?, ?)"
                 params = (user_id, effect_name, details, duration, timestamp)
                 cursor.execute(query, params)
-                conn.commit()
-                return f"Success: Applied status '{effect_name}' to user {user_id}."
+                return_message = f"Success: Applied status '{effect_name}' to user {user_id}."
 
             elif operation == 'remove':
                 query = "DELETE FROM character_status WHERE user_id = ? AND effect_name = ?"
                 params = (user_id, effect_name)
                 cursor.execute(query, params)
                 rows_affected = cursor.rowcount
-                conn.commit()
                 if rows_affected > 0:
-                    return f"Success: Removed {rows_affected} instance(s) of status '{effect_name}' for user {user_id}."
+                    return_message = f"Success: Removed {rows_affected} instance(s) of status '{effect_name}' for user {user_id}."
                 else:
-                    return f"Info: No active status named '{effect_name}' found for user {user_id} to remove."
+                    return_message = f"Info: No active status named '{effect_name}' found for user {user_id} to remove."
+            
+            elif operation == 'update':
+                cursor.execute("SELECT status_id FROM character_status WHERE user_id = ? AND effect_name = ?", (user_id, effect_name))
+                row = cursor.fetchone()
+                if not row:
+                    return f"Error: Status '{effect_name}' not found for user {user_id}. Use 'add' operation first."
+
+                set_clauses = ["timestamp = ?"]
+                update_params = [timestamp]
+                if details is not None:
+                    set_clauses.append("effect_details = ?")
+                    update_params.append(details)
+                if duration is not None:
+                    set_clauses.append("duration_in_rounds = ?")
+                    update_params.append(duration)
+                
+                query = f"UPDATE character_status SET {', '.join(set_clauses)} WHERE user_id = ? AND effect_name = ?"
+                update_params.extend([user_id, effect_name])
+                
+                cursor.execute(query, tuple(update_params))
+                return_message = f"Success: Updated status '{effect_name}' for user {user_id}."
+
+            conn.commit()
+        
+        return return_message
 
     except sqlite3.Error as e:
         print(f"ERROR: A database error occurred in manage_character_status: {e}")
         return f"An unexpected database error occurred: {e}"
+
 
 # --- HIGH-LEVEL SELF-REFERENTIAL TOOLS ---
 
