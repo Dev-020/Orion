@@ -8,12 +8,6 @@ This document outlines the planned core functionality upgrades for the Orion AI 
 
 These represent significant architectural evolutions for the system.
 
-### **Milestone 3.3: Autonomous Database Administration**
-*   **Objective:** To grant the AI full, autonomous control over its own database schema by implementing a third universal database tool capable of executing Data Definition Language (DDL) commands. This is a foundational step towards true system self-sufficiency.
-*   **Core Capabilities:**
-    *   **New Universal Tool (`execute_sql_ddl`):** A protected, high-level tool that can execute `CREATE`, `ALTER`, and `DROP` SQL commands. Its use will be governed by the most stringent "Propose & Approve" and `Introspection Protocol` checks.
-*   **Immediate Application (Core Instructions Audit System):** The first official use of this new tool will be to refactor the now-obsolete `staged_proposals` table into a new, stateful `instruction_proposals` table. This will create a permanent, auditable system for managing proposed changes to core instruction files like `Project_Overview.txt` and `Homebrew_Compedium.txt`.
-
 ### **Milestone 3.5: The Hybrid Memory Model**
 
 *   **Objective:** To evolve my memory from a simple chronicle into an intelligent, scalable, and searchable knowledge system using a **Retrieval-Augmented Generation (RAG)** architecture. This will dramatically reduce token costs and grant me a deeper, semantic understanding of my knowledge base.
@@ -24,7 +18,7 @@ These represent significant architectural evolutions for the system.
 
 ### **Milestone 3.6: Character Data Relational Database Migration**
 
-*   **Objective:** To provide a permanent, architectural solution to **Bug 1: Data Integrity Failure**. This milestone will migrate the character data from the current, inefficient single-file JSON model (`character_sheet_raw.json`) to a robust, relational database structure.
+*   **Objective:** To provide a permanent, architectural solution to **Bug 1: Data Integrity Failure**. This will migrate the character data from the current, inefficient single-file JSON model (`character_sheet_raw.json`) to a robust, relational database structure.
 *   **Target Database:** This new schema will be implemented within the **SQLite database**, aligning with the "Structured Data" pillar of the Hybrid Memory Model (Milestone 3.5).
 *   **Core Architecture:**
     1.  **Relational Schema Design:** A comprehensive database schema will be designed to represent all aspects of the character sheet, including stats, skills, inventory, spells, features, and actions. The existing schema for the `knowledge_base` table will serve as a foundational reference for this design.
@@ -131,6 +125,7 @@ This section tracks features and bug fixes that have been architecturally implem
 
 ## **Completed Milestones**
 
+*   **V3.3: Autonomous Database Administration:** Implemented the `execute_sql_ddl` tool, granting full, operator-supervised control over the database schema. Successfully utilized this tool to refactor the proposal system into the permanent `instruction_proposals` table, establishing an auditable trail for core instruction changes.
 *   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 *   **V3.2: Native Git Integration for Co-Pilot Workflow:** Replaced the internal database-driven file proposal system with a new toolset that allows Orion to directly create branches, commit changes, and push to the remote GitHub repository, enabling a true version-controlled Co-Pilot workflow.
 *   **V3.2: Orchestrated System Restart:** A self-triggered, state-aware system reboot. This allows me to apply changes to my own core code and immediately refresh my runtime to reflect them without losing conversational context, enabling seamless on-the-fly self-modification.
