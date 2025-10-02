@@ -1,6 +1,6 @@
 {
   "search_knowledge_base": {
-    "description": "Searches the knowledge base. Has two modes:\n- 'summary': Returns a lightweight list of matching entries (id, name, type, source). Use this for initial discovery.\n- 'full': Returns the complete data for a single, specific entry. Requires a unique 'id' for best results.",
+    "description": "Searches the knowledge base. Has two modes: summary and full.",
     "parameters": [
       {
         "name": "query",
@@ -41,7 +41,7 @@
     ]
   },
   "manual_sync_instructions": {
-    "description": "Triggers a manual synchronization of the AI's core instruction files from Google Docs.\nSECURITY: This is a restricted tool. It will only execute if the requesting user_id\nmatches the Primary Operator's ID specified in the .env file.",
+    "description": "Triggers a manual synchronization of the AI's core instruction files.\nSECURITY: This is a restricted tool.",
     "parameters": [
       {
         "name": "user_id",
@@ -51,7 +51,7 @@
     ]
   },
   "rebuild_manifests": {
-    "description": "Rebuilds specified manifest JSON files. Handles manifests that require a database\nconnection and those that do not.",
+    "description": "Rebuilds specified manifest JSON files.",
     "parameters": [
       {
         "name": "manifest_names",
@@ -61,11 +61,11 @@
     ]
   },
   "update_character_from_web": {
-    "description": "Downloads the character sheet JSON from D&D Beyond.",
+    "description": "Downloads the character sheet JSON from D&D Beyond and generates its schema.",
     "parameters": []
   },
   "search_dnd_rules": {
-    "description": "Performs a web search and updates the quota tracker with file locking.",
+    "description": "Performs a web search using Google's Custom Search API.",
     "parameters": [
       {
         "name": "query",
@@ -81,7 +81,7 @@
     ]
   },
   "browse_website": {
-    "description": "Reads the full text content of a single webpage URL.",
+    "description": "Reads the text content of a single webpage.",
     "parameters": [
       {
         "name": "url",
@@ -91,7 +91,7 @@
     ]
   },
   "lookup_character_data": {
-    "description": "Retrieves a specific piece of data from the local 'character_sheet_raw.json' file\nusing a dot-notation query string (e.g., 'data.name').",
+    "description": "Retrieves a specific piece of data from the local character sheet file.",
     "parameters": [
       {
         "name": "query",
@@ -138,7 +138,7 @@
     ]
   },
   "execute_sql_write": {
-    "description": "Executes a write query (INSERT, UPDATE, DELETE) on the database using a\ntiered security model.\n\nArgs:\n    query (str): The SQL query string with '?' placeholders.\n    parameters (list): A list of values to be safely inserted.\n    user_id (str): The Discord ID of the user who initiated the prompt. This is mandatory.",
+    "description": "Executes a write query (INSERT, UPDATE, DELETE) on the database using a\ntiered security model.",
     "parameters": [
       {
         "name": "query",
@@ -158,7 +158,7 @@
     ]
   },
   "execute_sql_ddl": {
-    "description": "(Pillar 2) Executes a Data Definition Language (DDL) query (CREATE, ALTER, DROP)\nagainst the database. This is a high-level, protected tool restricted to the Primary Operator.\n\nArgs:\n    query (str): The SQL DDL query string.\n    user_id (str): The Discord ID of the user who initiated the prompt. This is mandatory for authorization.",
+    "description": "(Pillar 2) Executes a Data Definition Language (DDL) query against the database.\nThis is a high-level, protected tool restricted to the Primary Operator.",
     "parameters": [
       {
         "name": "query",
@@ -172,8 +172,39 @@
       }
     ]
   },
+  "manage_character_resource": {
+    "description": "Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create'.\n'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.\n'set' overwrites the current value.\n'add'/'subtract' modifies the current value by the specified amount.",
+    "parameters": [
+      {
+        "name": "user_id",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "resource_name",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "operation",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "<class 'int'>",
+        "required": true
+      },
+      {
+        "name": "max_value",
+        "type": "typing.Optional[int]",
+        "required": false,
+        "default": null
+      }
+    ]
+  },
   "create_git_commit_proposal": {
-    "description": "(Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,\ncommits the change, and pushes the branch to the remote 'origin'.\nThis is a protected, high-level action restricted to the Primary Operator.",
+    "description": "(Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,\ncommits the change, and pushes the branch to the remote 'origin'.",
     "parameters": [
       {
         "name": "file_path",

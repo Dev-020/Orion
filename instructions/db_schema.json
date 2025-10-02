@@ -58,5 +58,13 @@
     "status",
     "proposal_timestamp",
     "resolution_timestamp"
+  ],
+  "character_resources": [
+    "resource_id",
+    "user_id",
+    "resource_name",
+    "current_value",
+    "max_value",
+    "last_updated"
   ]
 }
