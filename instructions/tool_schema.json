@@ -157,6 +157,21 @@
       }
     ]
   },
+  "execute_sql_ddl": {
+    "description": "(Pillar 2) Executes a Data Definition Language (DDL) query (CREATE, ALTER, DROP)\nagainst the database. This is a high-level, protected tool restricted to the Primary Operator.\n\nArgs:\n    query (str): The SQL DDL query string.\n    user_id (str): The Discord ID of the user who initiated the prompt. This is mandatory for authorization.",
+    "parameters": [
+      {
+        "name": "query",
+        "type": "<class 'str'>",
+        "required": true
+      },
+      {
+        "name": "user_id",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
   "create_git_commit_proposal": {
     "description": "(Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,\ncommits the change, and pushes the branch to the remote 'origin'.\nThis is a protected, high-level action restricted to the Primary Operator.",
     "parameters": [

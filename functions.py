@@ -14,6 +14,7 @@ __all__ = [
     "read_file",
     "execute_sql_read",
     "execute_sql_write", # Retained for other DB operations
+    "execute_sql_ddl",
     "create_git_commit_proposal" # New unified Git tool
 ]
 # --- END OF PUBLIC TOOL DEFINITION ---
@@ -126,6 +127,54 @@ def execute_sql_write(query: str, params: list[str], user_id: str) -> str:
     except sqlite3.Error as e:
         print(f"ERROR: A database error occurred in execute_sql_write: {e}")
         return f"An unexpected database error occurred: {e}"
+
+
+def execute_sql_ddl(query: str, user_id: str) -> str:
+    """
+    (Pillar 2) Executes a Data Definition Language (DDL) query (CREATE, ALTER, DROP)
+    against the database. This is a high-level, protected tool restricted to the Primary Operator.
+
+    Args:
+        query (str): The SQL DDL query string.
+        user_id (str): The Discord ID of the user who initiated the prompt. This is mandatory for authorization.
+    """
+    print(f"--- DB DDL Request from User: {user_id} ---")
+    print(f"  - Query: {query}")
+
+    # --- Tiered Security Logic ---
+    owner_id = os.getenv("DISCORD_OWNER_ID")
+    is_authorized = (owner_id and user_id == owner_id)
+
+    if not is_authorized:
+        error_msg = "Error: Authorization failed. This operation is restricted to the Primary Operator."
+        print(f"  - SECURITY ALERT: Denied unauthorized DDL attempt by user {user_id}.")
+        return error_msg
+    
+    print("  - Authorized for high-level DDL operation.")
+
+    # --- Command Validation ---
+    normalized_query = query.strip().upper()
+    if not (
+        normalized_query.startswith("CREATE TABLE")
+        or normalized_query.startswith("ALTER TABLE")
+        or normalized_query.startswith("DROP TABLE")
+    ):
+        return "Error: Invalid or disallowed SQL command. Only CREATE TABLE, ALTER TABLE, and DROP TABLE are supported."
+
+    # --- Database Execution ---
+    try:
+        # Use a new connection to ensure it's not shared with other threads
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.executescript(query) # Use executescript for potentially multi-statement DDL
+            conn.commit()
+            print("  - DDL query executed successfully.")
+            return "Success. The DDL query was executed and the changes have been committed."
+
+    except sqlite3.Error as e:
+        print(f"ERROR: A database error occurred in execute_sql_ddl: {e}")
+        return f"An unexpected database error occurred: {e}"
+
 
 # --- HIGH-LEVEL SELF-REFERENTIAL TOOLS ---
 
