@@ -66,5 +66,13 @@
     "current_value",
     "max_value",
     "last_updated"
+  ],
+  "character_status": [
+    "status_id",
+    "user_id",
+    "effect_name",
+    "effect_details",
+    "duration_in_rounds",
+    "timestamp"
   ]
 }

@@ -173,7 +173,7 @@
     ]
   },
   "manage_character_resource": {
-    "description": "Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create'.\n'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.\n'set' overwrites the current value.\n'add'/'subtract' modifies the current value by the specified amount.",
+    "description": "Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create'.\n'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.\n'set' overwrites the current value and can optionally update the max_value.\n'add'/'subtract' modifies the current value by the specified amount.",
     "parameters": [
       {
         "name": "user_id",

@@ -213,6 +213,7 @@ def manage_character_resource(user_id: str, resource_name: str, operation: str, 
             cursor.execute(query, tuple(params))
             conn.commit()
             
+            print(f"Success: Updated '{resource_name}' for user {user_id}. New value: {new_val}.")
             return f"Success: Updated '{resource_name}' for user {user_id}. New value: {new_val}."
 
     except sqlite3.Error as e:
@@ -225,7 +226,7 @@ def manage_character_status(user_id: str, effect_name: str, operation: str, deta
     'add' applies a new status effect. 'details' and 'duration' are optional.
     'remove' deletes a status effect from the table based on its name.
     'update' modifies the details or duration of an existing status effect.
-    """
+    """ 
     print(f"--- STATUS MGMT --- User: {user_id}, Effect: {effect_name}, Op: {operation}")
 
     valid_ops = ['add', 'remove', 'update']
@@ -268,7 +269,7 @@ def manage_character_status(user_id: str, effect_name: str, operation: str, deta
                     update_params.append(details)
                 if duration is not None:
                     set_clauses.append("duration_in_rounds = ?")
-                    update_params.append(duration)
+                    update_params.append(str(duration))
                 
                 query = f"UPDATE character_status SET {', '.join(set_clauses)} WHERE user_id = ? AND effect_name = ?"
                 update_params.extend([user_id, effect_name])
@@ -277,7 +278,7 @@ def manage_character_status(user_id: str, effect_name: str, operation: str, deta
                 return_message = f"Success: Updated status '{effect_name}' for user {user_id}."
 
             conn.commit()
-        
+        print(return_message)
         return return_message
 
     except sqlite3.Error as e:
