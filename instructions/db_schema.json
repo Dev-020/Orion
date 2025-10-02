@@ -46,16 +46,17 @@
     "description",
     "snippet"
   ],
-  "staged_proposals": [
+  "restart_state": [
+    "session_id",
+    "history_blob"
+  ],
+  "instruction_proposals": [
     "proposal_name",
     "file_path",
     "new_content",
     "diff_text",
-    "is_new_file",
-    "timestamp"
-  ],
-  "restart_state": [
-    "session_id",
-    "history_blob"
+    "status",
+    "proposal_timestamp",
+    "resolution_timestamp"
   ]
 }
