@@ -51,3 +51,41 @@ The vector database allows for storing a `metadata` dictionary alongside each ve
 * **Use Case:** This enables Orion to perform complex, filtered queries. For example, it can generate a query like: "Find memories semantically similar to 'a close call with a dragon', but **only where the category is 'SessionLog'** and **the user is 'Leo'**."
 
 This combination of semantic search and metadata filtering represents a state-of-the-art retrieval architecture and will be a transformative upgrade to Orion's cognitive abilities.
+
+---
+You should start by devising your **chunking and metadata strategy**.
+
+This is the most critical first step because the quality and structure of your chunks determine the quality of your entire vector search system. It's like designing the blueprint for a library *before* you start buying books or building shelves.
+
+---
+### ## The Correct Implementation Order
+
+Here is the logical, step-by-step order you should follow to implement your vector database.
+
+#### **Step 1: Design the Strategy (The Blueprint)**
+
+This is the most important "whiteboard" phase. Before you write any code, you need to answer these questions for each of your SQLite tables (`knowledge_base`, `long_term_memory`, etc.):
+
+* **What is a "document"?** Define your chunking logic. Will you split by paragraph? By function? By concatenating specific fields?
+* **What is its context?** Define the exact `metadata` you will attach to each chunk (e.g., `{"source": "PHB", "type": "spell"}`).
+
+This strategic work is the foundation for everything else.
+
+---
+#### **Step 2: Set Up the Vector Database (The Foundation)**
+
+Once you have a plan for your data, you can prepare its destination. This is a quick, technical step.
+
+* **Choose and install your library.** Based on our discussion, this would be `pip install chromadb`.
+* **Initialize the client and create a "collection"** in your new migration script. This is like creating the main table in your new database, ready to receive data.
+
+---
+#### **Step 3: Write the Migration Script (The Construction)**
+
+This is where you bring it all together. In your new `migrate_to_vector_db.py` script, you will:
+
+* **Set up the embedding model:** This is where you configure your `genai` API key and specify the embedding model name (e.g., `"models/text-embedding-004"`).
+* **Implement the chunking logic:** Write the Python code that reads from your SQLite database and applies the chunking and metadata strategy you designed in Step 1.
+* **Embed and Store in Batches:** Write the main loop that takes your generated chunks, sends them to the embedding model in efficient batches, and then adds the resulting vectors and metadata to the ChromaDB collection you created in Step 2.
+
+By following this order—**Strategy first, then implementation**—you ensure that you're building a well-designed, high-quality semantic memory system for Orion from the ground up.
