@@ -4,6 +4,7 @@ from git import Repo, GitCommandError
 # --- PUBLIC TOOL DEFINITION ---
 __all__ = [
     "search_knowledge_base",
+    "roll_dice",
     "manual_sync_instructions",
     "rebuild_manifests",
     "update_character_from_web",
@@ -22,6 +23,7 @@ __all__ = [
 # --- END OF PUBLIC TOOL DEFINITION ---
 
 import difflib
+import random
 import re
 import os
 import json
@@ -153,83 +155,107 @@ def execute_sql_ddl(query: str, user_id: str) -> str:
         print(f"ERROR: A database error occurred in execute_sql_ddl: {e}")
         return f"An unexpected database error occurred: {e}"
 
-def manage_character_resource(user_id: str, resource_name: str, operation: str, value: int, max_value: Optional[int] = None) -> str:
+def manage_character_resource(user_id: str, operation: str, resource_name: Optional[str] = None, value: Optional[int] = None, max_value: Optional[int] = None) -> str:
     """
-    Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create'.
+    Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create', 'view'.
     'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.
     'set' overwrites the current value and can optionally update the max_value.
-    'add'/'subtract' modifies the current value by the specified amount.
+    'add'/'subtract' modifies the current_value (using 'value') and/or the max_value (using 'max_value').
+    'view' returns the current and max value of a specific resource, or all resources if no name is provided.
     """
-    print(f"--- RESOURCE MGMT --- User: {user_id}, Resource: {resource_name}, Op: {operation}, Val: {value}, Max: {max_value}")
+    print(f"--- RESOURCE MGMT --- User: {user_id}, Resource: {resource_name or 'ALL'}, Op: {operation}, Val: {value}, Max: {max_value}")
 
-    valid_ops = ['set', 'add', 'subtract', 'create']
+    # --- Input Validation ---
+    valid_ops = ['set', 'add', 'subtract', 'create', 'view']
     if operation.lower() not in valid_ops:
         return f"Error: Invalid operation '{operation}'. Must be one of {valid_ops}."
 
     timestamp = datetime.now(timezone.utc).isoformat()
-    
+
     try:
         with sqlite3.connect(DB_FILE) as conn:
+            conn.row_factory = sqlite3.Row  # Set the row factory on the connection
             cursor = conn.cursor()
-            
-            cursor.execute("SELECT current_value FROM character_resources WHERE user_id = ? AND resource_name = ?", (user_id, resource_name))
-            row = cursor.fetchone()
-            
-            if operation == 'create':
+
+            # --- Fetch current state ---
+            row = None
+            if resource_name:
+                cursor.execute("SELECT current_value, max_value FROM character_resources WHERE user_id = ? AND resource_name = ?", (user_id, resource_name)) # noqa
+                row = cursor.fetchone()
+
+            # --- Handle 'view' operation ---
+            if operation == 'view':
+                if resource_name:
+                    cursor.execute("SELECT resource_name, current_value, max_value FROM character_resources WHERE user_id = ? AND resource_name = ?", (user_id, resource_name)) # noqa
+                else:
+                    cursor.execute("SELECT resource_name, current_value, max_value FROM character_resources WHERE user_id = ?", (user_id,))
+                rows = cursor.fetchall()
+                results = [dict(row) for row in rows]
+                return json.dumps(results, indent=2) if results else "Info: You have no active resources."
+
+            # --- Handle 'create' operation ---
+            if operation == 'create' and value is not None and resource_name:
                 if row:
                     return f"Error: Resource '{resource_name}' already exists for user {user_id}. Use 'set' or 'add' to modify."
-                query = "INSERT INTO character_resources (user_id, resource_name, current_value, max_value, last_updated) VALUES (?, ?, ?, ?, ?)"
+                query = "INSERT INTO character_resources (user_id, resource_name, current_value, max_value, last_updated) VALUES (?, ?, ?, ?, ?)" # noqa
                 params = (user_id, resource_name, value, max_value, timestamp)
                 cursor.execute(query, params)
                 conn.commit()
                 return f"Success: Created resource '{resource_name}' for user {user_id} with value {value}."
 
-            if not row:
+            # --- Pre-modification checks ---
+            if not row and resource_name:
                 return f"Error: Resource '{resource_name}' not found for user {user_id}. Use 'create' operation first."
-            
-            current_val = row[0]
-            
+
+            current_val, current_max = (row[0], row[1]) if row else (None, None)
+            set_clauses, params = [], []
+
+            # --- Handle 'set', 'add', 'subtract' operations ---
             if operation == 'set':
-                new_val = value
-                set_clauses = ["current_value = ?", "last_updated = ?"]
-                params = [new_val, timestamp]
+                if value is not None:
+                    set_clauses.append("current_value = ?")
+                    params.append(value)
                 if max_value is not None:
                     set_clauses.append("max_value = ?")
                     params.append(max_value)
-                
+
+            elif operation in ['add', 'subtract']:
+                op_multiplier = 1 if operation == 'add' else -1
+                if value is not None:
+                    if current_val is None: return f"Error: Cannot modify current_value for '{resource_name}' as it is not set."
+                    set_clauses.append("current_value = ?")
+                    params.append(current_val + (value * op_multiplier))
+                if max_value is not None:
+                    if current_max is None: return f"Error: Cannot modify max_value for '{resource_name}' as it is not set."
+                    set_clauses.append("max_value = ?")
+                    params.append(current_max + (max_value * op_multiplier))
+
+            if set_clauses:
+                set_clauses.append("last_updated = ?")
+                params.append(timestamp)
                 query = f"UPDATE character_resources SET {', '.join(set_clauses)} WHERE user_id = ? AND resource_name = ?"
                 params.extend([user_id, resource_name])
-
-            elif operation == 'add':
-                new_val = current_val + value
-                query = "UPDATE character_resources SET current_value = ?, last_updated = ? WHERE user_id = ? AND resource_name = ?"
-                params = (new_val, timestamp, user_id, resource_name)
-
-            else: # subtract
-                new_val = current_val - value
-                query = "UPDATE character_resources SET current_value = ?, last_updated = ? WHERE user_id = ? AND resource_name = ?"
-                params = (new_val, timestamp, user_id, resource_name)
-
-            cursor.execute(query, tuple(params))
-            conn.commit()
-            
-            print(f"Success: Updated '{resource_name}' for user {user_id}. New value: {new_val}.")
-            return f"Success: Updated '{resource_name}' for user {user_id}. New value: {new_val}."
+                cursor.execute(query, tuple(params))
+                conn.commit()
+                return f"Success: Updated '{resource_name}' for user {user_id}."
+            else:
+                return "Info: Operation did not result in any changes."
 
     except sqlite3.Error as e:
         print(f"ERROR: A database error occurred in manage_character_resource: {e}")
         return f"An unexpected database error occurred: {e}"
 
-def manage_character_status(user_id: str, effect_name: str, operation: str, details: Optional[str] = None, duration: Optional[int] = None) -> str:
+def manage_character_status(user_id: str, operation: str, effect_name: Optional[str] = None, details: Optional[str] = None, duration: Optional[int] = None) -> str:
     """
-    Manages a character's temporary status effects. Operations: 'add', 'remove', 'update'.
+    Manages a character's temporary status effects. Operations: 'add', 'remove', 'update', 'view'.
     'add' applies a new status effect. 'details' and 'duration' are optional.
     'remove' deletes a status effect from the table based on its name.
     'update' modifies the details or duration of an existing status effect.
+    'view' returns the details of a specific effect, or all effects if no name is provided.
     """ 
-    print(f"--- STATUS MGMT --- User: {user_id}, Effect: {effect_name}, Op: {operation}")
+    print(f"--- STATUS MGMT --- User: {user_id}, Effect: {effect_name or 'ALL'}, Op: {operation}")
 
-    valid_ops = ['add', 'remove', 'update']
+    valid_ops = ['add', 'remove', 'update', 'view']
     if operation.lower() not in valid_ops:
         return f"Error: Invalid operation '{operation}'. Must be one of {valid_ops}."
 
@@ -238,15 +264,25 @@ def manage_character_status(user_id: str, effect_name: str, operation: str, deta
     
     try:
         with sqlite3.connect(DB_FILE) as conn:
+            conn.row_factory = sqlite3.Row  # Set the row factory on the connection
             cursor = conn.cursor()
             
-            if operation == 'add':
+            if operation == 'view':
+                if effect_name:
+                    cursor.execute("SELECT effect_name, effect_details, duration_in_rounds, timestamp FROM character_status WHERE user_id = ? AND effect_name = ?", (user_id, effect_name)) # noqa
+                else:
+                    cursor.execute("SELECT effect_name, effect_details, duration_in_rounds, timestamp FROM character_status WHERE user_id = ?", (user_id,)) # noqa
+                rows = cursor.fetchall()
+                results = [dict(row) for row in rows]
+                return json.dumps(results, indent=2) if results else "Info: You have no active status effects."
+            
+            if operation == 'add' and effect_name:
                 query = "INSERT INTO character_status (user_id, effect_name, effect_details, duration_in_rounds, timestamp) VALUES (?, ?, ?, ?, ?)"
                 params = (user_id, effect_name, details, duration, timestamp)
                 cursor.execute(query, params)
                 return_message = f"Success: Applied status '{effect_name}' to user {user_id}."
 
-            elif operation == 'remove':
+            elif operation == 'remove' and effect_name:
                 query = "DELETE FROM character_status WHERE user_id = ? AND effect_name = ?"
                 params = (user_id, effect_name)
                 cursor.execute(query, params)
@@ -256,7 +292,7 @@ def manage_character_status(user_id: str, effect_name: str, operation: str, deta
                 else:
                     return_message = f"Info: No active status named '{effect_name}' found for user {user_id} to remove."
             
-            elif operation == 'update':
+            elif operation == 'update' and effect_name:
                 cursor.execute("SELECT status_id FROM character_status WHERE user_id = ? AND effect_name = ?", (user_id, effect_name))
                 row = cursor.fetchone()
                 if not row:
@@ -339,6 +375,53 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
         return f"An unexpected error occurred: {e}"
 
 # --- RETAINED SPECIALIZED & EXTERNAL TOOLS ---
+
+def roll_dice(dice_notation: str) -> str:
+    """
+    Rolls one or more dice based on standard D&D notation (e.g., '1d20', '3d6+4, 1d8', '2d8-1 and 1d4').
+    Returns a JSON object with a list of individual roll results and a grand total.
+    """
+    print(f"--- Rolling Dice: {dice_notation} ---")
+    # This pattern finds all instances of 'XdY' with an optional modifier like '+Z' or '-Z'
+    pattern = re.compile(r'(\d+)d(\d+)([+\-]\d+)?')
+    matches = pattern.findall(dice_notation.lower().strip())
+
+    if not matches:
+        return f"Error: No valid dice notation found in '{dice_notation}'. Please use a format like '1d20' or '3d6+4'."
+
+    all_results = []
+    grand_total = 0
+
+    for match in matches:
+        num_dice = int(match[0])
+        die_sides = int(match[1])
+        modifier_str = match[2]
+
+        if num_dice <= 0 or die_sides <= 0:
+            # Skip invalid entries like '0d6'
+            continue
+
+        rolls = [random.randint(1, die_sides) for _ in range(num_dice)]
+        sub_total = sum(rolls)
+        modifier = 0
+
+        if modifier_str:
+            modifier = int(modifier_str)
+            sub_total += modifier
+
+        roll_result = {
+            "notation": f"{num_dice}d{die_sides}{modifier_str if modifier_str else ''}",
+            "rolls": rolls,
+            "modifier": modifier,
+            "total": sub_total
+        }
+        all_results.append(roll_result)
+        grand_total += sub_total
+
+    return json.dumps({
+        "results": all_results,
+        "grand_total": grand_total
+    }, indent=2)
 
 def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None, item_type: Optional[str] = None, source: Optional[str] = None, mode: str = 'summary', max_results: int = 25) -> str:
     """
