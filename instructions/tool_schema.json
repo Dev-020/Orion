@@ -40,6 +40,16 @@
       }
     ]
   },
+  "roll_dice": {
+    "description": "Rolls one or more dice based on standard D&D notation (e.g., '1d20', '3d6+4, 1d8', '2d8-1 and 1d4').\nReturns a JSON object with a list of individual roll results and a grand total.",
+    "parameters": [
+      {
+        "name": "dice_notation",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
   "manual_sync_instructions": {
     "description": "Triggers a manual synchronization of the AI's core instruction files.\nSECURITY: This is a restricted tool.",
     "parameters": [
@@ -173,15 +183,10 @@
     ]
   },
   "manage_character_resource": {
-    "description": "Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create'.\n'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.\n'set' overwrites the current value and can optionally update the max_value.\n'add'/'subtract' modifies the current value by the specified amount.",
+    "description": "Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create', 'view'.\n'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.\n'set' overwrites the current value and can optionally update the max_value.\n'add'/'subtract' modifies the current_value (using 'value') and/or the max_value (using 'max_value').\n'view' returns the current and max value of a specific resource, or all resources if no name is provided.",
     "parameters": [
       {
         "name": "user_id",
-        "type": "<class 'str'>",
-        "required": true
-      },
-      {
-        "name": "resource_name",
         "type": "<class 'str'>",
         "required": true
       },
@@ -191,9 +196,16 @@
         "required": true
       },
       {
+        "name": "resource_name",
+        "type": "typing.Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
         "name": "value",
-        "type": "<class 'int'>",
-        "required": true
+        "type": "typing.Optional[int]",
+        "required": false,
+        "default": null
       },
       {
         "name": "max_value",
@@ -204,7 +216,7 @@
     ]
   },
   "manage_character_status": {
-    "description": "Manages a character's temporary status effects. Operations: 'add', 'remove', 'update'.\n'add' applies a new status effect. 'details' and 'duration' are optional.\n'remove' deletes a status effect from the table based on its name.\n'update' modifies the details or duration of an existing status effect.",
+    "description": "Manages a character's temporary status effects. Operations: 'add', 'remove', 'update', 'view'.\n'add' applies a new status effect. 'details' and 'duration' are optional.\n'remove' deletes a status effect from the table based on its name.\n'update' modifies the details or duration of an existing status effect.\n'view' returns the details of a specific effect, or all effects if no name is provided.",
     "parameters": [
       {
         "name": "user_id",
@@ -212,14 +224,15 @@
         "required": true
       },
       {
-        "name": "effect_name",
+        "name": "operation",
         "type": "<class 'str'>",
         "required": true
       },
       {
-        "name": "operation",
-        "type": "<class 'str'>",
-        "required": true
+        "name": "effect_name",
+        "type": "typing.Optional[str]",
+        "required": false,
+        "default": null
       },
       {
         "name": "details",

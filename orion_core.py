@@ -102,7 +102,15 @@ class OrionCore:
                 model=f'{self.model_name}',
                 config=types.GenerateContentConfig(
                     system_instruction=self.current_instructions,
-                    tools=self.tools
+                    tools=self.tools,
+                    max_output_tokens=8192,  # Limit the response to 8192 tokens
+                    safety_settings=[
+                        types.SafetySetting(
+                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
+
+                        )
+                    ]
                 ),
                 history=history
             )
@@ -114,7 +122,7 @@ class OrionCore:
         if full_restart:
             print("---! FULL SYSTEM RESTART INITIATED !---")
             self.restart_pending = True
-            return "Skipped Hot-Swap. Restart sequence initiated. The system will reboot after this response. Please do not make another function call to this Tool to avoid looping the restart."
+            return "[System Note]: Skipped Hot-Swap. Restart sequence initiated. The system will reboot after this response. Please do not perform any actions to avoid looping the restart."
         
         print("---! HOT-SWAP INSTRUCTIONS TRIGGERED !---")
         # --- NEW: Reload the tools first ---
