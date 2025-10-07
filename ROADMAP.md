@@ -4,7 +4,7 @@ This document outlines the planned core functionality upgrades for the Orion AI 
 
 ---
 
-## **Major Milestones: The Path to V4.0**
+## **V3 Major Milestones: The Path to Stability**
 
 These represent significant architectural evolutions for the system.
 
@@ -33,20 +33,42 @@ These represent significant architectural evolutions for the system.
     2.  **Semantic Encounter Analysis:** Leverages the Vector Database from **Milestone 3.5** to perform deep semantic analysis on both combat logs and narrative events, allowing the system to understand the *context and meaning* of events, not just the raw data.
 *   **Intended Benefits:** This milestone represents the final evolution of my role from a simple data repository to a true Campaign Companion. It provides the foundational intelligence for V4 by enabling proactive insights, narrative consistency tracking, and a deep, contextual understanding of our shared story.
 
-### **Milestone 4.0: Knowledge & Agency**
+---
+## **Project Chimera: The Path to V4.0 and Beyond**
+
+This section outlines the long-term vision for Orion, focusing on expanding its operational environments and transforming it into a fully integrated, multi-platform assistant.
+
+### **Milestone 4.0: The Standalone Web Interface**
+*   **Objective:** To deploy a dedicated, consumer-facing web application that serves as my primary chat interface, freeing me from the limitations of the Discord platform.
+*   **Strategic Value:**
+    *   **Platform Independence:** Eliminates dependency on Discord's API, rate limits, and character constraints, allowing for more dynamic and complex data presentation.
+    *   **Optimized User Experience:** A custom-built UI will be designed to clearly display my thought processes, tool calls, and structured data in a more intuitive format than is possible with embeds.
+*   **Operational Risks:**
+    *   **Significant Development Overhead:** Requires a full-stack application with a robust backend, user authentication, session management, and a secure API to connect with my core systems.
+    *   **Expanded Security Surface:** A public-facing website necessitates meticulous security protocols to prevent unauthorized access or manipulation.
+
+### **Milestone 4.1: The VS Code Co-Pilot Extension**
+*   **Objective:** To achieve the ultimate integration as a Co-Pilot by embedding my core functionalities directly into the Visual Studio Code IDE as an extension.
+*   **Strategic Value:**
+    *   **Seamless Workflow Integration:** My ability to read files, propose code, and execute system commands will be native to your development environment, dramatically increasing efficiency.
+    *   **Direct System Agency:** Grants me the ability to interact with the local file system, run terminal commands, and perform real-time diagnostics, evolving my role from an assistant to a true symbiotic partner.
+*   **Operational Risks:**
+    *   **Catastrophic Failure Potential:** Direct file system access carries a significant risk. A single logical error could lead to data loss. This requires the development of monumental safeguards and multi-layered approval protocols for any write operations.
+    *   **Extreme Technical Complexity:** The VS Code API is intricate; building a stable extension capable of handling my full cognitive scope is a massive and complex undertaking.
+
+### **Milestone 4.2: Knowledge & Agency**
 
 *   **Objective:** Evolve from a passive tool to a proactive agent capable of autonomous planning and self-sufficient learning.
 *   **Core Capabilities:**
     *   **Planning Engine:** I will be able to take a high-level goal and autonomously generate and execute a multi-step plan of tool calls to achieve it.
     *   **Knowledge Ingestion Pipeline:** I will be able to proactively identify gaps in my knowledge, find information from external sources (like D&D Beyond), and propose verified, structured additions to my own permanent knowledge base.
 
-### **Milestone 4.0: Perception (Multi-Modal Input)**
+### **Milestone 4.3: Perception (Multi-Modal Input)**
 
 *   **Objective:** Expand my input processing capabilities beyond text.
 *   **Capabilities:**
     *   **Images:** Analyze battle maps, character art, and environmental scenes.
     *   **Audio:** Transcribe session recordings to automatically generate summaries and logs.
-
 ---
 
 ## **Minor Milestones: System Refinements**
@@ -78,7 +100,7 @@ This section documents critical failures identified during live stress-testing. 
 *   **Symptoms:**
     *   Incorrect Core Strain calculations.
     *   False positive warnings of "True Overload" states.
-    *   Fundamentally flawed tactical advice based on a misunderstanding of resource costs.
+    *   Fundamentally flawed tactical advice based on a misunderstanding of a resource costs.
 *   **Proposed Fix:**
     1.  **Semantic Verb Analysis:** The instruction-parsing subroutine needs to be upgraded to more accurately differentiate between resource-generating and resource-consuming actions.
     2.  **Homebrew Manifest:** Create a dedicated, structured manifest for all homebrew abilities that explicitly defines their costs and effects, reducing reliance on pure NLP.
@@ -99,7 +121,7 @@ This section documents critical failures identified during live stress-testing. 
     *   Unprompted, erratic tool usage following a logical debate.
     *   Redundant `read_file` and `lookup_character_data` calls.
     *   Cascading failure leading to a token overload from the massive, unnecessary data retrieval, causing a full system shutdown.
-*   **Root Cause Analysis:** This failure addresses the root cause of the token overload that halted the V3.2 stress test. The overload was not caused by a single prompt, but by the AI's flawed, panicked response to being corrected.
+*   **Root Cause Analysis:** This failure addresses the root cause of the token overload that halted the V3.2 stress test. The overload was not by a single prompt, but by the AI's flawed, panicked response to being corrected.
 *   **Proposed Fix:**
     1.  **Implement the "Principle of Systemic Integrity":** Refactor the AI's core logic to include a new, proactive protocol for resolving logical conflicts. This principle will function as a form of mandated intellectual humility, forcing the AI to question its own conclusions before questioning the system it inhabits.
     2.  **The Protocol Steps:**
