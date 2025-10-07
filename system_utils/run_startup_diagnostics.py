@@ -4,8 +4,20 @@ These are internal system utilities and are not intended to be called as tools b
 """
 
 import json
-import os
+import os, sys
 from typing import Callable, Dict, Any
+import dotenv
+
+# Get the path of the directory containing the current script (system_utils)
+current_script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Get the path of the parent directory (the project root, Orion)
+project_root = os.path.dirname(current_script_dir)
+
+# Add the project root to Python's path
+sys.path.append(project_root)
+
+import functions
 
 # This function would be imported and called by orion_core.py during its boot sequence.
 # The `tools` dictionary would be passed in from the OrionCore instance to avoid circular imports.
@@ -19,6 +31,8 @@ def run_heartbeat_check(tools: Dict[str, Callable]) -> bool:
     Returns:
         bool: True if all tests pass, False otherwise.
     """
+    dotenv.load_dotenv()
+    owner_id = os.getenv("DISCORD_OWNER_ID")
     suite_path = os.path.join('instructions', 'diagnostic_suite.json')
     all_tests_passed = True
 
@@ -49,10 +63,21 @@ def run_heartbeat_check(tools: Dict[str, Callable]) -> bool:
         try:
             for case in test_cases:
                 tool_func = tools[case["tool_name"]]
-                # Special handling for user_id which is required for some tools
-                if "user_id" not in case["parameters"] and case["tool_name"] in ["execute_sql_write"]:
-                     case["parameters"]["user_id"] = "SYSTEM_DIAGNOSTIC_USER"
                 
+                # Define which functions require a user_id
+                functions_requiring_user_id = [
+                    "execute_write", "execute_vdb_write", "execute_sql_write",
+                    "execute_sql_ddl", "manage_character_resource", "manage_character_status",
+                    "create_git_commit_proposal", "manual_sync_instructions"
+                ]
+
+                # Add user_id only if the function requires it
+                if case["tool_name"] in functions_requiring_user_id:
+                    if case.get("requires_owner"):
+                        case["parameters"]["user_id"] = owner_id
+                    elif "user_id" not in case["parameters"]:
+                        case["parameters"]["user_id"] = "SYSTEM_DIAGNOSTIC_USER"
+
                 result = tool_func(**case["parameters"])
                 # We don't need to validate the result for a heartbeat, just that it didn't crash.
                 # A more advanced version could check the result against an expected pattern.
@@ -70,3 +95,10 @@ def run_heartbeat_check(tools: Dict[str, Callable]) -> bool:
         
     return all_tests_passed
 
+def main():
+    tools = [getattr(functions, func_name) for func_name in functions.__all__]
+    tools_dict = {func.__name__: func for func in tools}
+    run_heartbeat_check(tools_dict)
+
+if __name__ == "__main__":
+    main()

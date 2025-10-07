@@ -16,13 +16,16 @@ __all__ = [
     "execute_sql_read",
     "execute_sql_write",
     "execute_sql_ddl",
+    "execute_vdb_read",
+    "execute_vdb_write",
+    "execute_write",
     "manage_character_resource",
     "manage_character_status",
     "create_git_commit_proposal"
 ]
 # --- END OF PUBLIC TOOL DEFINITION ---
 
-import difflib
+import hashlib
 import random
 import re
 import os
@@ -34,8 +37,10 @@ from datetime import date
 import google.auth
 from datetime import datetime, timezone
 from filelock import FileLock
-from typing import Optional, List, Any, Tuple
+from typing import Optional, List, Any
 import sqlite3
+import chromadb
+from chromadb.types import Metadata
 from pathlib import Path
 from system_utils import sync_docs, generate_manifests
 
@@ -45,6 +50,318 @@ PROJECT_ROOT = Path(__file__).parent.resolve()
 
 # --- DATABASE CONFIGURATION ---
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orion_database.sqlite')
+CHROMA_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_db_store")
+COLLECTION_NAME = "orion_semantic_memory"
+
+# --- VECTOR DATABASE ACCESS MODEL ---
+
+def _get_chroma_collection():
+    """Helper function to get the ChromaDB collection."""
+    try:
+        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+        return collection
+    except Exception as e:
+        print(f"Error connecting to ChromaDB: {e}")
+        return None
+
+def _sanitize_metadata(metadata: Metadata) -> Metadata:
+    """Sanitizes a metadata dictionary for ChromaDB compatibility."""
+    sanitized: Metadata = {}
+    for key, value in metadata.items():
+        if isinstance(value, (str, int, float, bool)):
+            sanitized[key] = value
+        elif value is not None:
+            sanitized[key] = json.dumps(value)
+    return sanitized
+
+def execute_write(table: str, operation: str, user_id: str, data: Optional[dict] = None, where: Optional[dict] = None) -> str:
+    """
+    (HIGH-LEVEL ORCHESTRATOR) Automates a synchronized write to both SQLite and the Vector DB.
+    It relies on the low-level tools for all execution and security checks.
+    """
+    print(f"--- Synchronized Write --- User: {user_id}, Table: {table}, Op: {operation}")
+
+    # --- 1. Construct and Execute SQL Query (Primary Database) ---
+    try:
+        operation = operation.lower()
+        if operation == 'insert' and data is not None:
+            columns = ', '.join(data.keys())
+            placeholders = ', '.join(['?'] * len(data))
+            sql_query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+            sql_params = list(data.values())
+        elif operation == 'update' and where is not None and data is not None:
+            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
+            where_clause = ' AND '.join([f"{key} = ?" for key in where.keys()])
+            sql_query = f"UPDATE {table} SET {set_clause} WHERE {where_clause}"
+            sql_params = list(data.values()) + list(where.values())
+        elif operation == 'delete' and where is not None:
+            where_clause = ' AND '.join([f"{key} = ?" for key in where.keys()])
+            sql_query = f"DELETE FROM {table} WHERE {where_clause}"
+            sql_params = list(where.values())
+        else:
+            return f"Error: Invalid operation '{operation}' or missing 'where' clause for update/delete."
+    except Exception as e:
+        return f"Error: Failed to construct SQL query: {e}"
+
+    sql_result = execute_sql_write(query=sql_query, params=sql_params, user_id=user_id)
+
+    if "Success" not in sql_result:
+        return f"Primary database (SQLite) write failed. Aborting sync. Error: {sql_result}"
+
+    # --- 2. Synchronize with Vector DB (Secondary Database) ---
+    try:
+        print("  - SQLite write successful. Proceeding with Vector DB synchronization...")
+        
+        pk_map = {
+            'long_term_memory': 'event_id',
+            'active_memory': 'topic',
+            'knowledge_base': 'id',
+            'user_profiles': 'user_id',
+            'deep_memory': 'id'
+        }
+        pk_name = pk_map.get(table)
+
+        # --- A. Handle DELETE ---
+        if operation == 'delete':
+            # For active_memory, we cannot reconstruct the hash from a delete operation based on topic.
+            # This is a known limitation of this design. The vector will be orphaned.
+            # A more complex solution would be to read before deleting, but we accept this limitation for now.
+            if table == 'active_memory':
+                 print("  - VDB sync: Skipping DELETE for 'active_memory' as its ID is hashed.")
+            elif pk_name and where and pk_name in where:
+                vdb_id_val = where[pk_name]
+                vdb_id = f"{table}_{vdb_id_val}"
+                execute_vdb_write(operation='delete', user_id=user_id, ids=[vdb_id])
+                print(f"  - VDB sync: Initiated DELETE for ID {vdb_id}")
+            else:
+                print(f"  - VDB sync: Skipping DELETE for table '{table}' - no PK in 'where' or table not configured.")
+        
+        # --- B. Handle INSERT or UPDATE ---
+        else:
+            full_data_row = None
+            if operation == 'insert':
+                # The write was successful, so we can now fetch the most recently inserted row.
+                # Ordering by the primary key DESC and taking the first result is the simplest, most direct way.
+                read_query = f"SELECT * FROM {table} ORDER BY {pk_name} DESC LIMIT 1"
+                read_result_json = execute_sql_read(query=read_query)
+                print(read_result_json)
+                if "returned no results" not in read_result_json:
+                    read_result = json.loads(read_result_json)
+                    if read_result:
+                        full_data_row = read_result[0]
+            elif operation == 'update':
+                if pk_name and where and pk_name in where:
+                    pk_value = where[pk_name]
+                    read_query = f"SELECT * FROM {table} WHERE {pk_name} = ?"
+                    # The result from execute_sql_read is a JSON string
+                    read_result_json = execute_sql_read(query=read_query, params=[str(pk_value)])
+                    # We need to handle the case where it returns no results
+                    if "returned no results" not in read_result_json:
+                        read_result = json.loads(read_result_json)
+                        if read_result:
+                            full_data_row = read_result[0]
+
+            if not full_data_row:
+                print(f"  - VDB sync: Skipping {operation.upper()} - could not obtain full data row for vectorization.")
+                return sql_result
+
+            # --- C. Document Factory ---
+            doc, meta, vdb_id = None, None, None
+            
+            if table in pk_map:
+                # Default behavior
+                pk_val = full_data_row.get(pk_map[table])
+                vdb_id = f"{table}_{pk_val}"
+                meta = {'source_table': table, 'source_id': str(pk_val)}
+                # Populate metadata, ensuring all values are strings for VDB compatibility.
+                # This is more efficient than a second loop and is safe for existing strings.
+                for key, value in full_data_row.items():
+                    if key not in meta:
+                        meta[key] = str(value)
+                
+                # Specific formatting rules override the default
+                if table == 'long_term_memory':
+                    content = f"{full_data_row.get('description', '')} {full_data_row.get('snippet', '')}".strip()
+                    doc = f"Memory Title: {full_data_row.get('title', '')}. Category: {full_data_row.get('category', '')}. Date: {full_data_row.get('date', '')}. Contents: {content}"
+                
+                elif table == 'deep_memory':
+                    # 1. Parse JSON fields from the row data into objects for processing.
+                    # This ensures we have structured data for both metadata and doc creation.
+                    function_calls_obj, vdb_context_obj = None, None
+                    for field in ['function_calls', 'vdb_context', 'attachments_metadata']:
+                        if field in meta and isinstance(meta[field], str):
+                            try:
+                                parsed_obj = json.loads(meta[field] or "[]")
+                                meta[field] = parsed_obj # Update metadata for structured storage
+                                if field == 'function_calls': function_calls_obj = parsed_obj
+                                if field == 'vdb_context': vdb_context_obj = parsed_obj
+                            except json.JSONDecodeError:
+                                print(f"  - VDB sync: Could not parse '{field}' as JSON, storing as raw string.")
+                                pass
+                    
+                    # 2. Create a clean, readable summary of tool calls for the vector document.
+                    tool_summary = ""
+                    if function_calls_obj:
+                        summaries = []
+                        # Ensure function_calls_obj is a list before iterating
+                        if isinstance(function_calls_obj, list):
+                            for content_item in function_calls_obj:
+                                # Ensure content_item is a dict and has 'parts'
+                                if isinstance(content_item, dict) and isinstance(content_item.get('parts'), list):
+                                    for part in content_item['parts']:
+                                        # Ensure part is a dict before using .get()
+                                        if isinstance(part, dict):
+                                            if part.get('function_call'):
+                                                summaries.append(f"Called function '{part['function_call'].get('name')}'")
+                                            elif part.get('function_response'):
+                                                summaries.append(f"Received response for '{part['function_response'].get('name')}'")
+                        if summaries:
+                            tool_summary = f" Actions Taken: [{'; '.join(summaries)}]."
+
+                    # 3. Create a clean, readable summary of the VDB context used.
+                    vdb_context_text = ""
+                    if isinstance(vdb_context_obj, dict) and vdb_context_obj.get('documents') and vdb_context_obj['documents'][0]:
+                        # We only care about the text of the documents, not the other metadata.
+                        # This strips all the JSON noise.
+                        context_docs = ' | '.join(filter(None, vdb_context_obj['documents'][0]))
+                        vdb_context_text = f" Context Used: [{context_docs}]." if context_docs else ""
+
+                    # 4. Construct the final rich document for semantic search.
+                    ts_iso = datetime.fromtimestamp(full_data_row.get('timestamp', 0), tz=timezone.utc).isoformat()
+                    base_doc = f"Conversation from {ts_iso} with user {full_data_row.get('user_name', 'Unknown')}. User asked: '{full_data_row.get('prompt_text', '')}'. Orion responded: '{full_data_row.get('response_text', '')}'"
+                    doc = base_doc + tool_summary + vdb_context_text
+                
+                elif table == 'active_memory':
+                    unique_content = f"{full_data_row.get('topic', '')}{full_data_row.get('prompt', '')}"
+                    hash_id = hashlib.sha1(unique_content.encode('utf-8')).hexdigest()
+                    vdb_id = f"active_memory_{hash_id}"
+                    meta['source_id'] = vdb_id # Override the source_id with the correct hash
+                    doc = f"D&D Ruling for '{full_data_row.get('topic', '')}'. Question: {full_data_row.get('prompt', '')}. Ruling: {full_data_row.get('ruling', '')}"
+
+                # Fallback document if no specific rule exists
+                elif not doc:
+                    # A simple JSON dump is a reasonable fallback for tables without a specific doc format.
+                    doc = json.dumps(full_data_row)
+
+            # --- D. Execute VDB Write ---
+            if doc and meta and vdb_id:
+                execute_vdb_write(operation='add', user_id=user_id, ids=[vdb_id], documents=[doc], metadatas=[meta])
+                print(f"  - VDB sync: Completed {operation.upper()} for ID {vdb_id}")
+            else:
+                print(f"  - VDB sync: Skipping {operation.upper()} for table '{table}' - no document creation rule found.")
+
+    except Exception as e:
+        print(f"Warning: SQLite write was successful, but Vector DB sync failed: {e}")
+
+    return sql_result
+
+def execute_vdb_read(query_texts: list[str], n_results: int = 10, where: Optional[dict] = None, ids: Optional[list[str]] = None) -> str:
+    """
+    Queries the vector database for similar documents. Can be filtered by metadata (`where`) or a specific list of `ids`.
+    """
+    print(f"--- Vector DB Query --- Queries: {query_texts} | N: {n_results} | Where: {where} | IDs: {ids}")
+    collection = _get_chroma_collection()
+    if not collection:
+        return "Error: Could not connect to the vector database."
+
+    try:
+        # Pass the `ids` parameter directly to the ChromaDB query method.
+        results = collection.query(
+            query_texts=query_texts,
+            n_results=n_results,
+            where=where,
+            ids=ids
+        )
+        return json.dumps(results, indent=2)
+    except Exception as e:
+        return f"Error querying vector database: {e}"
+
+def execute_vdb_write(operation: str, user_id: str, documents: Optional[list[str]] = None, metadatas: Optional[List[Metadata]] = None, ids: Optional[list[str]] = None, where: Optional[dict] = None) -> str:
+    """
+    Manages the vector database using a tiered security model.
+    - 'add': Low-level access, anyone can use.
+    - 'update': Medium-level, restricted to the data's owner or the Primary Operator.
+    - 'delete': High-level, restricted to the Primary Operator only.
+    """
+    print(f"--- Vector DB Write Request from User: {user_id} ---")
+    print(f"  - Operation: {operation.upper()}")
+
+    collection = _get_chroma_collection()
+    if not collection:
+        return "Error: Could not connect to the vector database."
+
+    operation = operation.lower()
+    owner_id = os.getenv("DISCORD_OWNER_ID")
+    is_authorized = False
+
+    # --- Authorization Logic ---
+    if operation == 'add':
+        print("  - Authorized for low-level ADD.")
+        is_authorized = True
+
+    elif operation == 'delete':
+        if owner_id and user_id == owner_id:
+            print("  - Authorized for high-level DELETE as Primary Operator.")
+            is_authorized = True
+        else:
+            print(f"  - SECURITY ALERT: Denied unauthorized DELETE attempt by user {user_id}.")
+            return "Error: Authorization failed. This operation is restricted to the Primary Operator."
+
+    elif operation == 'update':
+        if owner_id and user_id == owner_id:
+            print("  - Authorized for high-level UPDATE as Primary Operator.")
+            is_authorized = True
+        else:
+            # For non-owners, we must verify they own all documents they are trying to update.
+            if not ids:
+                return "Error: 'update' operation requires 'ids' for non-owner users to verify ownership."
+            try:
+                existing_docs = collection.get(ids=ids)
+                # --- THIS IS THE CORRECTED LOGIC ---
+                # Safely get the 'metadatas' list using .get()
+                metadatas_list = existing_docs.get('metadatas')
+
+                # Now, check if the list is missing or empty
+                if not metadatas_list:
+                    return "Error: Could not find one or more documents to update."
+
+                # If we have the list, it's now safe to iterate
+                for metadata in metadatas_list:
+                    if metadata.get('user_id') != user_id:
+                        print(f"  - SECURITY ALERT: Denied unauthorized UPDATE by {user_id} on a document owned by {metadata.get('user_id')}.")
+                        return "Error: Authorization failed. You can only update documents that you own."
+                
+                print("  - Authorized for medium-level UPDATE as document owner.")
+                is_authorized = True
+                # --- END OF CORRECTED LOGIC ---
+            except Exception as e:
+                return f"Error during ownership verification: {e}"
+
+    if not is_authorized:
+        return f"Error: Invalid operation '{operation}' or initial authorization failed."
+
+    # --- Execution Logic ---
+    try:
+        if operation in ['add', 'update']:
+            if not (documents and metadatas and ids):
+                return f"Error: '{operation}' operation requires documents, metadatas, and ids."
+            
+            # Sanitize metadata before writing
+            sanitized_metadatas = [_sanitize_metadata(m) for m in metadatas]
+
+            collection.upsert(documents=documents, metadatas=sanitized_metadatas, ids=ids)
+            return f"Successfully upserted {len(documents)} documents."
+
+        elif operation == 'delete':
+            if not ids and not where:
+                return "Error: 'delete' operation requires either ids or a where clause."
+            collection.delete(ids=ids, where=where)
+            return "Successfully initiated delete operation."
+        else:
+            return f"Error: Invalid operation '{operation}'. Must be one of 'add', 'update', 'delete'."
+    except Exception as e:
+        return f"Error managing vector database: {e}"
 
 # --- UNIFIED DATABASE ACCESS MODEL ---
 
@@ -55,7 +372,7 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
     """
     print(f"--- DB READ --- Query: {query} | Params: {params}")
     
-    if not query.strip().upper().startswith("SELECT"):
+    if not query.strip().upper().startswith("SELECT"):  
         return "Error: This tool is for read-only (SELECT) queries."
 
     try:
@@ -70,14 +387,14 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
         return f"Database Error: {e}"
 
 
-def execute_sql_write(query: str, params: list[str], user_id: str) -> str:
+def execute_sql_write(query: str, params: List[Any], user_id: str) -> str:
     """
     Executes a write query (INSERT, UPDATE, DELETE) on the database using a
     tiered security model.
     """
     print(f"--- DB Write Request from User: {user_id} ---")
     print(f"  - Query: {query}")
-    print(f"  - Params: {params}")
+    #print(f"  - Params: {params}")
 
     normalized_query = query.strip().upper()
     owner_id = os.getenv("DISCORD_OWNER_ID")
@@ -423,53 +740,73 @@ def roll_dice(dice_notation: str) -> str:
         "grand_total": grand_total
     }, indent=2)
 
-def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None, item_type: Optional[str] = None, source: Optional[str] = None, mode: str = 'summary', max_results: int = 25) -> str:
+def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None, item_type: Optional[str] = None, source: Optional[str] = None, data_query: Optional[dict] = None, mode: str = 'summary', max_results: int = 25) -> str:
     """
-    Searches the knowledge base. Has two modes: summary and full.
+    Searches the knowledge base using a structured query and the low-level SQL execution function.
+    This tool has two modes: 'summary' (default) and 'full'.
+    - 'summary' mode returns a list of matching items with basic info (id, name, type, source).
+    - 'full' mode requires a specific 'id' and returns the complete data for that single item.
+    - 'data_query' can be a dictionary (e.g., {'metadata.is_official': True}) to filter results based on the content of the 'data' JSON column.
     """
     print(f"--- DB Knowledge Search. Mode: {mode.upper()}. Query: '{query or id}' ---")
 
     if mode == 'full' and not id:
-        return "Error: 'full' mode requires a specific 'id'. Please perform a 'summary' search first."
+        return "Error: 'full' mode requires a specific 'id'. Please perform a 'summary' search first to get the ID."
     
-    if not query and not id:
-        return "Error: You must provide either a 'query' or an 'id'."
+    if not any([query, id, data_query]):
+        return "Error: You must provide at least one search criterion: 'query', 'id', or 'data_query'."
 
     select_columns = "id, name, type, source" if mode == 'summary' else "data"
-    sql_query = f"SELECT {select_columns} FROM knowledge_base WHERE"
+    
+    where_clauses = []
     params: List[Any] = []
 
     if id:
-        sql_query += " id = ?"
+        where_clauses.append("id = ?")
         params.append(id)
     else:
-        sql_query += " name LIKE ?"
-        params.append(f"%{query}%")
+        if query:
+            where_clauses.append("name LIKE ?")
+            params.append(f"%{query}%")
         if item_type:
-            sql_query += " AND type = ?"
+            where_clauses.append("type = ?")
             params.append(item_type.lower())
         if source:
-            sql_query += " AND source = ?"
+            where_clauses.append("source = ?")
             params.append(source.upper())
+        if data_query:
+            for key, value in data_query.items():
+                path = f"$.{key}"
+                where_clauses.append("json_extract(data, ?) = ?")
+                params.append(path)
+                if isinstance(value, bool):
+                    params.append(1 if value else 0)
+                else:
+                    params.append(value)
 
-    sql_query += " LIMIT ?"
+    if not where_clauses:
+         return "Error: You must provide at least one search criterion."
+
+    sql_query = f"SELECT {select_columns} FROM knowledge_base WHERE {' AND '.join(where_clauses)} LIMIT ?"
     params.append(max_results)
 
-    try:
-        with sqlite3.connect(DB_FILE) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(sql_query, tuple(params))
-            rows = cursor.fetchall()
-            if not rows:
-                return f"Source: Local Database\n---\nNo entries found matching your criteria."
-            if mode == 'full':
-                return json.dumps(json.loads(rows[0]['data']), indent=2)
-            results = [dict(row) for row in rows]
-            return json.dumps(results, indent=2)
-    except sqlite3.Error as e:
-        print(f"ERROR: A database error occurred in search_knowledge_base: {e}")
-        return f"An unexpected error occurred: {e}"
+    result_json = execute_sql_read(sql_query, [str(p) for p in params])
+
+    if "returned no results" in result_json:
+        return f"Source: Local Database\n---\nNo entries found matching your criteria."
+
+    if mode == 'full':
+        try:
+            data = json.loads(result_json)
+            if data and 'data' in data[0]:
+                return json.dumps(json.loads(data[0]['data']), indent=2)
+            else:
+                return f"Source: Local Database\n---\nNo full data entry found for the given id."
+        except (json.JSONDecodeError, IndexError, KeyError) as e:
+            print(f"ERROR: Failed to parse full data in search_knowledge_base: {e}")
+            return "Error: Could not parse or find the full data entry. The record may be malformed."
+    
+    return result_json
 
 def manual_sync_instructions(user_id: str) -> str:
     """

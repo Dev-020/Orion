@@ -1,78 +1,138 @@
 {
-  "knowledge_base": [
-    "id",
-    "type",
-    "name",
-    "source",
-    "data"
-  ],
-  "deep_memory": [
-    "id",
-    "session_id",
-    "user_id",
-    "user_name",
-    "timestamp",
-    "prompt_text",
-    "response_text",
-    "attachments_metadata"
-  ],
-  "user_profiles": [
-    "user_id",
-    "user_name",
-    "aliases",
-    "first_seen",
-    "notes"
-  ],
-  "long_term_memory": [
-    "event_id",
-    "date",
-    "title",
-    "category",
-    "description",
-    "snippet"
-  ],
-  "active_memory": [
-    "topic",
-    "prompt",
-    "ruling",
-    "status",
-    "last_modified"
-  ],
-  "pending_logs": [
-    "event_id",
-    "date",
-    "title",
-    "category",
-    "description",
-    "snippet"
-  ],
-  "restart_state": [
-    "session_id",
-    "history_blob"
-  ],
-  "instruction_proposals": [
-    "proposal_name",
-    "file_path",
-    "new_content",
-    "diff_text",
-    "status",
-    "proposal_timestamp",
-    "resolution_timestamp"
-  ],
-  "character_resources": [
-    "resource_id",
-    "user_id",
-    "resource_name",
-    "current_value",
-    "max_value",
-    "last_updated"
-  ],
-  "character_status": [
-    "status_id",
-    "user_id",
-    "effect_name",
-    "effect_details",
-    "duration_in_rounds",
-    "timestamp"
-  ]
+  "knowledge_base": {
+    "columns": [
+      "id",
+      "type",
+      "name",
+      "source",
+      "data"
+    ],
+    "primary_key": "id",
+    "text_column": "data",
+    "vdb_id_strategy": "direct"
+  },
+  "deep_memory": {
+    "columns": [
+      "id",
+      "session_id",
+      "user_id",
+      "user_name",
+      "timestamp",
+      "prompt_text",
+      "response_text",
+      "attachments_metadata",
+      "token",
+      "function_calls",
+      "vdb_context"
+    ],
+    "primary_key": "id",
+    "text_column": "response_text",
+    "vdb_id_strategy": "direct"
+  },
+  "user_profiles": {
+    "columns": [
+      "user_id",
+      "user_name",
+      "aliases",
+      "first_seen",
+      "notes"
+    ],
+    "primary_key": "user_id",
+    "text_column": "notes",
+    "vdb_id_strategy": "direct"
+  },
+  "long_term_memory": {
+    "columns": [
+      "event_id",
+      "date",
+      "title",
+      "category",
+      "description",
+      "snippet"
+    ],
+    "primary_key": "event_id",
+    "text_column": "description",
+    "vdb_id_strategy": "direct"
+  },
+  "active_memory": {
+    "columns": [
+      "topic",
+      "prompt",
+      "ruling",
+      "status",
+      "last_modified"
+    ],
+    "primary_key": "topic",
+    "text_column": "ruling",
+    "vdb_id_strategy": "generate"
+  },
+  "pending_logs": {
+    "columns": [
+      "event_id",
+      "date",
+      "title",
+      "category",
+      "description",
+      "snippet"
+    ]
+  },
+  "restart_state": {
+    "columns": [
+      "session_id",
+      "history_blob"
+    ]
+  },
+  "instruction_proposals": {
+    "columns": [
+      "proposal_name",
+      "file_path",
+      "new_content",
+      "diff_text",
+      "status",
+      "proposal_timestamp",
+      "resolution_timestamp"
+    ],
+    "primary_key": "proposal_name",
+    "text_column": "diff_text",
+    "vdb_id_strategy": "generate"
+  },
+  "character_resources": {
+    "columns": [
+      "resource_id",
+      "user_id",
+      "resource_name",
+      "current_value",
+      "max_value",
+      "last_updated"
+    ]
+  },
+  "character_status": {
+    "columns": [
+      "status_id",
+      "user_id",
+      "effect_name",
+      "effect_details",
+      "duration_in_rounds",
+      "timestamp"
+    ]
+  },
+  "knowledge_schema": {
+    "columns": [
+      "id",
+      "type",
+      "path",
+      "count",
+      "data_type"
+    ],
+    "primary_key": "id",
+    "text_column": "path",
+    "vdb_id_strategy": "direct"
+  },
+  "diagnostic_test_table": {
+    "columns": [
+      "id",
+      "data",
+      "timestamp"
+    ]
+  }
 }
