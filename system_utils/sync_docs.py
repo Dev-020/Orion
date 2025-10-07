@@ -24,10 +24,15 @@ def get_authenticated_service(service_name, version):
 
 def strip_base64_images(markdown_content):
     """Removes base64 encoded images from a Markdown string."""
-    # Regex to find markdown images with base64 data URIs and remove them
-    pattern = r'!\\\[.*?\\\]\\(data:image\\/[a-zA-Z]+;base64,.*?\\)\\s*'
-    cleaned_content = re.sub(pattern, '', markdown_content)
-    return cleaned_content
+    # Google Docs export places image data definitions at the end.
+    # We find the first occurrence of a markdown image data block start
+    # and truncate the rest of the file. This is more reliable than regex.
+    try:
+        cutoff_index = markdown_content.index('[image1]: <data:image')
+        return markdown_content[:cutoff_index].strip()
+    except ValueError:
+        # If the marker isn't found, return the original content.
+        return markdown_content
 
 def get_doc_as_markdown(service, doc_id):
     """Downloads a Google Doc directly as a Markdown file using the Drive API."""
@@ -72,8 +77,8 @@ def sync_instructions():
             
             print(f"Checking '{local_filename}'...")
             try:
-                metadata = drive_service.files().get(fileId=doc_id, fields='mod_time').execute()
-                current_mod_time = metadata['mod_time']
+                metadata = drive_service.files().get(fileId=doc_id, fields='modifiedTime').execute()
+                current_mod_time = metadata['modifiedTime']
                 
                 if current_mod_time != last_known_mod_time or not os.path.exists(local_filepath):
                     print(f"  -> Change detected! Downloading and cleaning Markdown...")

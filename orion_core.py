@@ -17,10 +17,10 @@ from system_utils import run_startup_diagnostics, generate_manifests
 
 # Define instruction files for clarity
 INSTRUCTIONS_FILES = [
-    'Project_Overview.txt', 
-    'Homebrew_Compedium.txt',
-    'General_Prompt_Optimizer.txt',
-    'DND_Handout.txt',
+    'Project_Overview.md', 
+    'Homebrew_Compendium.md',
+    'General_Prompt_Optimizer.md',
+    'DND_Handout.md',
     'master_manifest.json'
 ]
 INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
@@ -199,11 +199,28 @@ class OrionCore:
             
             # Setting up User Content
             timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
-            vdb_result = functions.execute_vdb_read(
-                query_texts=[user_prompt],
-                n_results=7,
-                where={"$or": [{"source_table": "deep_memory"}, {"source_table": "long_term_memory"}]})
-            vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
+            
+            # --- CONTEXT INJECTION CONTROL ---
+            # To prevent token overloads, automatic RAG is now restricted to the Primary Operator.
+            # Other users will not have VDB context automatically injected into their prompts.
+            vdb_result = ""
+            vdb_content = None
+            if user_id == os.getenv("DISCORD_OWNER_ID"):
+                # Construct a more precise VDB query to prevent token overloads.
+                # This query retrieves:
+                # 1. Any entry from 'long_term_memory'.
+                # 2. Only entries from 'deep_memory' where the token count is less than 150,000.
+                # This prevents extremely large, single-turn conversations from being injected into the context.
+                vdb_where_clause = {
+                    "$or": [
+                        {"source_table": "deep_memory"},
+                        {"source_table": "long_term_memory"}
+                    ]
+                }
+                vdb_result = functions.execute_vdb_read(query_texts=[user_prompt], n_results=7, where=vdb_where_clause)
+                vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
+                vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
+
             data_envelope = {
                 "auth": {
                     "user_id": user_id,
@@ -217,7 +234,6 @@ class OrionCore:
             
             # Convert vdb result and data_envelope to Parts
             structured_prompt = types.Part.from_text(text=json.dumps(data_envelope))
-            vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
             
             # Convert File Attachments to Parts
             final_prompt = structured_prompt
@@ -245,14 +261,17 @@ class OrionCore:
             final_content=types.UserContent(parts=final_prompt)
 
             # Sending User Content to Orion
+            contents_to_send = chat_session + [final_content]
+            if vdb_content:
+                contents_to_send.append(vdb_content)
+
             print(f"  - Sending Prompt from Context: {data_envelope} to Orion. . .")
             response = self.client.models.generate_content(
                 model=f'{self.model_name}',
-                contents=chat_session + [final_content] + [vdb_content],
+                contents=contents_to_send,
                 config=types.GenerateContentConfig(
                     system_instruction=self.current_instructions,
                     tools=self.tools,
-                    max_output_tokens=8192,  # Limit the response to 8192 tokens
                     safety_settings=[
                         types.SafetySetting(
                             category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,

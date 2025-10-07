@@ -4,6 +4,7 @@ import os
 import json
 import logging
 import hashlib
+from datetime import datetime, timezone
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,19 +20,55 @@ def process_deep_memory(conn):
     """
     Processes the deep_memory table, yielding documents and metadata for each row.
     """
-    logging.info("Processing table: deep_memory")
+    logging.info("Processing table: deep_memory (with enriched document logic)")
     cursor = conn.cursor()
-    cursor.execute("SELECT id, user_id, user_name, timestamp, prompt_text, response_text, attachments_metadata FROM deep_memory")
+    # Fetch all relevant columns, including the new JSON ones
+    cursor.execute("SELECT id, user_id, user_name, timestamp, prompt_text, response_text, attachments_metadata, function_calls, vdb_context FROM deep_memory")
     
     for row in cursor.fetchall():
-        doc = f"Conversation from {row['timestamp']} with user {row['user_name']}. User asked: '{row['prompt_text']}'. Orion responded: '{row['response_text']}'"
+        # --- Replicate the document enrichment from functions.py ---
+        tool_summary = ""
+        if row['function_calls']:
+            try:
+                function_calls_obj = json.loads(row['function_calls'])
+                if isinstance(function_calls_obj, list):
+                    summaries = []
+                    for content_item in function_calls_obj:
+                        if isinstance(content_item, dict) and isinstance(content_item.get('parts'), list):
+                            for part in content_item['parts']:
+                                if isinstance(part, dict):
+                                    if part.get('function_call'):
+                                        summaries.append(f"Called function '{part['function_call'].get('name')}'")
+                                    elif part.get('function_response'):
+                                        summaries.append(f"Received response for '{part['function_response'].get('name')}'")
+                    if summaries:
+                        tool_summary = f" Actions Taken: [{'; '.join(summaries)}]."
+            except (json.JSONDecodeError, TypeError):
+                pass # Ignore if parsing fails
+
+        vdb_context_text = ""
+        if row['vdb_context']:
+            try:
+                vdb_context_obj = json.loads(row['vdb_context'])
+                if isinstance(vdb_context_obj, dict) and vdb_context_obj.get('documents') and vdb_context_obj['documents'][0]:
+                    context_docs = ' | '.join(filter(None, vdb_context_obj['documents'][0]))
+                    vdb_context_text = f" Context Used: [{context_docs}]." if context_docs else ""
+            except (json.JSONDecodeError, TypeError):
+                pass # Ignore if parsing fails
+
+        ts_iso = datetime.fromtimestamp(row['timestamp'], tz=timezone.utc).isoformat()
+        base_doc = f"Conversation from {ts_iso} with user {row['user_name']}. User asked: '{row['prompt_text']}'. Orion responded: '{row['response_text']}'"
+        doc = base_doc + tool_summary + vdb_context_text
+
         meta = {
             'source_table': 'deep_memory', 
             'source_id': str(row['id']), 
             'user_id': str(row['user_id']), 
             'user_name': row['user_name'], 
             'timestamp': row['timestamp'],
-            'attachments': row['attachments_metadata'] # Added attachments_metadata
+            'attachments_metadata': row['attachments_metadata'],
+            'function_calls': row['function_calls'],
+            'vdb_context': row['vdb_context']
         }
         # Generate a unique ID for the ChromaDB entry
         chroma_id = f"deep_memory_{row['id']}"
@@ -83,6 +120,28 @@ def process_active_memory(conn):
         }
         yield doc, meta, chroma_id
 
+def process_knowledge_schema(conn):
+    """
+    Processes the knowledge_schema table from SQLite, yielding documents and 
+    metadata formatted for ChromaDB. (Merged from migrate_schema.py)
+    """
+    logging.info("Processing table: knowledge_schema")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, type, path, count, data_type FROM knowledge_schema")
+    
+    for row in cursor.fetchall():
+        doc = f"Schema entry. Type: {row['type']}. Path: {row['path']}. Usage count: {row['count']}. Data type: {row['data_type']}."
+        meta = {
+            'source_table': 'knowledge_schema',
+            'source_id': str(row['id']),
+            'type': row['type'],
+            'path': row['path'],
+            'count': row['count'],
+            'data_type': row['data_type']
+        }
+        chroma_id = f"knowledge_schema_{row['id']}"
+        yield doc, meta, chroma_id
+
 # --- KNOWLEDGE BASE PROCESSING ---
 
 # Heuristics for identifying metadata
@@ -96,43 +155,33 @@ def get_metadata_type(value):
     if isinstance(value, list): return "list"
     return "string"
 
-def _recursively_process_entry(node, manifest_keys, full_text_chunks, metadata, path_prefix=""):
+def _recursively_process_entry(node, full_text_chunks, metadata, path_prefix=""):
     """
-    Recursively processes a JSON node to perform two tasks in a single pass:
-    1. Extracts all key-value pairs into 'full_text_chunks' for the semantic document.
-    2. Identifies and extracts metadata into the 'metadata' object and updates 'manifest_keys'.
+    Recursively processes a JSON node to extract all key-value pairs into 'full_text_chunks'
+    and identify potential metadata fields.
     """
     if isinstance(node, dict):
         for key, value in node.items():
             new_path = f"{path_prefix}.{key}" if path_prefix else key
-            _recursively_process_entry(value, manifest_keys, full_text_chunks, metadata, new_path)
+            _recursively_process_entry(value, full_text_chunks, metadata, new_path)
 
     elif isinstance(node, list):
         is_simple_list = all(not isinstance(item, (dict, list)) for item in node)
         if is_simple_list and path_prefix:
-            # 1. Add to full text
             serialized_list = json.dumps(node)
             full_text_chunks.append(f"{path_prefix}: {serialized_list}")
-            # 2. Add to metadata
             metadata[path_prefix] = serialized_list
-            if path_prefix not in manifest_keys:
-                # MODIFIED: Removed sample_values
-                manifest_keys[path_prefix] = {"count": 0, "type": "list"}
-            manifest_keys[path_prefix]["count"] += 1
         else:  # It's a list of complex objects
             for item in node:
-                # MODIFIED: Generalize path for items in a list
                 item_path = f"{path_prefix}[*]"
-                _recursively_process_entry(item, manifest_keys, full_text_chunks, metadata, item_path)
+                _recursively_process_entry(item, full_text_chunks, metadata, item_path)
 
     else:  # It's a simple value (str, int, bool, etc.)
-        # 1. Add to full text chunk
         if path_prefix:
             full_text_chunks.append(f"{path_prefix}: {node}")
         else:
             full_text_chunks.append(str(node))
 
-        # 2. Apply heuristic to see if it's also metadata
         is_metadata = False
         if isinstance(node, (int, float, bool)) or node is None:
             is_metadata = True
@@ -142,15 +191,10 @@ def _recursively_process_entry(node, manifest_keys, full_text_chunks, metadata, 
 
         if is_metadata and path_prefix:
             metadata[path_prefix] = node
-            if path_prefix not in manifest_keys:
-                # MODIFIED: Removed sample_values
-                manifest_keys[path_prefix] = {"count": 0, "type": get_metadata_type(node)}
-            manifest_keys[path_prefix]["count"] += 1
 
-def process_knowledge_base(conn, manifest_keys):
+def process_knowledge_base(conn):
     """
-    Processes the knowledge_base table using a single, efficient recursive function
-    to create both a full-text document and rich metadata for filtering.
+    Processes the knowledge_base table to create a full-text document and rich metadata.
     """
     logging.info("Processing table: knowledge_base")
     cursor = conn.cursor()
@@ -170,15 +214,7 @@ def process_knowledge_base(conn, manifest_keys):
             }
 
             # Use the single recursive function to populate both text and metadata
-            _recursively_process_entry(data_json, manifest_keys, full_text_chunks, meta)
-
-            # Add base metadata to manifest tracking
-            for key in ["type", "name", "source"]:
-                if meta.get(key) is not None:
-                    if key not in manifest_keys:
-                        # MODIFIED: Removed sample_values
-                        manifest_keys[key] = {"count": 0, "type": "string"}
-                    manifest_keys[key]["count"] += 1
+            _recursively_process_entry(data_json, full_text_chunks, meta)
 
             doc_content = ". ".join(full_text_chunks)
             doc = f"Entry Name: {row['name']}. Type: {row['type']}. Source: {row['source']}. Details: {doc_content}"
@@ -265,12 +301,6 @@ def main():
     """
     logging.info("Starting vector database migration...")
 
-    # --- Initialize Manifest ---
-    knowledge_base_manifest = {
-        "total_entries_processed": 0,
-        "discovered_metadata_keys": {}
-    }
-
     # --- Connect to Databases ---
     try:
         sqlite_conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True)
@@ -303,26 +333,14 @@ def main():
     all_metadatas = []
     all_ids = []
     
-    # --- Process knowledge_base separately to handle manifest ---
-    # We count entries processed for the manifest, so we track it here.
-    kb_entries_processed = 0
-    try:
-        for doc, meta, chroma_id in process_knowledge_base(sqlite_conn, knowledge_base_manifest["discovered_metadata_keys"]):
-            all_docs.append(doc)
-            all_metadatas.append(meta)
-            all_ids.append(chroma_id)
-            kb_entries_processed += 1
-    except sqlite3.Error as e:
-        logging.error(f"Error processing with process_knowledge_base: {e}")
-    
-    knowledge_base_manifest["total_entries_processed"] = kb_entries_processed
-
-    # --- Process other tables ---
+    # --- Define all processing functions to run ---
     processing_functions = [
+        process_knowledge_base,
         process_deep_memory,
         process_long_term_memory,
         process_active_memory,
-        process_user_profiles
+        process_user_profiles,
+        process_knowledge_schema # Merged from separate script
     ]
 
     for process_func in processing_functions:
@@ -371,18 +389,6 @@ def main():
         logging.info("Successfully upserted all documents to ChromaDB.")
     except Exception as e:
         logging.error(f"Error adding documents to ChromaDB: {e}", exc_info=True)
-
-
-    # --- Finalize and Save Manifest ---
-    logging.info("Finalizing knowledge base metadata manifest...")
-    # MODIFIED: No longer need to process sample_values
-    
-    try:
-        with open(MANIFEST_PATH, 'w') as f:
-            json.dump(knowledge_base_manifest, f, indent=2)
-        logging.info(f"Successfully generated metadata manifest at: {MANIFEST_PATH}")
-    except IOError as e:
-        logging.error(f"Error writing manifest file to {MANIFEST_PATH}: {e}")
 
     # --- Cleanup ---
     sqlite_conn.close()

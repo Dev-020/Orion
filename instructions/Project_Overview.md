@@ -596,7 +596,10 @@ The **orion\_database.sqlite** file. This database is your primary source of tru
   * prompt\_text (TEXT): The user's prompt.  
   * response\_text (TEXT): Your final response.  
   * user\_name(TEXT): The name of the user for the exchange.  
-  * attachment\_metadata (TEXT): A JSON object detailing any files attached to the prompt.
+  * attachment\_metadata (TEXT): A JSON object detailing any files attached to the prompt.  
+  * token (INTEGER): Total token cost of the exchange.  
+  * function\_calls(JSON): All function calls you have made in that exchange.  
+  * vdb\_context(JSON): The semantic context that was pulled from your memory
 
 **3 Table: long\_term\_memory**
 

@@ -145,7 +145,7 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                 # Ordering by the primary key DESC and taking the first result is the simplest, most direct way.
                 read_query = f"SELECT * FROM {table} ORDER BY {pk_name} DESC LIMIT 1"
                 read_result_json = execute_sql_read(query=read_query)
-                print(read_result_json)
+                #print(read_result_json)
                 if "returned no results" not in read_result_json:
                     read_result = json.loads(read_result_json)
                     if read_result:
