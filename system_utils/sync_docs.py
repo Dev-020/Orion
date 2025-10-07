@@ -1,9 +1,11 @@
-# --- START OF FILE sync_docs.py (Unified Auth Version) ---
+# --- START OF FILE sync_docs.py (Drive API Markdown Export Version) ---
 import os
 import json
+import io
 import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 from pathlib import Path
 
 # --- PATH CONFIGURATION ---
@@ -19,48 +21,36 @@ def get_authenticated_service(service_name, version):
     service = build(service_name, version, credentials=credentials, static_discovery=False)
     return service
 
-def read_structural_elements(elements):
-    """(Helper) Reads text from a list of structural elements."""
-    text = ''
-    if not elements: return ''
-    for value in elements:
-        if 'paragraph' in value:
-            para_elements = value.get('paragraph').get('elements')
-            for elem in para_elements:
-                text += elem.get('textRun', {}).get('content', '')
-        elif 'table' in value:
-            table = value.get('table')
-            for row in table.get('tableRows'):
-                for cell in row.get('tableCells'):
-                    text += read_structural_elements(cell.get('content'))
-    return text
-
-def get_doc_content(service, doc_id):
-    """Downloads a Google Doc as plain text, handling the tab structure."""
+def get_doc_as_markdown(service, doc_id):
+    """Downloads a Google Doc directly as a Markdown file using the Drive API."""
     try:
-        document = service.documents().get(documentId=doc_id, includeTabsContent=True).execute()
-        all_text_parts = []
-        tabs = document.get('tabs', [])
-        for tab in tabs:
-            documentTab = tab.get('documentTab')
-            if documentTab:
-                body = documentTab.get('body')
-                if body:
-                    content = body.get('content')
-                    if content:
-                        all_text_parts.append(read_structural_elements(content))
-        return "".join(all_text_parts)
+        mime_type = 'text/markdown'
+        request = service.files().export(fileId=doc_id, mimeType=mime_type)
+        
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            print(f"  -> Download progress: {int(status.progress() * 100)}%")
+            
+        # Decode the downloaded bytes into a string
+        fh.seek(0)
+        markdown_content = fh.read().decode('utf-8')
+        return markdown_content
+        
     except HttpError as err:
-        print(f"An error occurred while getting doc content: {err}")
+        print(f"An error occurred while downloading the document: {err}")
+        # Add more specific error handling if needed, e.g., for 404 Not Found
         return None
 
 def sync_instructions():
-    """Main function to check for updates and sync documents."""
+    """Main function to check for updates and sync documents as Markdown."""
     try:
         drive_service = get_authenticated_service('drive', 'v3')
-        docs_service = get_authenticated_service('docs', 'v1')
     except Exception as e:
-        print(f"Authentication failed for Google Drive/Docs. Ensure you have run 'gcloud auth application-default login'. Error: {e}")
+        print(f"Authentication failed for Google Drive. Ensure you have run 'gcloud auth application-default login'. Error: {e}")
         return
 
     # Ensure the output directory exists.
@@ -73,13 +63,16 @@ def sync_instructions():
             local_filename = doc_info['name']
             local_filepath = os.path.join(INSTRUCTIONS_DIR, local_filename)
             last_known_mod_time = doc_info['last_modified_time']
+            
             print(f"Checking '{local_filename}'...")
             try:
                 metadata = drive_service.files().get(fileId=doc_id, fields='modifiedTime').execute()
                 current_mod_time = metadata['modifiedTime']
+                
                 if current_mod_time != last_known_mod_time or not os.path.exists(local_filepath):
-                    print(f"  -> Change detected! Downloading latest version...")
-                    content = get_doc_content(docs_service, doc_id)
+                    print(f"  -> Change detected! Downloading latest version as Markdown...")
+                    content = get_doc_as_markdown(drive_service, doc_id)
+                    
                     if content is not None:
                         with open(local_filepath, 'w', encoding='utf-8') as out_file:
                             out_file.write(content)
@@ -87,8 +80,10 @@ def sync_instructions():
                         print(f"  -> Successfully updated '{local_filename}'.")
                 else:
                     print("  -> No changes. File is up to date.")
+            
             except HttpError as err:
                 print(f"An error occurred with doc ID {doc_id}: {err}")
+                
         f.seek(0)
         json.dump(manifest_data, f, indent=2)
         f.truncate()
