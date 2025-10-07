@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 import sys
 from google import genai
-from google.genai import types, chats
+from google.genai import types
 import functions
 import io
 from dotenv import load_dotenv
@@ -31,13 +31,14 @@ class OrionCore:
     
     def __init__(self, model_name: str = "gemini-2.5-pro"):
         """Initializes the unified AI 'brain', including session management."""
+        self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
 
         # Refreshing Core Instructions
         print("--- Syncing Core Instructions... ---")
-        discord_id = os.getenv("DISCORD_OWNER_ID")
-        if discord_id:
-            functions.manual_sync_instructions(discord_id)
+        self.discord_id = os.getenv("DISCORD_OWNER_ID")
+        if self.discord_id:
+            functions.manual_sync_instructions(self.discord_id)
         generate_manifests.main()
         print("--- Core Instructions Successfully synced.... ---")
         
@@ -65,7 +66,7 @@ class OrionCore:
         self.current_instructions = f"{base_instructions}\n\n---\n\n{diagnostic_message}"
 
         if not self._load_state_on_restart():
-            self.sessions: dict[str, chats.Chat] = {}
+            self.sessions: dict[str, list] = {}
         
         print(f"--- Orion Core is online and ready. Managing {len(self.sessions)} session(s). ---")
         
@@ -94,26 +95,12 @@ class OrionCore:
             print("WARNING: 'functions.py' does not define __all__. No tools will be loaded.")
             return []
 
-    def _get_session(self, session_id: str, history: list = []) -> chats.Chat:
+    def _get_session(self, session_id: str, history: list = []) -> list:
         """Retrieves an existing chat session or creates a new one."""
         if session_id not in self.sessions:
             print(f"--- Creating new session for ID: {session_id} ---")
-            self.sessions[session_id] = self.client.chats.create(
-                model=f'{self.model_name}',
-                config=types.GenerateContentConfig(
-                    system_instruction=self.current_instructions,
-                    tools=self.tools,
-                    max_output_tokens=8192,  # Limit the response to 8192 tokens
-                    safety_settings=[
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
-
-                        )
-                    ]
-                ),
-                history=history
-            )
+            
+            self.sessions[session_id] = history
         return self.sessions[session_id]
 
     def trigger_instruction_refresh(self, full_restart: bool = False):
@@ -137,17 +124,12 @@ class OrionCore:
             # For now, we'll continue with the old tools.
         
         # --- Instruction refresh logic remains the same ---
+        if self.discord_id:
+            functions.manual_sync_instructions(self.discord_id)
+        generate_manifests.main()
         self.current_instructions = self._read_all_instructions()
-        preserved_states = {
-            session_id: chat._comprehensive_history for session_id, chat in self.sessions.items()
-        }
-        print(f"  - Preserved state for {len(preserved_states)} session(s).")
-        
-        self.sessions.clear()
-        for session_id, history in preserved_states.items():
-            self._get_session(session_id, history=history)
         print(f"--- HOT-SWAP COMPLETE: {len(self.sessions)} session(s) migrated. ---")
-        
+        return f'Refresh Complete. Tools and Instructions are all up to date.'
 
     def save_state_for_restart(self) -> bool:
         """Serializes the comprehensive history of all active sessions to the database."""
@@ -158,8 +140,8 @@ class OrionCore:
                 cursor.execute("DELETE FROM restart_state") # Clear any old state
                 
                 preserved_states = {
-                    session_id: pickle.dumps(chat._comprehensive_history)
-                    for session_id, chat in self.sessions.items()
+                    session_id: pickle.dumps(history)
+                    for session_id, history in self.sessions.items()
                 }
                 
                 cursor.executemany(
@@ -215,8 +197,13 @@ class OrionCore:
             # The SDK handles the entire tool-use loop automatically.
             # We send the message once and get the final text response.
             
-            # Performing Identification Step for Orion
+            # Setting up User Content
             timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
+            vdb_result = functions.execute_vdb_read(
+                query_texts=[user_prompt],
+                n_results=7,
+                where={"$or": [{"source_table": "deep_memory"}, {"source_table": "long_term_memory"}]})
+            vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
             data_envelope = {
                 "auth": {
                     "user_id": user_id,
@@ -225,11 +212,15 @@ class OrionCore:
                     "authentication_status": "PRIMARY_OPERATOR" if user_id == os.getenv("DISCORD_OWNER_ID") else "EXTERNAL_ENTITY"
                 },
                 "timestamp_utc": timestamp_utc_iso,
-                "prompt": user_prompt
+                "prompt": user_prompt,
             }
+            
+            # Convert vdb result and data_envelope to Parts
             structured_prompt = types.Part.from_text(text=json.dumps(data_envelope))
+            vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
+            
+            # Convert File Attachments to Parts
             final_prompt = structured_prompt
-            print("test run")
             attachments_for_db = []
             if file_check:
                 # print("IT RUNS 2")
@@ -250,17 +241,93 @@ class OrionCore:
                     print(f"  - Prepared metadata for DB: {file_metadata}")
                     attachments_for_db.append(file_metadata)
             
-            print(f"  - Sending Prompt from Context: {data_envelope} to Orion. . .")
-            response = chat_session.send_message(final_prompt)
-            #print(response)
-           
-            final_text = response.text
-            token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
+            # Wrapping all User Parts into User Content
+            final_content=types.UserContent(parts=final_prompt)
 
-            print(f"  - Final response generated. Total tokens for exchange: {token_count}")
+            # Sending User Content to Orion
+            print(f"  - Sending Prompt from Context: {data_envelope} to Orion. . .")
+            response = self.client.models.generate_content(
+                model=f'{self.model_name}',
+                contents=chat_session + [final_content] + [vdb_content],
+                config=types.GenerateContentConfig(
+                    system_instruction=self.current_instructions,
+                    tools=self.tools,
+                    max_output_tokens=8192,  # Limit the response to 8192 tokens
+                    safety_settings=[
+                        types.SafetySetting(
+                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
+
+                        )
+                    ]
+                )
+            )
             
-            self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db)
-                  
+            # --- Append to Chat History ---
+            # 1. Append the user's content
+            chat_session.append(final_content)
+            
+            # 2. Isolate and append only the new tool calls and responses from this turn
+            new_tool_turns = []
+            if response.automatic_function_calling_history:
+                # First, filter the API's history to *only* include tool-related turns.
+                all_tool_turns_from_api = [
+                    content for content in response.automatic_function_calling_history
+                    if any(part.function_call or part.function_response for part in content.parts)
+                ]
+
+                # Second, find the tool-related turns already in our session history.
+                previous_tool_turns_in_session = [
+                    content for content in chat_session 
+                    if any(part.function_call or part.function_response for part in content.parts)
+                ]
+                
+                # The new tool turns are the ones at the end of the filtered API history.
+                new_tool_turns = all_tool_turns_from_api[len(previous_tool_turns_in_session):]
+                
+                # Extend the session with only the new tool turns.
+                #print(new_tool_turns)
+                chat_session.extend(new_tool_turns)
+
+            # 3. Append the model's final text response
+            response_content = response.candidates[0].content
+            final_text = ""
+            if not response_content:
+                print(response)
+                final_text = None
+                #print(final_content)
+                #print(vdb_result)
+            else:
+                for part in response_content.parts:
+                    if part.text:
+                        final_text += part.text
+                chat_session.append(response_content)
+            
+            # --- Enforce History Limit ---
+            # A "true" user message has role 'user' and contains text, distinguishing
+            # it from tool/function responses which also have the 'user' role.
+            user_message_indices = [
+                i for i, content in enumerate(chat_session) 
+                if content.role == 'user' and any(part.text for part in content.parts)
+            ]
+            print(f"  - Current Number of Exchanges: {user_message_indices}")
+            if len(user_message_indices) > self.MAX_HISTORY_EXCHANGES:
+                # The first exchange ends right before the second user message starts.
+                # We find this index to know how many items to remove from the beginning.
+                trim_until_index = user_message_indices[1]
+                
+                # Trim the session history by removing the oldest exchange.
+                original_length = len(chat_session)
+                self.sessions[session_id] = chat_session[trim_until_index:]
+                items_removed = original_length - len(self.sessions[session_id])
+                
+                print(f"  - History limit reached. Truncated session '{session_id}', removing the oldest exchange ({items_removed} items).")
+
+            token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
+            print(f"  - Final response generated. Total tokens for exchange: {token_count}")
+            self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, vdb_result)
+            #print(chat_session)
+            
             should_restart = self.restart_pending
             if self.restart_pending:
                 self.restart_pending = False # Reset flag after it's been captured
@@ -271,22 +338,36 @@ class OrionCore:
             print(f"ERROR processing prompt for '{session_id}': {e}")
             return "I'm sorry, an internal error occurred while processing your request.", 0, False
 
-    def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, attachment):
+    def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, attachment, token_count, function_call, vdb_context):
         """Writes the complete conversational exchange to the database."""
         try:
-            with sqlite3.connect(DB_FILE) as conn:
-                cursor = conn.cursor()
-                # The full history from the session object can be serialized to JSON for a complete record.
-                # NOTE: The genai history objects need a custom converter to be JSON serializable.
-                # For now, we will store the prompt/response pair.
-                ts_unix = int(datetime.now(timezone.utc).timestamp())
-                sql = "INSERT INTO deep_memory (session_id, user_id, user_name, timestamp, prompt_text, response_text, attachments_metadata) VALUES (?, ?, ?, ?, ?, ?, ?)" # noqa
-                params = (session_id, user_id, user_name, ts_unix, prompt, response, str(attachment))
-                cursor.execute(sql, params)
-                conn.commit()
-                print(f" -> Exchange for user {user_id} archived.")
-        except sqlite3.Error as e:
-            print(f"ERROR: Database error during archival for user {user_id}: {e}")
+            # --- Prepare data for archival using the high-level execute_write tool ---
+            # This tool handles synchronized writes to both SQLite and the Vector DB.
+            
+            # 1. Prepare the function calls as a JSON string for the database.
+            function_calls_json_list = [content_obj.model_dump_json() for content_obj in function_call] if function_call else []
+            function_calls_json_string = f"[{', '.join(function_calls_json_list)}]"
+
+            # 2. Construct the data payload for the 'deep_memory' table.
+            data_payload = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "user_name": user_name,
+                "timestamp": int(datetime.now(timezone.utc).timestamp()),
+                "prompt_text": prompt,
+                "response_text": response,
+                "attachments_metadata": json.dumps(attachment),
+                "token": token_count,
+                "function_calls": function_calls_json_string,
+                "vdb_context": vdb_context
+            }
+            
+            # 3. Call the high-level orchestrator to perform the synchronized write.
+            result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data_payload)
+            print(f" -> Archival result: {result}")
+
+        except Exception as e:
+            print(f"ERROR: An unexpected error occurred during archival for user {user_id}: {e}")
 
 
 # ... inside the OrionCore class ...

@@ -78,22 +78,86 @@ def generate_tool_schema_json(output_dir):
 
     write_json_file(output_dir / "tool_schema.json", schema)
 
+# In generate_manifests.py, replace the existing function with this one.
+
 def generate_db_schema_json(conn, output_dir):
-    """Generates a manifest of the full database schema (tables and columns)."""
-    print("\nGenerating db_schema.json...")
-    schema = {}
+    """
+    Generates a rich db_schema.json file that includes both the table columns
+    and the strategic configuration for Vector DB synchronization.
+    """
+    print("\nGenerating rich db_schema.json...")
     cursor = conn.cursor()
     
-    # Get all table names, excluding sqlite system tables
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
-    tables = [row['name'] for row in cursor.fetchall()]
+    # This is our manually curated "Schema Map" configuration.
+    # It defines the sync strategy for each table that has a VDB counterpart.
+    VDB_CONFIG = {
+        'long_term_memory': {
+            'primary_key': 'event_id',
+            'text_column': 'description',
+            'vdb_id_strategy': 'direct'  # The PK is already a stable UID.
+        },
+        'active_memory': {
+            'primary_key': 'topic',
+            'text_column': 'ruling',
+            'vdb_id_strategy': 'generate' # The PK is a mutable string; generate a new UID for the VDB.
+        },
+        'deep_memory': {
+            'primary_key': 'id',
+            'text_column': 'response_text',
+            'vdb_id_strategy': 'direct'  # The PK is a stable integer.
+        },
+        'instruction_proposals': {
+            'primary_key': 'proposal_name',
+            'text_column': 'diff_text',
+            'vdb_id_strategy': 'generate'
+        },
+        'knowledge_base': {
+            'primary_key': 'id',
+            'text_column': 'data',
+            'vdb_id_strategy': 'direct'
+        },
+        'knowledge_schema': {
+            'primary_key': 'id',
+            'text_column': 'path',
+            'vdb_id_strategy': 'direct'
+        },
+        'user_profiles': {
+            'primary_key': 'user_id',
+            'text_column': 'notes',
+            'vdb_id_strategy': 'direct'
+        }
+        # You can manually add other tables like 'knowledge_base' here as they are migrated.
+    }
+
+    schema = {}
     
-    # Get columns for each table
-    for table_name in tables:
-        cursor.execute(f"PRAGMA table_info('{table_name}');")
-        columns = [row['name'] for row in cursor.fetchall()]
-        schema[table_name] = columns
+    # Get the list of all tables in the database
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+    tables = cursor.fetchall()
+    
+    for table in tables:
+        table_name = table['name']
         
+        # Get the columns for the current table
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        columns_info = cursor.fetchall()
+        columns = [info['name'] for info in columns_info]
+        
+        # --- THIS IS THE FIX ---
+        # 1. Always start with a dictionary.
+        table_data: dict[str, Any] = {
+            'columns': columns
+        }
+        
+        # 2. If the table has a VDB config, merge it into the dictionary.
+        if table_name in VDB_CONFIG:
+            table_data.update(VDB_CONFIG[table_name])
+        
+        # 3. Assign the final dictionary to the schema.
+        schema[table_name] = table_data
+        # --- END OF FIX ---
+            
+    # Use the existing helper to write the final, rich schema file
     write_json_file(output_dir / "db_schema.json", schema)
 
 # --- EXISTING MANIFEST GENERATORS ---
@@ -207,9 +271,6 @@ def main():
         return
 
     try:
-        # DB schema and other manifests require a DB connection.
-        generate_db_schema_json(conn, OUTPUT_DIR)
-        
         # --- Generate Existing Manifests ---
         generate_user_profile_manifest(conn, OUTPUT_DIR)
         generate_long_term_memory_manifest(conn, OUTPUT_DIR)
