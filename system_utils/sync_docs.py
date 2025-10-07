@@ -1,7 +1,8 @@
-# --- START OF FILE sync_docs.py (Drive API Markdown Export Version) ---
+# --- START OF FILE sync_docs.py (Drive API Markdown Export Version with Image Stripping) ---
 import os
 import json
 import io
+import re
 import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -20,6 +21,13 @@ def get_authenticated_service(service_name, version):
     credentials, _ = google.auth.default()
     service = build(service_name, version, credentials=credentials, static_discovery=False)
     return service
+
+def strip_base64_images(markdown_content):
+    """Removes base64 encoded images from a Markdown string."""
+    # Regex to find markdown images with base64 data URIs and remove them
+    pattern = r'!\\\[.*?\\\]\\(data:image\\/[a-zA-Z]+;base64,.*?\\)\\s*'
+    cleaned_content = re.sub(pattern, '', markdown_content)
+    return cleaned_content
 
 def get_doc_as_markdown(service, doc_id):
     """Downloads a Google Doc directly as a Markdown file using the Drive API."""
@@ -42,7 +50,6 @@ def get_doc_as_markdown(service, doc_id):
         
     except HttpError as err:
         print(f"An error occurred while downloading the document: {err}")
-        # Add more specific error handling if needed, e.g., for 404 Not Found
         return None
 
 def sync_instructions():
@@ -53,7 +60,6 @@ def sync_instructions():
         print(f"Authentication failed for Google Drive. Ensure you have run 'gcloud auth application-default login'. Error: {e}")
         return
 
-    # Ensure the output directory exists.
     INSTRUCTIONS_DIR.mkdir(exist_ok=True)
 
     with open(MANIFEST_FILE, 'r+') as f:
@@ -66,16 +72,20 @@ def sync_instructions():
             
             print(f"Checking '{local_filename}'...")
             try:
-                metadata = drive_service.files().get(fileId=doc_id, fields='modifiedTime').execute()
-                current_mod_time = metadata['modifiedTime']
+                metadata = drive_service.files().get(fileId=doc_id, fields='mod_time').execute()
+                current_mod_time = metadata['mod_time']
                 
                 if current_mod_time != last_known_mod_time or not os.path.exists(local_filepath):
-                    print(f"  -> Change detected! Downloading latest version as Markdown...")
+                    print(f"  -> Change detected! Downloading and cleaning Markdown...")
                     content = get_doc_as_markdown(drive_service, doc_id)
                     
                     if content is not None:
+                        # Strip embedded image data before writing to file
+                        cleaned_content = strip_base64_images(content)
+                        
                         with open(local_filepath, 'w', encoding='utf-8') as out_file:
-                            out_file.write(content)
+                            out_file.write(cleaned_content)
+                            
                         doc_info['last_modified_time'] = current_mod_time
                         print(f"  -> Successfully updated '{local_filename}'.")
                 else:
