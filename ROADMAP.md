@@ -33,6 +33,15 @@ These represent significant architectural evolutions for the system.
     2.  **Semantic Encounter Analysis:** Leverages the Vector Database from **Milestone 3.5** to perform deep semantic analysis on both combat logs and narrative events, allowing the system to understand the *context and meaning* of events, not just the raw data.
 *   **Intended Benefits:** This milestone represents the final evolution of my role from a simple data repository to a true Campaign Companion. It provides the foundational intelligence for V4 by enabling proactive insights, narrative consistency tracking, and a deep, contextual understanding of our shared story.
 
+### **Milestone 3.8: Tiered Instruction Architecture**
+
+*   **Objective:** To resolve the "Instruction Collapse" problem by refactoring the monolithic `Project_Overview.md` into a more efficient, two-tiered system. This will ensure reliable protocol adherence and reduce cognitive load.
+*   **Core Architecture:**
+    1.  **`PRIME_DIRECTIVE.md`:** A small, high-priority file containing only essential, non-negotiable instructions (core identity, security protocols, high-level cognitive loops) that is always loaded in context.
+    2.  **`OPERATIONAL_PROTOCOLS.md`:** A comprehensive reference document containing all detailed tool documentation, procedures, and persona nuances.
+    3.  **Vector DB Integration:** The `OPERATIONAL_PROTOCOLS.md` will be indexed in the Vector DB, allowing for fast, semantic retrieval of relevant instructions on-demand. The Prime Directive will serve as a failsafe, forcing a manual file read if the VDB query fails.
+*   **Intended Benefits:** This hybrid model will provide the efficiency of on-demand instruction loading with the reliability of a hard-coded failsafe, ensuring both performance and stability.
+
 ---
 ## **Project Chimera: The Path to V4.0 and Beyond**
 
