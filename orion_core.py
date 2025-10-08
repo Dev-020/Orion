@@ -186,6 +186,21 @@ class OrionCore:
                 print(f"  - CRITICAL: Failed to even clean up restart_state table: {cleanup_e}")
             return False
 
+    def _find_oldest_timestamp_in_session(self, chat_session: list) -> int | None:
+        """Finds the Unix timestamp of the first user message in the session history."""
+        for content in chat_session:
+            if content.role == 'user':
+                try:
+                    # The first part of a user content is always the data envelope
+                    data_envelope = json.loads(content.parts[0].text)
+                    timestamp_iso = data_envelope.get("timestamp_utc")
+                    if timestamp_iso:
+                        return int(datetime.fromisoformat(timestamp_iso).timestamp())
+                except (json.JSONDecodeError, IndexError, KeyError, TypeError):
+                    # Ignore malformed or non-standard content parts
+                    continue
+        return None
+
     def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str) -> tuple[str | None, int | None, bool]:
         """
         Processes a prompt using automatic function calling and archives the result.
@@ -194,37 +209,39 @@ class OrionCore:
         try:
             chat_session = self._get_session(session_id)
             
-            # The SDK handles the entire tool-use loop automatically.
-            # We send the message once and get the final text response.
-            
             # Setting up User Content
             timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
             
-            # --- CONTEXT INJECTION CONTROL ---
-            # To prevent token overloads, automatic RAG is now restricted to the Primary Operator.
-            # Other users will not have VDB context automatically injected into their prompts.
+            # --- CONTEXT INJECTION CONTROL (V2 - Time Aware) ---
             vdb_result = ""
             vdb_content = None
             if user_id == os.getenv("DISCORD_OWNER_ID"):
-                # Query 1: Deep Memory (with token limit)
+                # Find the timestamp of the oldest message in the current chat session
+                # to prevent fetching context that's already in the active history.
+                oldest_timestamp = self._find_oldest_timestamp_in_session(chat_session)
+                
+                # 1. Query Deep Memory (Conversational History)
                 deep_memory_where = {"source_table": "deep_memory"}
+                if oldest_timestamp:
+                    # Add a time filter to exclude messages already in the session
+                    deep_memory_where["timestamp"] = {"$lt": oldest_timestamp}
+
                 deep_memory_results = functions.execute_vdb_read(
                     query_texts=[user_prompt], 
                     n_results=5, 
                     where=deep_memory_where
                 )
 
-                # Query 2: Long-Term Memory
+                # 2. Query Long-Term Memory (Curated Events) - No time filter needed
                 long_term_where = {"source_table": "long_term_memory"}
                 long_term_results = functions.execute_vdb_read(
                     query_texts=[user_prompt], 
-                    n_results=5, 
+                    n_results=2,  # Fewer results as these are high-signal entries
                     where=long_term_where
                 )
                 
-                # Combine results
+                # Combine results for injection
                 vdb_result = deep_memory_results + "\n" + long_term_results
-
                 vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
                 vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
 
@@ -246,29 +263,25 @@ class OrionCore:
             final_prompt = structured_prompt
             attachments_for_db = []
             if file_check:
-                # print("IT RUNS 2")
+                final_prompt = [structured_prompt]
                 for file in file_check:
-                    # This adds the file object to the prompt for immediate use by the AI
-                    final_prompt = [structured_prompt]
                     final_prompt.append(types.Part.from_uri(file_uri=file.uri, mime_type=file.mime_type))
-                    
                     print(f"  - File '{file.display_name}' added to prompt for AI processing.")
-                    # This creates a clean dictionary with the most essential, permanent
-                    # data to be archived in your database.
                     file_metadata = {
-                        "file_ref": file.name,           # CRITICAL: The permanent API reference
-                        "file_name": file.display_name,  # The original, human-readable name
-                        "mime_type": file.mime_type,     # The type of the file
-                        "size_bytes": file.size_bytes    # The size of the file
+                        "file_ref": file.name,
+                        "file_name": file.display_name,
+                        "mime_type": file.mime_type,
+                        "size_bytes": file.size_bytes
                     }
-                    print(f"  - Prepared metadata for DB: {file_metadata}")
                     attachments_for_db.append(file_metadata)
             
             # Wrapping all User Parts into User Content
             final_content=types.UserContent(parts=final_prompt)
 
             # Sending User Content to Orion
-            contents_to_send = chat_session + [vdb_content] + [final_content]
+            contents_to_send = chat_session + [final_content]
+            if vdb_content:
+                contents_to_send.append(vdb_content)
 
             print(f"  - Sending Prompt from Context: {data_envelope} to Orion. . .")
             response = self.client.models.generate_content(
@@ -281,46 +294,32 @@ class OrionCore:
                         types.SafetySetting(
                             category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
                             threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
-
                         )
                     ]
                 )
             )
             
             # --- Append to Chat History ---
-            # 1. Append the user's content
             chat_session.append(final_content)
             
-            # 2. Isolate and append only the new tool calls and responses from this turn
             new_tool_turns = []
             if response.automatic_function_calling_history:
-                # First, filter the API's history to *only* include tool-related turns.
                 all_tool_turns_from_api = [
                     content for content in response.automatic_function_calling_history
                     if any(part.function_call or part.function_response for part in content.parts)
                 ]
-
-                # Second, find the tool-related turns already in our session history.
                 previous_tool_turns_in_session = [
                     content for content in chat_session 
                     if any(part.function_call or part.function_response for part in content.parts)
                 ]
-                
-                # The new tool turns are the ones at the end of the filtered API history.
                 new_tool_turns = all_tool_turns_from_api[len(previous_tool_turns_in_session):]
-                
-                # Extend the session with only the new tool turns.
-                #print(new_tool_turns)
                 chat_session.extend(new_tool_turns)
 
-            # 3. Append the model's final text response
             response_content = response.candidates[0].content
             final_text = ""
             if not response_content:
                 print(response)
                 final_text = None
-                #print(final_content)
-                #print(vdb_result)
             else:
                 for part in response_content.parts:
                     if part.text:
@@ -328,33 +327,24 @@ class OrionCore:
                 chat_session.append(response_content)
             
             # --- Enforce History Limit ---
-            # A "true" user message has role 'user' and contains text, distinguishing
-            # it from tool/function responses which also have the 'user' role.
             user_message_indices = [
                 i for i, content in enumerate(chat_session) 
                 if content.role == 'user' and any(part.text for part in content.parts)
             ]
-            print(f"  - Current Number of Exchanges: {user_message_indices}")
             if len(user_message_indices) > self.MAX_HISTORY_EXCHANGES:
-                # The first exchange ends right before the second user message starts.
-                # We find this index to know how many items to remove from the beginning.
                 trim_until_index = user_message_indices[1]
-                
-                # Trim the session history by removing the oldest exchange.
                 original_length = len(chat_session)
                 self.sessions[session_id] = chat_session[trim_until_index:]
                 items_removed = original_length - len(self.sessions[session_id])
-                
                 print(f"  - History limit reached. Truncated session '{session_id}', removing the oldest exchange ({items_removed} items).")
 
             token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
             print(f"  - Final response generated. Total tokens for exchange: {token_count}")
             self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, vdb_result)
-            #print(chat_session)
             
             should_restart = self.restart_pending
             if self.restart_pending:
-                self.restart_pending = False # Reset flag after it's been captured
+                self.restart_pending = False
 
             return final_text, token_count, should_restart
             
@@ -365,14 +355,9 @@ class OrionCore:
     def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, attachment, token_count, function_call, vdb_context):
         """Writes the complete conversational exchange to the database."""
         try:
-            # --- Prepare data for archival using the high-level execute_write tool ---
-            # This tool handles synchronized writes to both SQLite and the Vector DB.
-            
-            # 1. Prepare the function calls as a JSON string for the database.
             function_calls_json_list = [content_obj.model_dump_json() for content_obj in function_call] if function_call else []
             function_calls_json_string = f"[{', '.join(function_calls_json_list)}]"
 
-            # 2. Construct the data payload for the 'deep_memory' table.
             data_payload = {
                 "session_id": session_id,
                 "user_id": user_id,
@@ -386,24 +371,16 @@ class OrionCore:
                 "vdb_context": vdb_context
             }
             
-            # 3. Call the high-level orchestrator to perform the synchronized write.
             result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data_payload)
             print(f" -> Archival result: {result}")
 
         except Exception as e:
             print(f"ERROR: An unexpected error occurred during archival for user {user_id}: {e}")
 
-
-# ... inside the OrionCore class ...
     def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str):
-        """
-        Uploads a file-like object to the GenAI File API via the client.
-        Returns a File handle object on success, or an error string on failure.
-        """
+        """Uploads a file-like object to the GenAI File API."""
         try:
             print(f"  - Uploading file '{display_name}' to the File API...")
-            # Use the central client to access the 'files' service and upload
-            # The 'file' parameter correctly takes a file-like object.
             file_handle = self.client.files.upload(
                 file=io.BytesIO(file_bytes),
                 config=types.UploadFileConfig(
@@ -423,9 +400,6 @@ class OrionCore:
         print("--- Orion is now offline. ---")
 
     def execute_restart(self):
-        """
-        Executes the final step of the restart by replacing the current process.
-        This should only be called after the state has been successfully saved.
-        """
+        """Executes the final step of the restart by replacing the current process."""
         print("  - State saved. Executing restart...")
         os.execv(sys.executable, ['python'] + sys.argv)
