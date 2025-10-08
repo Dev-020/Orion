@@ -33,6 +33,7 @@ class OrionCore:
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
+        self.session_excluded_ids: dict[str, list[str]] = {}
 
         # Refreshing Core Instructions
         print("--- Syncing Core Instructions... ---")
@@ -139,10 +140,12 @@ class OrionCore:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM restart_state") # Clear any old state
                 
-                preserved_states = {
-                    session_id: pickle.dumps(history)
-                    for session_id, history in self.sessions.items()
-                }
+                records_to_save = []
+                for session_id, history in self.sessions.items():
+                    history_blob = pickle.dumps(history)
+                    excluded_ids_list = self.session_excluded_ids.get(session_id, [])
+                    excluded_ids_blob = pickle.dumps(excluded_ids_list)
+                    records_to_save.append((session_id, history_blob, excluded_ids_blob))
                 
                 cursor.executemany(
                     "INSERT INTO restart_state (session_id, history_blob) VALUES (?, ?)",
@@ -167,10 +170,13 @@ class OrionCore:
 
                 print("--- Restart state detected in database. Loading sessions... ---")
                 self.sessions = {}
-                for session_id, history_blob in rows:
+                self.session_excluded_ids = {}
+                for session_id, history_blob, excluded_ids_blob in rows:
                     history = pickle.loads(history_blob)
                     self._get_session(session_id, history=history)
-                
+                    if excluded_ids_blob:
+                        self.session_excluded_ids[session_id] = pickle.loads(excluded_ids_blob)
+
                 cursor.execute("DELETE FROM restart_state") # Clean up the state table
                 conn.commit()
                 print(f"  - Successfully loaded state for {len(self.sessions)} session(s).")
@@ -206,8 +212,13 @@ class OrionCore:
             vdb_result = ""
             vdb_content = None
             if user_id == os.getenv("DISCORD_OWNER_ID"):
+                excluded_ids = self.session_excluded_ids.get(session_id, [])
+                
                 # Query 1: Deep Memory (with token limit)
                 deep_memory_where = {"source_table": "deep_memory"}
+                if excluded_ids:
+                    deep_memory_where["id"] = {"$nin": excluded_ids}
+
                 deep_memory_results = functions.execute_vdb_read(
                     query_texts=[user_prompt], 
                     n_results=5, 
@@ -389,6 +400,14 @@ class OrionCore:
             # 3. Call the high-level orchestrator to perform the synchronized write.
             result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data_payload)
             print(f" -> Archival result: {result}")
+            
+            if "Success" in result:
+                latest_id_result = functions.execute_sql_read(query="SELECT id FROM deep_memory ORDER BY id DESC LIMIT 1")
+                latest_id_data = json.loads(latest_id_result)
+                if latest_id_data:
+                    newest_id = str(latest_id_data[0]['id'])
+                    self.session_excluded_ids.setdefault(session_id, []).append(newest_id)
+                    print(f"  - Updated session '{session_id}' exclusion list with new ID: {newest_id}")
 
         except Exception as e:
             print(f"ERROR: An unexpected error occurred during archival for user {user_id}: {e}")
