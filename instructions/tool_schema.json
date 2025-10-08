@@ -200,7 +200,7 @@
         "name": "n_results",
         "type": "<class 'int'>",
         "required": false,
-        "default": 10
+        "default": 7
       },
       {
         "name": "where",

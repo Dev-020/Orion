@@ -1,83 +1,0 @@
-Region 6Erithminthul = Large Ass land mass size of Philippines. A Patriarchal Empire Ruled by one family for 2000 years, House Verilion. Current Ruler is Emperor Tharion Virelion, the Emberborn. Capital City VireDefensive Infrastructure
--Citadel of Flame: The imperial fortress, built into a dormant volcano, protected by lava moats and flame wards
-The Pyrewall: A massive obsidian wall surrounding the capital, inscribed with runes that ignite during sieges
--Flame Beacons: Towering signal pyres across the kingdom—when lit, they summon reinforcements or warn of invasion
-Trial Arenas: Located in every major city, used for training, public justice, and selecting new champions.Limani: Geography: Fertile delta region with winding rivers, coastal access, and lush trade routes
-Population: Mixed-race kingdom—humans, elves, dwarves, halflings, tieflings, and more
-Government: Council of Five, each representing a cultural pillar (Trade, Lore, Faith, Defense, Unity)Gefyra:Gefyra, known as “The Bridge Kingdom,” is a realm of convergence — geographically, culturally, and magically. Nestled between two ancient continents once divided by impassable terrain, Gefyra rose around a colossal, arcane bridge that spans the chasm known as the Maw. The kingdom thrives as a nexus of trade, diplomacy, and arcane experimentation, balancing precariously between old-world traditions and emergent ideologies.Petaxe:Petaxe is a fortified coastal settlement nestled between jagged cliffs and the restless sea. Known for its resilient shipwrights, storm-channeling mages, and deep reverence for the ocean’s moods, Petaxe serves as both a trade port and a spiritual waypoint. Its architecture blends coralstone and driftwood, with buildings shaped to echo waves, sails, and sea creatures.
- 
-Petaxe is a place of duality: salt and stone, faith and pragmatism, tradition and innovation. Outsiders call it “The Bastion of the Tide,” but locals simply call it “Home.”Ploio:Ploio is a mist-veiled settlement nestled between jagged cliffs and ancient stone terraces, where the sea whispers secrets but the land holds deeper truths. Though coastal, Ploio is defined more by its resonance with memory, myth, and sound. Its architecture spirals inward like a conch shell—designed to amplify voices, chants, and echoes. Travelers call it eerie; locals call it sacred.
- 
-Ploio thrives on trade, ritual, and the preservation of knowledge through oral tradition. It’s a place where silence is rare, and every stone seems to remember.Skafos:Skafos is a cliffside settlement carved into the basalt ridges overlooking the Sea of Echoes. Known for its tiered architecture, wind-harvesting towers, and obsidian bridges, it serves as a nexus for trade, arcane research, and mythic pilgrimage. Though modest in size, Skafos is fiercely independent and culturally distinct—an outpost of resilience and reverence.
- 
-Population: ~3,200 (mixed ancestry: human, tiefling, goliath, genasi)
-Primary Exports: Windglass (enchanted glass formed from lightning-struck sand), storm-kissed herbs, and mnemonic scrolls
-Atmosphere: Windswept, reverent, and quietly watchfulOakheart Glade: Only Daniel can know, msg me for info|Guild gives id that doubles as communicator and locator = Guild ID can be customized by high rankers or rich people
-If with money can also access monster database or any data for money unless u go manual with the books
-The guild partnership includes free room to any area with an Adventurers Guild, food, database, discounts on partnered establishments (Highest discount can go is 50%), and ur Guild ID can become a Scanner, for half ur earnings per bounty completed.
-Job board in adventurers guild
-separated to Fetch, Hunt, Explore, Escort, and Other (can be party forming, Sorties, Raid, anything that is not part of the 4)
-Mission "Top to bottom"Title:
-Reward:
-Description:Client:C.R.(challenge rating):
-Region, Sector & Location:
-Duration: Estimated time it can take to complete before guild will contact you about ur progress and safety.
-Party Recommendation / Type: Open(Guild will keep the task open to send more party members) or Closed(One pre made party is enough) Rankings of Adventurers Guild:  Top to bottom = Lowest to highestChallenge Rating they can HandleWarded = 1 - 4
- 
-Adept = 5 - 9
- 
-Warden = 10 - 14
- 
-Sentinel = 15 - 19
- 
-Virtuoso = 20 - 24
- 
-Paragon = 25 - 28
- 
-Ascendant = 29 - 30Argon has Different Guild Ranking:
-House Rules:Rolling with Emphasis:
-I know a Guy: 
-Intervention:No limit on fall damage:Crit rule: max the 1st set of dice, then roll the next set of dice, Crits can stack. Auto Crit when 20 over the AC, can stack with increments of 20, same goes for the Crit fail if 20 below the opponents AC, it is counted as Nat 1.When you roll a Nat 1 on your attack roll, The opponent that you attacked can use a reaction to attack with Advantage.Critical Hits Inflict a Wound: It's a mechanic where if the critical hit has been made and it reduces the WP of the opponent, a nasty wound appears on an area of your choosing (DM’s discretion) that gives disadvantage to the creature that was wounded. An injury lets you target the injury with a disadvantage for double damage if you decide. You can treat the wound with a medicine check to stabilize it using an action with the DC equal to half of the damage dealt to that area (Eliminating the possibility of double damage) or using a healing kit for 2 hours to eliminate the wound or spells like cure wounds to close a wound up.Damage types provide some small disadvantages. For instance, bludgeoning/force critical staggers the target for -5ft of movement or takes away -2 AC for the damaged armor. Slashing/Poison takes away -3 to attack, or piercing/acid opens a bleeding wound that gives 1+1d4 HP reduction per turn. Tell me your ideas when you crit.Wound point system based on this link:https://www.dndbeyond.com/forums/dungeons-dragons-discussion/homebrew-house-rules/90101-wound-points-5e-more-realistic-damageModified:Injury And Death
-0 Hit Points
-A creature who drops to 0 hit points does not start dying. Instead it allocates further damage to wound points. 1 die to 1 WP (ex. 5d6 will deal 5 WP)
-
-Taking Wound Damage
- 
-Wound points are reduced:
- 
-from damage after hit points are reduced to 0,
-from damage when a creature is struck by a critical hit they must succeed on a Constitution saving throw DC 5(increases by 2 each success) or suffer 1 wp. Roll per crit (Over Crit applies)
-from Falling; a creature suffers 1 wound point for every 1d6 of blunt damage taken by Falling,
-from Suffocating; when hit points from Suffocating drop to 0, wound points also drop to 0.If the remaining WP is 44.44%(rounded down). Further WP reduced, they must succeed on a Constitution saving throw DC 4(increases by 2 each success) or suffer 1 point of exhaustion (Only 1 point of Exhaustion can be obtained from this). 
- 
-Wound points cannot drop below 0; any damage that would cause a character’s wound point total to drop below 0 simply causes the creature to have 0 wound points.
- 
-0 Wound Points 
-A creature who drops to 0 wound points:
-starts dying,
-suffers one level of exhaustion,
-suffers one level of exhaustion whenever it fails a death saving throw.
-I'm not particularly eager to die: If you still have WP but 0 HP, you can continue to take Action. Or if you still have HP but 0 WP you can continue to take Action, but you have to roll a Death Saving throw at the End of your Turn.Healing
-Natural Healing
-At the end of a long rest, a creature recovers 1 wound point per hit die that was used to restore health and 1 exhaustion level. Any significant interruption during the rest period prevents the creature from recovering that night. A creature’s wound points can’t exceed its wound points maximum.  
- 
-Magical Healing
-A creature recovers 1 wound point and one level of exhaustion point per spell level and per hit die that was used to restore health through magical healing in addition to the spell’s effect.
-Healing Potion also Restores WP per hit die that was used to restore health and 1 level of Exhaustion per Potion.Low end Health Potions does not fully heal but only rapidly increases the natural healing of the body leaving scars. High end can fully heal Scars.
-Greater Restoration or Wish or spells of the same caliber fully heals exhaustion and WP.
- 
-Special Conditions:
-Damage Reduction
-Damage Reduction reduces damage dealt to wound points and to hit points (Rounded up). 
-Regeneration:
-Regeneration applies to hit points as described in the standard rules and also wound points.Health takes at least week to Naturally fully recover:Every single day you recover some of your Hit Dices. For example, Level 1-3 might recover one Hit Dice per night, while 4-6 might recover 2 Hit Dices. For ours, You gain 1 Hit dice every other 2 levels
- stay at the inn or spend a night in a better lifestyle bracket, for which they would get more of the Hit Dices back. For example, what would it look like in terms of lifestyle?
-Wretched - Chance of getting a -2 Hit Dice. (Horrible, critical fail to set up for a camp).
-Squalid(1 sp) - Chance of getting a -1 Hit Dice. (Bad set up for a camp or something).
-Poor(2 sp) +0  Hit Dice (Normal camp)
-Modest(1 gp) +1 Hit Dice (Critical success camp)
-Comfortable(2 gp) +2 Hit Dice = This is the Standard for the guild partnership housing.
- Wealthy(4 gp) +3 Hit Dice
- Aristocratic(10+ gp) +4 Hit Dice
-It means that the better places make a better recovery, but it also gives new ideas about presenting the places in your world. Perhaps the inn has an in house healer, baths, spa, whatever helps the party in their rest. Good Food can also increase Hit Die recovery.+2 to attack per enemy when flanking: +2/+4 AC for half and full cover:Skill/Tool Proficiency Matters: Proficiency bonus lets you make complex tasks regarding the skill, while everyone can try to make simple tasks. If the player wants to jump over a simple obstacle, that's a check, while a proficient one could make a complex task. Suppose the player doesn't have proficiency and tries a complex task - that's a check with disadvantage. The same goes for kits. Changing the bandage might be simple, while surgery, on the other hand - complex.Monster Hunter mechanic: for fighting against large+ creature: tb added later.Source for most of the rules:  https://dungeongoblin.com/blog/7-hardcore-homebrew-rules-for-dnd-5eyes its direct copy.
-

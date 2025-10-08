@@ -79,7 +79,8 @@
   "restart_state": {
     "columns": [
       "session_id",
-      "history_blob"
+      "history_blob",
+      "excluded_ids_blob"
     ]
   },
   "instruction_proposals": {

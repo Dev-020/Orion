@@ -8,6 +8,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 from pathlib import Path
+from .embed_document import run_embedding_sync
 
 # --- PATH CONFIGURATION ---
 # Determine the project root directory (which is the parent of 'system_utils')
@@ -93,6 +94,7 @@ def sync_instructions():
                             
                         doc_info['last_modified_time'] = current_mod_time
                         print(f"  -> Successfully updated '{local_filename}'.")
+
                 else:
                     print("  -> No changes. File is up to date.")
             
@@ -103,5 +105,9 @@ def sync_instructions():
         json.dump(manifest_data, f, indent=2)
         f.truncate()
 
+    # Automatically trigger the vector database embedding
+    print(f"  -> Starting vector embedding for 'Homebrew_Compendiun.md'...")
+    run_embedding_sync(os.path.join(INSTRUCTIONS_DIR, "Homebrew_Compendium.md"))
+    
 if __name__ == '__main__':
     sync_instructions()

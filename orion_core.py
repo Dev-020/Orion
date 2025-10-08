@@ -29,7 +29,7 @@ load_dotenv() # Load environment variables from .env file
 
 class OrionCore:
     
-    def __init__(self, model_name: str = "gemini-1.5-pro"):
+    def __init__(self, model_name: str = "gemini-2.5-pro"):
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
@@ -148,11 +148,11 @@ class OrionCore:
                     records_to_save.append((session_id, history_blob, excluded_ids_blob))
                 
                 cursor.executemany(
-                    "INSERT INTO restart_state (session_id, history_blob) VALUES (?, ?)",
-                    preserved_states.items()
+                    "INSERT INTO restart_state (session_id, history_blob, excluded_ids_blob) VALUES (?, ?, ?)",
+                    records_to_save
                 )
                 conn.commit()
-                print(f"  - State for {len(preserved_states)} session(s) saved to database.")
+                print(f"  - State for {len(records_to_save)} session(s) saved to database.")
                 return True
         except Exception as e:
             print(f"  - ERROR: Failed to save state for restart: {e}")
@@ -211,33 +211,36 @@ class OrionCore:
             # Other users will not have VDB context automatically injected into their prompts.
             vdb_result = ""
             vdb_content = None
-            if user_id == os.getenv("DISCORD_OWNER_ID"):
-                excluded_ids = self.session_excluded_ids.get(session_id, [])
-                
-                # Query 1: Deep Memory (with token limit)
-                deep_memory_where = {"source_table": "deep_memory"}
-                if excluded_ids:
-                    deep_memory_where["id"] = {"$nin": excluded_ids}
+            excluded_ids = self.session_excluded_ids.get(session_id, [])
+            
+            # Query 1: Deep Memory (with token limit)
+            deep_memory_where = {"source_table": "deep_memory"}
+            if excluded_ids:
+                deep_memory_where = {"$and": [
+                    {"source_table": "deep_memory"},
+                    {"id": {"$nin": excluded_ids}},
+                    {"token": {"$lte": "190000"}}
+                ]}
 
-                deep_memory_results = functions.execute_vdb_read(
-                    query_texts=[user_prompt], 
-                    n_results=5, 
-                    where=deep_memory_where
-                )
+            deep_memory_results = functions.execute_vdb_read(
+                query_texts=[user_prompt], 
+                n_results=7, 
+                where=deep_memory_where
+            )
 
-                # Query 2: Long-Term Memory
-                long_term_where = {"source_table": "long_term_memory"}
-                long_term_results = functions.execute_vdb_read(
-                    query_texts=[user_prompt], 
-                    n_results=5, 
-                    where=long_term_where
-                )
-                
-                # Combine results
-                vdb_result = deep_memory_results + "\n" + long_term_results
+            # Query 2: Long-Term Memory
+            long_term_where = {"source_table": "long_term_memory"}
+            long_term_results = functions.execute_vdb_read(
+                query_texts=[user_prompt], 
+                n_results=3, 
+                where=long_term_where
+            )
+            
+            # Combine results
+            vdb_result = deep_memory_results + "\n" + long_term_results
 
-                vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
-                vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
+            vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
+            vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
 
             data_envelope = {
                 "auth": {

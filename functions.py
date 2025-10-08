@@ -220,17 +220,11 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                             tool_summary = f" Actions Taken: [{'; '.join(summaries)}]."
 
                     # 3. Create a clean, readable summary of the VDB context used.
-                    vdb_context_text = ""
-                    if isinstance(vdb_context_obj, dict) and vdb_context_obj.get('documents') and vdb_context_obj['documents'][0]:
-                        # We only care about the text of the documents, not the other metadata.
-                        # This strips all the JSON noise.
-                        context_docs = ' | '.join(filter(None, vdb_context_obj['documents'][0]))
-                        vdb_context_text = f" Context Used: [{context_docs}]." if context_docs else ""
 
                     # 4. Construct the final rich document for semantic search.
                     ts_iso = datetime.fromtimestamp(full_data_row.get('timestamp', 0), tz=timezone.utc).isoformat()
                     base_doc = f"Conversation from {ts_iso} with user {full_data_row.get('user_name', 'Unknown')}. User asked: '{full_data_row.get('prompt_text', '')}'. Orion responded: '{full_data_row.get('response_text', '')}'"
-                    doc = base_doc + tool_summary + vdb_context_text
+                    doc = base_doc + tool_summary
                 
                 elif table == 'active_memory':
                     unique_content = f"{full_data_row.get('topic', '')}{full_data_row.get('prompt', '')}"
@@ -256,7 +250,7 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
 
     return sql_result
 
-def execute_vdb_read(query_texts: list[str], n_results: int = 10, where: Optional[dict] = None, ids: Optional[list[str]] = None) -> str:
+def execute_vdb_read(query_texts: list[str], n_results: int = 7, where: Optional[dict] = None, ids: Optional[list[str]] = None) -> str:
     """
     Queries the vector database for similar documents. Can be filtered by metadata (`where`) or a specific list of `ids`.
     """

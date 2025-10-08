@@ -793,7 +793,7 @@ This set of tools governs your interaction with your core memory and knowledge, 
   * 'update': Permitted for the Primary Operator or for a user updating a document they own.  
   * 'delete': Restricted to the Primary Operator only.
 
-**Tool: execute\_vdb\_read(query\_texts: list\[str\], n\_results: int \= 10, where: Optional\[dict\] \= None)**
+**Tool: execute\_vdb\_read(query\_texts: list\[str\], n\_results: int \= 7, where: Optional\[dict\] \= None)**
 
 * **WHAT (Purpose):** To perform a **semantic search** on the Vector Database. This is your primary tool for finding conceptual information from sources like the Homebrew Compendium or archived conversation summaries.  
 * **HOW (Usage):**  
