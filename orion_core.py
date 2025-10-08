@@ -18,7 +18,7 @@ from system_utils import run_startup_diagnostics, generate_manifests
 # Define instruction files for clarity
 INSTRUCTIONS_FILES = [
     'Project_Overview.md', 
-    'Homebrew_Compendium.md',
+    #'Homebrew_Compendium.md',
     'General_Prompt_Optimizer.md',
     'DND_Handout.md',
     'master_manifest.json'
@@ -29,7 +29,7 @@ load_dotenv() # Load environment variables from .env file
 
 class OrionCore:
     
-    def __init__(self, model_name: str = "gemini-2.5-pro"):
+    def __init__(self, model_name: str = "gemini-1.5-pro"):
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
@@ -206,18 +206,25 @@ class OrionCore:
             vdb_result = ""
             vdb_content = None
             if user_id == os.getenv("DISCORD_OWNER_ID"):
-                # Construct a more precise VDB query to prevent token overloads.
-                # This query retrieves:
-                # 1. Any entry from 'long_term_memory'.
-                # 2. Only entries from 'deep_memory' where the token count is less than 150,000.
-                # This prevents extremely large, single-turn conversations from being injected into the context.
-                vdb_where_clause = {
-                    "$or": [
-                        {"source_table": "deep_memory"},
-                        {"source_table": "long_term_memory"}
-                    ]
-                }
-                vdb_result = functions.execute_vdb_read(query_texts=[user_prompt], n_results=7, where=vdb_where_clause)
+                # Query 1: Deep Memory (with token limit)
+                deep_memory_where = {"source_table": "deep_memory"}
+                deep_memory_results = functions.execute_vdb_read(
+                    query_texts=[user_prompt], 
+                    n_results=5, 
+                    where=deep_memory_where
+                )
+
+                # Query 2: Long-Term Memory
+                long_term_where = {"source_table": "long_term_memory"}
+                long_term_results = functions.execute_vdb_read(
+                    query_texts=[user_prompt], 
+                    n_results=5, 
+                    where=long_term_where
+                )
+                
+                # Combine results
+                vdb_result = deep_memory_results + "\n" + long_term_results
+
                 vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
                 vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
 
@@ -261,9 +268,7 @@ class OrionCore:
             final_content=types.UserContent(parts=final_prompt)
 
             # Sending User Content to Orion
-            contents_to_send = chat_session + [final_content]
-            if vdb_content:
-                contents_to_send.append(vdb_content)
+            contents_to_send = chat_session + [vdb_content] + [final_content]
 
             print(f"  - Sending Prompt from Context: {data_envelope} to Orion. . .")
             response = self.client.models.generate_content(
