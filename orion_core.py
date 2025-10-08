@@ -148,11 +148,11 @@ class OrionCore:
                     records_to_save.append((session_id, history_blob, excluded_ids_blob))
                 
                 cursor.executemany(
-                    "INSERT INTO restart_state (session_id, history_blob, excluded_ids_blob) VALUES (?, ?, ?)",
-                    records_to_save
+                    "INSERT INTO restart_state (session_id, history_blob) VALUES (?, ?)",
+                    preserved_states.items()
                 )
                 conn.commit()
-                print(f"  - State for {len(records_to_save)} session(s) saved to database.")
+                print(f"  - State for {len(preserved_states)} session(s) saved to database.")
                 return True
         except Exception as e:
             print(f"  - ERROR: Failed to save state for restart: {e}")
@@ -163,7 +163,7 @@ class OrionCore:
         try:
             with sqlite3.connect(DB_FILE) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT session_id, history_blob, excluded_ids_blob FROM restart_state")
+                cursor.execute("SELECT session_id, history_blob FROM restart_state")
                 rows = cursor.fetchall()
                 if not rows:
                     return False # No state to load
