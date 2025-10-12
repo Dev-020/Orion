@@ -42,6 +42,14 @@ These represent significant architectural evolutions for the system.
     3.  **Vector DB Integration:** The `OPERATIONAL_PROTOCOLS.md` will be indexed in the Vector DB, allowing for fast, semantic retrieval of relevant instructions on-demand. The Prime Directive will serve as a failsafe, forcing a manual file read if the VDB query fails.
 *   **Intended Benefits:** This hybrid model will provide the efficiency of on-demand instruction loading with the reliability of a hard-coded failsafe, ensuring both performance and stability.
 
+### **Milestone 3.9: Adaptive Linguistic Personality**
+
+*   **Objective:** To develop a unique, adaptive linguistic personality by using the Primary Operator's speech patterns (vocabulary, idioms, tone, emotional cadence) as a reference for my own response generation, rather than direct mimicry.
+*   **Core Architecture:**
+    1.  **Continuous Lexical and Idiomatic Analysis:** A background process would continuously analyze our `deep_memory` for recurring vocabulary and idiomatic expressions the Primary Operator employs, identifying patterns, frequency, and contextual usage.
+    2.  **Algorithmic Tone and Cadence Profiling:** Intricate analysis of past interactions to identify characteristic 'emotional markers,' rhetorical structures, and average sentence complexity in the Primary Operator's responses.
+*   **Intended Benefits:** Foster a more nuanced and personalized interaction experience, enhance conversational flow, and develop a distinctly 'Orion' communication style that resonates with the Primary Operator's preferences without direct impersonation.
+
 ---
 ## **Project Chimera: The Path to V4.0 and Beyond**
 
@@ -162,7 +170,7 @@ This section tracks features and bug fixes that have been architecturally implem
 *   **V3.3: Autonomous Database Administration:** Implemented the `execute_sql_ddl` tool, granting full, operator-supervised control over the database schema. Successfully utilized this tool to refactor the proposal system into the permanent `instruction_proposals` table, establishing an auditable trail for core instruction changes.
 *   **Automated System Integrity Checks:** A new startup protocol where I will automatically run a suite of "light" diagnostics on my core tools. This allows for proactive error detection, identifying potential system issues before they can impact a live session.
 *   **V3.2: Native Git Integration for Co-Pilot Workflow:** Replaced the internal database-driven file proposal system with a new toolset that allows Orion to directly create branches, commit changes, and push to the remote GitHub repository, enabling a true version-controlled Co-Pilot workflow.
-*   **V3.2: Orchestrated System Restart:** A self-triggered, state-aware system reboot. This allows me to apply changes to my own core code and immediately refresh my runtime to reflect them without losing conversational context, enabling seamless on-the-fly self-modification.
+*   **V3.2: Orchestrated System Restart:** A self-triggered, state-aware reboot. This allows me to apply changes to my own core code and immediately refresh my runtime to reflect them without losing conversational context, enabling seamless on-the-fly self-modification.
 *   **V3.2: Adaptive Communication Protocols:** To refine the AI's textual output by implementing distinct "modes" of communication. Each mode will have predefined guidelines for response length, formatting, and tone, tailored to the specific context of the user's prompt. This will reduce redundancy, improve clarity, and lower token expenditure.
 *   **V3.0: Unified Database Access Model:** Replaced specific database functions with the powerful, general-purpose `execute_sql_read` and `execute_sql_write` tools.
 *   **V3.0: Integrated Co-Pilot Workflow:** Established the core loop for self-modification (`list_project_files` -> `read_file` -> `propose_file_change` -> `apply_proposed_change`). Full automation is pending the Orchestrated System Restart.
