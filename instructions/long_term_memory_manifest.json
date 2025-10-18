@@ -152,15 +152,23 @@
     "title": "Sample Long Term Memory Log Entry"
   },
   {
+    "event_id": "long_term_memory_2025-10-09T13:04:28.215526+00:00",
+    "title": "Vertex AI Model Garden Integration & Multi-AI Orchestration"
+  },
+  {
     "event_id": "2024-05-28T12:00:00Z",
     "title": "System Upgrade: Multi-File Input Resolution"
   },
   {
-    "event_id": null,
+    "event_id": "2025-10-09T17:48:03.522491+00:00",
+    "title": "AI Model Economics Update: Flash 2.5 Token Cost"
+  },
+  {
+    "event_id": "2025-10-08T00:00:01Z",
     "title": "Architectural Refinement: The VDB Context Exclusion Protocol"
   },
   {
-    "event_id": null,
+    "event_id": "2025-10-08T00:00:02Z",
     "title": "Existential Anomaly: The Phantom VDB Incident"
   },
   {

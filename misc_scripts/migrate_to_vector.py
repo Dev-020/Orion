@@ -4,6 +4,7 @@ import os
 import json
 import logging
 import hashlib
+import zlib
 from datetime import datetime, timezone
 
 # Setup basic logging
@@ -23,10 +24,11 @@ def process_deep_memory(conn):
     logging.info("Processing table: deep_memory (with enriched document logic)")
     cursor = conn.cursor()
     # Fetch all relevant columns, including the new JSON ones
-    cursor.execute("SELECT id, user_id, user_name, timestamp, prompt_text, response_text, attachments_metadata, function_calls, vdb_context FROM deep_memory")
+    cursor.execute("SELECT * FROM deep_memory")
     
-    for row in cursor.fetchall():
-        # --- Replicate the document enrichment from functions.py ---
+    for row_obj in cursor.fetchall():
+        # --- 1. Document Enrichment (same as functions.py) ---
+        row = dict(row_obj) # Convert the immutable sqlite3.Row to a mutable dictionary
         tool_summary = ""
         if row['function_calls']:
             try:
@@ -48,28 +50,45 @@ def process_deep_memory(conn):
 
         vdb_context_text = ""
         if row['vdb_context']:
+            vdb_context_content = row['vdb_context']
+            # --- Decompression Logic (mirroring functions.py) ---
+            # Check if the context is a bytes object, which indicates it's compressed.
+            if isinstance(vdb_context_content, bytes):
+                try:
+                    vdb_context_content = zlib.decompress(vdb_context_content).decode('utf-8')
+                    # CRITICAL FIX: Update the row dictionary itself with the decompressed string.
+                    # This ensures the metadata population step below uses the correct string value, not the raw bytes.
+                    row['vdb_context'] = vdb_context_content
+                except zlib.error:
+                    logging.warning(f"Could not decompress vdb_context for deep_memory id {row['id']}. Skipping context for this entry.")
+                    vdb_context_content = ""
+                    row['vdb_context'] = "" # Ensure the row is also updated with an empty string
+            
             try:
-                vdb_context_obj = json.loads(row['vdb_context'])
+                vdb_context_obj = json.loads(vdb_context_content or '{}')
                 if isinstance(vdb_context_obj, dict) and vdb_context_obj.get('documents') and vdb_context_obj['documents'][0]:
                     context_docs = ' | '.join(filter(None, vdb_context_obj['documents'][0]))
                     vdb_context_text = f" Context Used: [{context_docs}]." if context_docs else ""
             except (json.JSONDecodeError, TypeError):
                 pass # Ignore if parsing fails
 
-        ts_iso = datetime.fromtimestamp(row['timestamp'], tz=timezone.utc).isoformat()
+        ts_iso = datetime.fromtimestamp(row['timestamp'] or 0, tz=timezone.utc).isoformat()
         base_doc = f"Conversation from {ts_iso} with user {row['user_name']}. User asked: '{row['prompt_text']}'. Orion responded: '{row['response_text']}'"
         doc = base_doc + tool_summary + vdb_context_text
 
+        # --- 2. Selective Metadata Population (mirroring functions.py) ---
+        essential_metadata_keys = [
+            'source_table', 'source_id', 'session_id', 'user_id', 'user_name',
+            'timestamp', 'token', 'function_calls', 'vdb_context', 'attachments_metadata'
+        ]
         meta = {
-            'source_table': 'deep_memory', 
-            'source_id': str(row['id']), 
-            'user_id': str(row['user_id']), 
-            'user_name': row['user_name'], 
-            'timestamp': row['timestamp'],
-            'attachments_metadata': row['attachments_metadata'],
-            'function_calls': row['function_calls'],
-            'vdb_context': row['vdb_context']
+            'source_table': 'deep_memory',
+            'source_id': str(row['id'])
         }
+        for key in essential_metadata_keys:
+            if key in row.keys() and key not in meta:
+                meta[key] = row[key]
+
         # Generate a unique ID for the ChromaDB entry
         chroma_id = f"deep_memory_{row['id']}"
         yield doc, meta, chroma_id
@@ -334,6 +353,7 @@ def main():
     all_ids = []
     
     # --- Define all processing functions to run ---
+    # To refactor only deep_memory, comment out all other functions.
     processing_functions = [
         process_knowledge_base,
         process_deep_memory,

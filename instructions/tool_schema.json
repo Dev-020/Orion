@@ -163,7 +163,7 @@
       },
       {
         "name": "params",
-        "type": "typing.List[typing.Any]",
+        "type": "typing.List[typing.Union[str, int, float, NoneType]]",
         "required": true
       },
       {

@@ -26,6 +26,7 @@ __all__ = [
 # --- END OF PUBLIC TOOL DEFINITION ---
 
 import hashlib
+import zlib
 import random
 import re
 import os
@@ -37,7 +38,7 @@ from datetime import date
 import google.auth
 from datetime import datetime, timezone
 from filelock import FileLock
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 import sqlite3
 import chromadb
 from chromadb.types import Metadata
@@ -81,6 +82,23 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
     It relies on the low-level tools for all execution and security checks.
     """
     print(f"--- Synchronized Write --- User: {user_id}, Table: {table}, Op: {operation}")
+
+    # --- Data Compression for vdb_context ---
+    # If we are writing to deep_memory and vdb_context exists, compress it.
+    if data and table == 'deep_memory' and 'vdb_context' in data and isinstance(data['vdb_context'], str):
+        original_len = len(data['vdb_context'])
+        # Only compress if the data is large enough to be at risk of truncation.
+        if original_len > 90000:
+            try:
+                # Compress the string into bytes.
+                compressed_data = zlib.compress(data['vdb_context'].encode('utf-8'))
+                compressed_len = len(compressed_data)
+                print(f"  - Compressing 'vdb_context' from {original_len} chars to {compressed_len} bytes for storage efficiency.") # noqa
+                data['vdb_context'] = compressed_data
+
+            except Exception as e:
+                print(f"  - WARNING: Failed to compress vdb_context. Storing as raw text. Error: {e}")
+
 
     # --- 1. Construct and Execute SQL Query (Primary Database) ---
     try:
@@ -161,7 +179,7 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                         read_result = json.loads(read_result_json)
                         if read_result:
                             full_data_row = read_result[0]
-
+            
             if not full_data_row:
                 print(f"  - VDB sync: Skipping {operation.upper()} - could not obtain full data row for vectorization.")
                 return sql_result
@@ -173,12 +191,22 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                 # Default behavior
                 pk_val = full_data_row.get(pk_map[table])
                 vdb_id = f"{table}_{pk_val}"
-                meta = {'source_table': table, 'source_id': str(pk_val)}
-                # Populate metadata, ensuring all values are strings for VDB compatibility.
-                # This is more efficient than a second loop and is safe for existing strings.
-                for key, value in full_data_row.items():
-                    if key not in meta:
-                        meta[key] = str(value)
+
+                # --- Selective Metadata Population ---
+                # Define which fields are essential for filtering and context, excluding redundant text fields.
+                essential_metadata_keys = [
+                    'source_table', 'source_id', 'session_id', 'user_id', 'user_name',
+                    'timestamp', 'token', 'function_calls', 'vdb_context', 'attachments_metadata'
+                ]
+                meta = {
+                    'source_table': table,
+                    'source_id': str(pk_val)
+                }
+                # Populate metadata ONLY with essential keys found in the row.
+                # This prevents bloating the vector metadata with redundant text like prompt_text and response_text.
+                for key in essential_metadata_keys:
+                    if key in full_data_row and key not in meta:
+                        meta[key] = full_data_row[key]
                 
                 # Specific formatting rules override the default
                 if table == 'long_term_memory':
@@ -188,14 +216,14 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                 elif table == 'deep_memory':
                     # 1. Parse JSON fields from the row data into objects for processing.
                     # This ensures we have structured data for both metadata and doc creation.
-                    function_calls_obj, vdb_context_obj = None, None
+                    # The metadata is already populated with the raw strings from the DB, now we parse them.
+                    function_calls_obj = None
                     for field in ['function_calls', 'vdb_context', 'attachments_metadata']:
                         if field in meta and isinstance(meta[field], str):
                             try:
                                 parsed_obj = json.loads(meta[field] or "[]")
-                                meta[field] = parsed_obj # Update metadata for structured storage
+                                # We don't need to re-assign to meta here, as _sanitize_metadata will handle it later.
                                 if field == 'function_calls': function_calls_obj = parsed_obj
-                                if field == 'vdb_context': vdb_context_obj = parsed_obj
                             except json.JSONDecodeError:
                                 print(f"  - VDB sync: Could not parse '{field}' as JSON, storing as raw string.")
                                 pass
@@ -374,14 +402,32 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(query, tuple(params))
-            rows = cursor.fetchall()
-            results = [dict(row) for row in rows]
+            rows = [dict(row) for row in cursor.fetchall()]
+
+            # --- Data Decompression for vdb_context ---
+            # After fetching, check if any row contains a 'vdb_context' field that is bytes.
+            for row in rows:
+                if 'vdb_context' in row and isinstance(row['vdb_context'], bytes):
+                    try:
+                        # Attempt to decompress the bytes back into a string.
+                        decompressed_str = zlib.decompress(row['vdb_context']).decode('utf-8')
+                        original_len = len(row['vdb_context'])
+                        new_len = len(decompressed_str)
+                        print(f"  - Decompressing 'vdb_context' from {original_len} bytes to {new_len} chars.")
+                        row['vdb_context'] = decompressed_str
+                    except zlib.error:
+                        # This might happen if the data was not compressed (e.g., old records).
+                        # We'll try to decode it as a plain string.
+                        print("  - Decompression failed, attempting to decode as plain text.")
+                        row['vdb_context'] = row['vdb_context'].decode('utf-8', errors='ignore')
+
+            results = rows
             return json.dumps(results, indent=2) if results else "Query executed successfully, but returned no results."
     except sqlite3.Error as e:
         return f"Database Error: {e}"
 
 
-def execute_sql_write(query: str, params: List[Any], user_id: str) -> str:
+def execute_sql_write(query: str, params: List[Union[str, int, float, None]], user_id: str) -> str:
     """
     Executes a write query (INSERT, UPDATE, DELETE) on the database using a
     tiered security model.
@@ -389,11 +435,12 @@ def execute_sql_write(query: str, params: List[Any], user_id: str) -> str:
     print(f"--- DB Write Request from User: {user_id} ---")
     print(f"  - Query: {query}")
     #print(f"  - Params: {params}")
-
+    
     normalized_query = query.strip().upper()
     owner_id = os.getenv("DISCORD_OWNER_ID")
 
     if normalized_query.startswith('UPDATE') or normalized_query.startswith('DELETE'):
+        print(f"{owner_id} : {user_id}")
         is_authorized = (owner_id and user_id == owner_id)
 
         if normalized_query.startswith('UPDATE "USER_PROFILES"'):
@@ -451,6 +498,7 @@ def execute_sql_ddl(query: str, user_id: str) -> str:
         normalized_query.startswith("CREATE TABLE")
         or normalized_query.startswith("ALTER TABLE")
         or normalized_query.startswith("DROP TABLE")
+        or normalized_query.startswith("BEGIN TRANSACTION")
     ):
         return "Error: Invalid or disallowed SQL command. Only CREATE TABLE, ALTER TABLE, and DROP TABLE are supported."
 

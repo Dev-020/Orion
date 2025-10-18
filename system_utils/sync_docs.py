@@ -94,7 +94,11 @@ def sync_instructions():
                             
                         doc_info['last_modified_time'] = current_mod_time
                         print(f"  -> Successfully updated '{local_filename}'.")
-
+                        
+                    # Trigger vector database embedding
+                    if local_filename == "Homebrew_Compendium.md" or local_filename == "Operational_Protocols.md":
+                        print(f"  -> Starting vector embedding for '{local_filename}'...")
+                        run_embedding_sync(os.path.join(INSTRUCTIONS_DIR, local_filename))
                 else:
                     print("  -> No changes. File is up to date.")
             
@@ -104,10 +108,6 @@ def sync_instructions():
         f.seek(0)
         json.dump(manifest_data, f, indent=2)
         f.truncate()
-
-    # Automatically trigger the vector database embedding
-    print(f"  -> Starting vector embedding for 'Homebrew_Compendiun.md'...")
-    run_embedding_sync(os.path.join(INSTRUCTIONS_DIR, "Homebrew_Compendium.md"))
     
 if __name__ == '__main__':
     sync_instructions()

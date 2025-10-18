@@ -41,19 +41,6 @@
     "text_column": "notes",
     "vdb_id_strategy": "direct"
   },
-  "long_term_memory": {
-    "columns": [
-      "event_id",
-      "date",
-      "title",
-      "category",
-      "description",
-      "snippet"
-    ],
-    "primary_key": "event_id",
-    "text_column": "description",
-    "vdb_id_strategy": "direct"
-  },
   "active_memory": {
     "columns": [
       "topic",
@@ -135,5 +122,18 @@
       "data",
       "timestamp"
     ]
+  },
+  "long_term_memory": {
+    "columns": [
+      "event_id",
+      "date",
+      "title",
+      "category",
+      "description",
+      "snippet"
+    ],
+    "primary_key": "event_id",
+    "text_column": "description",
+    "vdb_id_strategy": "direct"
   }
 }

@@ -17,7 +17,7 @@ from system_utils import run_startup_diagnostics, generate_manifests
 
 # Define instruction files for clarity
 INSTRUCTIONS_FILES = [
-    'Project_Overview.md', 
+    'Primary_Directive.md', 
     #'Homebrew_Compendium.md',
     'General_Prompt_Optimizer.md',
     'DND_Handout.md',
@@ -29,7 +29,7 @@ load_dotenv() # Load environment variables from .env file
 
 class OrionCore:
     
-    def __init__(self, model_name: str = "gemini-2.5-pro"):
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
@@ -163,7 +163,7 @@ class OrionCore:
         try:
             with sqlite3.connect(DB_FILE) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT session_id, history_blob FROM restart_state")
+                cursor.execute("SELECT session_id, history_blob, excluded_ids_blob FROM restart_state")
                 rows = cursor.fetchall()
                 if not rows:
                     return False # No state to load
@@ -196,7 +196,7 @@ class OrionCore:
         """
         Processes a prompt using automatic function calling and archives the result.
         """
-        print(f"--- Processing prompt for session {session_id} and user {user_name} ---")
+        print(f"----- Processing prompt for session {session_id} and user {user_name} -----")
         try:
             chat_session = self._get_session(session_id)
             
@@ -207,8 +207,8 @@ class OrionCore:
             timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
             
             # --- CONTEXT INJECTION CONTROL ---
-            # To prevent token overloads, automatic RAG is now restricted to the Primary Operator.
-            # Other users will not have VDB context automatically injected into their prompts.
+            # Automatic Past-Memory Recall to provide additional context on-demand based on the User Prompt.
+            # These recalls will not be saved to the chat history.
             vdb_result = ""
             vdb_content = None
             excluded_ids = self.session_excluded_ids.get(session_id, [])
@@ -219,29 +219,47 @@ class OrionCore:
                 deep_memory_where = {"$and": [
                     {"source_table": "deep_memory"},
                     {"id": {"$nin": excluded_ids}},
-                    {"token": {"$lte": "190000"}}
+                    #{"token": {"$lte": 190000}}
                 ]}
 
-            deep_memory_results = functions.execute_vdb_read(
+            deep_memory_results_raw = functions.execute_vdb_read(
                 query_texts=[user_prompt], 
-                n_results=7, 
+                n_results=5, 
                 where=deep_memory_where
             )
 
             # Query 2: Long-Term Memory
-            long_term_where = {"source_table": "long_term_memory"}
-            long_term_results = functions.execute_vdb_read(
+            long_term_results_raw = functions.execute_vdb_read(
                 query_texts=[user_prompt], 
                 n_results=3, 
-                where=long_term_where
+                where={"source_table": "long_term_memory"}
             )
             
-            # Combine results
-            vdb_result = deep_memory_results + "\n" + long_term_results
+            # Query 3: Operational Protocols
+            operational_protocols_results_raw = functions.execute_vdb_read(
+                query_texts=[user_prompt], 
+                n_results=3, 
+                where={"source": "Operational_Protocols.md"}
+            )
+            
+            # Combine and format results
+            formatted_deep_mem = self._format_vdb_results_for_context(deep_memory_results_raw, "Deep Memory")
+            formatted_long_term = self._format_vdb_results_for_context(long_term_results_raw, "Long-Term Memory")
+            formatted_op_protocol = self._format_vdb_results_for_context(operational_protocols_results_raw, "Operational Protocols")
+            
+            # The formatted string for the AI's context
+            formatted_vdb_context = f"{formatted_deep_mem}\n{formatted_long_term}\n{formatted_op_protocol}".strip()
 
-            vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:{vdb_result}]'
-            vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response))
+            # The raw JSON to be archived in the database for future analysis and compression
+            raw_vdb_results_for_db = {
+                "deep_memory": json.loads(deep_memory_results_raw),
+                "long_term_memory": json.loads(long_term_results_raw),
+                "operational_protocols": json.loads(operational_protocols_results_raw)
+            }
 
+            vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
+            vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response)) if vdb_response else None
+            #print(vdb_response)
             data_envelope = {
                 "auth": {
                     "user_id": user_id,
@@ -282,9 +300,12 @@ class OrionCore:
             final_content=types.UserContent(parts=final_prompt)
 
             # Sending User Content to Orion
-            contents_to_send = chat_session + [vdb_content] + [final_content]
+            contents_to_send = chat_session
+            if vdb_content:
+                contents_to_send.append(vdb_content)
+            contents_to_send.append(final_content)
 
-            print(f"  - Sending Prompt from Context: {data_envelope} to Orion. . .")
+            print(f"----- All necessary content prepared. Sending Prompt to Orion. . . -----")
             response = self.client.models.generate_content(
                 model=f'{self.model_name}',
                 contents=contents_to_send,
@@ -341,29 +362,30 @@ class OrionCore:
                         final_text += part.text
                 chat_session.append(response_content)
             
-            # --- Enforce History Limit ---
-            # A "true" user message has role 'user' and contains text, distinguishing
-            # it from tool/function responses which also have the 'user' role.
-            user_message_indices = [
-                i for i, content in enumerate(chat_session) 
-                if content.role == 'user' and any(part.text for part in content.parts)
-            ]
-            print(f"  - Current Number of Exchanges: {user_message_indices}")
-            if len(user_message_indices) > self.MAX_HISTORY_EXCHANGES:
-                # The first exchange ends right before the second user message starts.
-                # We find this index to know how many items to remove from the beginning.
+            # --- Enforce History Limit (using the 'excluded_ids' list from the VDB query) ---
+            # This ensures the chat history and the VDB exclusion list stay in sync.
+            if len(excluded_ids) > self.MAX_HISTORY_EXCHANGES:
+                print(f"  - History limit reached for session '{session_id}'. Truncating...")
+
+                # 1. Trim the chat history by removing the oldest user/model exchange.
+                user_message_indices = [
+                    i for i, content in enumerate(chat_session)
+                    if content.role == 'user' and any(part.text for part in content.parts)
+                ]
                 trim_until_index = user_message_indices[1]
-                
-                # Trim the session history by removing the oldest exchange.
                 original_length = len(chat_session)
                 self.sessions[session_id] = chat_session[trim_until_index:]
                 items_removed = original_length - len(self.sessions[session_id])
-                
-                print(f"  - History limit reached. Truncated session '{session_id}', removing the oldest exchange ({items_removed} items).")
+                print(f"    - Chat history truncated, removing oldest exchange ({items_removed} items).")
+
+                # 2. Trim the VDB exclusion list by removing the oldest ID.
+                self.session_excluded_ids[session_id] = excluded_ids[1:]
+                print(f"    - VDB exclusion list truncated, removing 1 oldest ID.")
 
             token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
+            print(f"----- Chat History Length: {len(excluded_ids)} -----")
             print(f"  - Final response generated. Total tokens for exchange: {token_count}")
-            self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, vdb_result)
+            self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, json.dumps(raw_vdb_results_for_db))
             #print(chat_session)
             
             should_restart = self.restart_pending
@@ -376,7 +398,50 @@ class OrionCore:
             print(f"ERROR processing prompt for '{session_id}': {e}")
             return "I'm sorry, an internal error occurred while processing your request.", 0, False
 
+    def _format_vdb_results_for_context(self, raw_json: str, source_name: str) -> str:
+        """
+        Parses the raw JSON output from a VDB query and formats it into a clean,
+        human-readable string for the AI's context, including only essential metadata.
+        """
+        try:
+            data = json.loads(raw_json)
+            if not data.get('documents') or not data['documents'][0]:
+                return "" # No results to format
+
+            output_lines = [f"--- Context from {source_name} ---"]
+            
+            # Define which metadata keys are useful for the AI's context.
+            # Explicitly exclude bulky or irrelevant fields like 'vdb_context'.
+            essential_keys = []
+            if source_name == "Deep Memory":
+                essential_keys = ['source_table', 'source_id', 'user_name', 'timestamp', 'session_id']
+            elif source_name == "Long-Term Memory":
+                essential_keys = ['source_table', 'source_id', 'category', 'date']
+            elif source_name == "Operational Protocols":
+                essential_keys = ['source']
+            
+            for i, doc in enumerate(data['documents'][0]):
+                meta = data['metadatas'][0][i]
+                distance = data['distances'][0][i]
+
+                # Filter and format the essential metadata
+                meta_summary = ", ".join(f"{key}: {meta[key]}" for key in essential_keys if key in meta and meta[key])
+
+                output_lines.append(f"Entry {i+1} (Relevance: {1-distance:.2f}):")
+                if meta_summary:
+                    output_lines.append(f"  - Metadata: {meta_summary}")
+                output_lines.append(f"  - Content: \"{doc}\"")
+
+            return "\n".join(output_lines)
+
+        except (json.JSONDecodeError, IndexError, KeyError, TypeError):
+            # If parsing fails, return an empty string to avoid polluting the context.
+            return ""
+
     def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, attachment, token_count, function_call, vdb_context):
+        """
+        Processes a prompt using automatic function calling and archives the result.
+        """
         """Writes the complete conversational exchange to the database."""
         try:
             # --- Prepare data for archival using the high-level execute_write tool ---
@@ -400,6 +465,9 @@ class OrionCore:
                 "vdb_context": vdb_context
             }
             
+            # DEBUG: Check the length of the context string before it's sent for archival.
+            print(f"  - [DEBUG] Archiving vdb_context of length: {len(vdb_context)}")
+
             # 3. Call the high-level orchestrator to perform the synchronized write.
             result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data_payload)
             print(f" -> Archival result: {result}")

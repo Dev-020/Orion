@@ -1,9 +1,14 @@
 {
   "instructions": [
     {
-      "name": "Project_Overview.md",
+      "name": "Primary_Directive.md",
       "google_doc_id": "1_0gA9K__M5wQ_xJRzg_SxKr1oAoYbrsEP0nGKUQtOoA",
-      "last_modified_time": "2025-10-08T09:44:33.096Z"
+      "last_modified_time": "2025-10-09T16:18:12.208Z"
+    },
+    {
+      "name": "Operational_Protocols.md",
+      "google_doc_id": "1m9YfcalJSBulDK5XBy753e8hiY30Q-odv_3cj7c6WFI",
+      "last_modified_time": "2025-10-09T17:08:04.835Z"
     },
     {
       "name": "Homebrew_Compendium.md",
