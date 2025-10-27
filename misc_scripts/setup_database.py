@@ -1,7 +1,9 @@
 import sqlite3
 import os
 
-DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orion_database.sqlite')
+# Correctly locate the project root directory (two levels up from the script)
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_FILE = os.path.join(project_root, 'databases', 'default', 'orion_database.sqlite')
 
 def create_tables():
     """
@@ -19,11 +21,14 @@ def create_tables():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
-                    user_name TEXT,
+                    user_name TEXT NOT NULL,
                     timestamp INTEGER NOT NULL,
                     prompt_text TEXT,
                     response_text TEXT,
-                    attachments_metadata TEXT
+                    attachments_metadata TEXT, 
+                    token INTEGER, 
+                    function_calls JSON, 
+                    vdb_context JSON
                 )
             """)
 
@@ -31,9 +36,9 @@ def create_tables():
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_profiles (
                     user_id TEXT PRIMARY KEY,
-                    user_name TEXT,
+                    user_name TEXT NOT NULL,
                     aliases TEXT,
-                    first_seen TEXT,
+                    first_seen TEXT NOT NULL,
                     notes TEXT
                 )
             """)
@@ -42,10 +47,34 @@ def create_tables():
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS restart_state (
                     session_id TEXT PRIMARY KEY,
-                    history_blob BLOB NOT NULL
+                    history_blob BLOB NOT NULL, 
+                    excluded_ids_blob BLOB
                 )
             """)
+            
+            print("  - Creating 'long_term_memory' table...")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS long_term_memory (
+                    event_id TEXT PRIMARY KEY NOT NULL, 
+                    date TEXT NOT NULL, 
+                    title TEXT NOT NULL, 
+                    category TEXT NOT NULL, 
+                    description TEXT NOT NULL, 
+                    snippet TEXT NOT NULL
+                )               
+            """)
 
+            print("  - Creating 'pending_logs' table...")
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_logs (
+                event_id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL,
+                description TEXT NOT NULL,
+                snippet TEXT NOT NULL
+            )               
+            """)
             # Add other table creation statements here as needed in the future
             # to keep all schema definitions in one place.
 

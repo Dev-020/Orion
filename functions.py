@@ -3,6 +3,7 @@
 from git import Repo, GitCommandError
 # --- PUBLIC TOOL DEFINITION ---
 __all__ = [
+    "initialize_persona",
     "search_knowledge_base",
     "roll_dice",
     "manual_sync_instructions",
@@ -50,9 +51,33 @@ DAILY_SEARCH_QUOTA = 10000
 PROJECT_ROOT = Path(__file__).parent.resolve()
 
 # --- DATABASE CONFIGURATION ---
-DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orion_database.sqlite')
-CHROMA_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_db_store")
-COLLECTION_NAME = "orion_semantic_memory"
+DB_FILE = ""
+CHROMA_DB_PATH = ""
+COLLECTION_NAME = ""
+
+def get_db_paths(persona: str) -> dict:
+    """Returns a dictionary of database paths based on the persona."""
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'databases')
+    persona_path = os.path.join(db_path, persona)
+    
+    # Checks if the Persona Folder exist
+    if not os.path.isdir(persona_path):
+        print(f"  Error: '{persona}' directory not found at {persona_path}.")
+        return {}
+    
+    return {
+        "db_file": os.path.join(persona_path, 'orion_database.sqlite'),
+        "chroma_db_path": os.path.join(persona_path, "chroma_db_store"),
+        "collection_name": "orion_semantic_memory"
+    }
+
+def initialize_persona(persona: str):
+    """Initializes the database paths for the given persona."""
+    global DB_FILE, CHROMA_DB_PATH, COLLECTION_NAME
+    paths = get_db_paths(persona)
+    DB_FILE = paths["db_file"]
+    CHROMA_DB_PATH = paths["chroma_db_path"]
+    COLLECTION_NAME = paths["collection_name"]
 
 # --- VECTOR DATABASE ACCESS MODEL ---
 

@@ -3,7 +3,7 @@ import os
 
 # Define the path for the persistent ChromaDB database.
 # This will create a directory named 'chroma_db_store' in the project's root directory.
-db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db_store")
+db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'databases', 'default', 'chroma_db_store')
 
 print(f"Initializing ChromaDB at: {db_path}")
 

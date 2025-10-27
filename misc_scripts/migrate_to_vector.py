@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- DATABASE AND COLLECTION CONFIGURATION ---
-DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orion_database.sqlite")
-CHROMA_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db_store")
+DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'databases', 'default', 'orion_database.sqlite')
+CHROMA_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'databases', 'default', 'chroma_db_store')
 COLLECTION_NAME = "orion_semantic_memory"
 
 # --- DATA PROCESSING FUNCTIONS ---
@@ -355,12 +355,12 @@ def main():
     # --- Define all processing functions to run ---
     # To refactor only deep_memory, comment out all other functions.
     processing_functions = [
-        process_knowledge_base,
+        #process_knowledge_base,
         process_deep_memory,
         process_long_term_memory,
-        process_active_memory,
+        #process_active_memory,
         process_user_profiles,
-        process_knowledge_schema # Merged from separate script
+        #process_knowledge_schema # Merged from separate script
     ]
 
     for process_func in processing_functions:

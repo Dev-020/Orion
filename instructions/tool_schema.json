@@ -1,4 +1,14 @@
 {
+  "initialize_persona": {
+    "description": "Initializes the database paths for the given persona.",
+    "parameters": [
+      {
+        "name": "persona",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
   "search_knowledge_base": {
     "description": "Searches the knowledge base using a structured query and the low-level SQL execution function.\nThis tool has two modes: 'summary' (default) and 'full'.\n- 'summary' mode returns a list of matching items with basic info (id, name, type, source).\n- 'full' mode requires a specific 'id' and returns the complete data for that single item.\n- 'data_query' can be a dictionary (e.g., {'metadata.is_official': True}) to filter results based on the content of the 'data' JSON column.",
     "parameters": [

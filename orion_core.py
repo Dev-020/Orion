@@ -20,11 +20,12 @@ INSTRUCTIONS_FILES = [
     'Primary_Directive.md', 
     #'Homebrew_Compendium.md',
     'General_Prompt_Optimizer.md',
-    'DND_Handout.md',
+    #'DND_Handout.md',
     'master_manifest.json'
 ]
+persona = "default"
 INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
-DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orion_database.sqlite')
+DB_FILE = functions.get_db_paths(persona).get("db_file", "orion_database.sqlite")
 load_dotenv() # Load environment variables from .env file
 
 class OrionCore:
@@ -34,6 +35,9 @@ class OrionCore:
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
         self.session_excluded_ids: dict[str, list[str]] = {}
+
+        # Initialize or refresh database paths from functions module
+        functions.initialize_persona(persona)
 
         # Refreshing Core Instructions
         print("--- Syncing Core Instructions... ---")
@@ -384,6 +388,7 @@ class OrionCore:
 
             token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
             print(f"----- Chat History Length: {len(excluded_ids)} -----")
+            print(f"----- Current Excluded IDs for session {excluded_ids}. -----")
             print(f"  - Final response generated. Total tokens for exchange: {token_count}")
             self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, json.dumps(raw_vdb_results_for_db))
             #print(chat_session)
