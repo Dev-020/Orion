@@ -5,3 +5,4 @@
 orion_database.sqlite
 /misc_scripts/Gather/dataset
 /databases
+misc_scripts/Gather/best.pt

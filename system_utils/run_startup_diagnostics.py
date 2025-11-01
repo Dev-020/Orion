@@ -17,7 +17,7 @@ project_root = os.path.dirname(current_script_dir)
 # Add the project root to Python's path
 sys.path.append(project_root)
 
-import functions
+from main_utils import main_functions as functions
 
 # This function would be imported and called by orion_core.py during its boot sequence.
 # The `tools` dictionary would be passed in from the OrionCore instance to avoid circular imports.

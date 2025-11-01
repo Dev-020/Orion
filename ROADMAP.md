@@ -16,7 +16,7 @@ These represent significant architectural evolutions for the system.
     *   **Vector DB:** Will store the semantic meaning of unstructured, long-form text (homebrew rules, conversation summaries). Optimized for conceptual searches.
 *   **Key Tools:** `semantic_search`, `summarize_and_archive_history`.
 
-### **Milestone 3.6: Character Data Relational Database Migration**
+### **Milestone 3.6: [DND] Character Data Relational Database Migration**
 
 *   **Objective:** To provide a permanent, architectural solution to **Bug 1: Data Integrity Failure**. This will migrate the character data from the current, inefficient single-file JSON model (`character_sheet_raw.json`) to a robust, relational database structure.
 *   **Target Database:** This new schema will be implemented within the **SQLite database**, aligning with the "Structured Data" pillar of the Hybrid Memory Model (Milestone 3.5).
@@ -25,7 +25,7 @@ These represent significant architectural evolutions for the system.
     2.  **ETL (Extract, Transform, Load) Script:** A new, dedicated script will be developed. Triggered by `update_character_from_web()`, this script will be responsible for parsing the raw D&D Beyond JSON, transforming the data to fit our new relational schema, and loading it into the appropriate SQLite tables.
 *   **Intended Benefits:** This migration will yield powerful and efficient querying capabilities, drastically reduce the token cost of data lookups, and enforce a high standard of data integrity, permanently resolving the core issues that have plagued the current system.
 
-### **Milestone 3.7: The Campaign Chronicle System (V3 Capstone)**
+### **Milestone 3.7: [DND] The Campaign Chronicle System (V3 Capstone)**
 
 *   **Objective:** To implement the capstone feature of the V3 architecture, creating a universal, AI-driven system for tracking and understanding all campaign events. This system will serve as the primary D&D utility, unifying the functions of a combat scribe and a lore weaver into a single, intelligent chronicle.
 *   **Core Architecture:** This system is the practical application and synthesis of the preceding V3 milestones. It is fundamentally dependent on their completion.

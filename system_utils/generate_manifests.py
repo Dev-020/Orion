@@ -15,11 +15,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # --- DYNAMICALLY IMPORT THE TOOLS ---
 # This is crucial for the tool schema generation.
-import functions
+from main_utils import main_functions as functions
 
 # --- CONFIGURATION ---
 # Centralized paths for clarity and easy modification.
-DB_FILE = PROJECT_ROOT / "orion_database.sqlite"
+DB_FILE = PROJECT_ROOT / "databases" / "default" / "orion_database.sqlite"
 OUTPUT_DIR = PROJECT_ROOT / "instructions"
 
 def get_db_connection(db_file_path):
@@ -48,11 +48,11 @@ def write_json_file(filepath: Path, data: Any):
 # --- NEW SCHEMA GENERATORS ---
 
 def generate_tool_schema_json(output_dir):
-    """Generates a machine-readable schema of all available tools from functions.py."""
+    """Generates a machine-readable schema of all available tools from main_functions.py."""
     print("\nGenerating tool_schema.json...")
     schema = {}
     
-    # Use the __all__ list from functions.py as the source of truth for public tools
+    # Use the __all__ list from main_functions.py as the source of truth for public tools
     for func_name in functions.__all__:
         func = getattr(functions, func_name)
         try:
@@ -258,30 +258,70 @@ def generate_master_manifest(output_dir: Path):
         print(f"  -> ERROR: Failed to generate master_manifest.json: {e}")
 
 def main():
-    """Main function to run the entire manifest generation process."""
+    """
+    Main function to run the entire manifest generation process.
+    Each generator is wrapped in a try/except block to make the process resilient.
+    """
     # Ensure the output directory exists.
     OUTPUT_DIR.mkdir(exist_ok=True)
 
-    # --- Generate New Schemas FIRST ---
-    # Tool schema does not require a DB connection.
-    generate_tool_schema_json(OUTPUT_DIR)
+    # --- Manifest Generation ---
+    # The process is designed to be resilient. If one manifest fails, the script
+    # prints a warning and moves on to the next, ensuring that as many manifests
+    # as possible are generated.
 
+    # Attempt to generate manifests that do not require a database connection first.
+    try:
+        generate_tool_schema_json(OUTPUT_DIR)
+    except Exception as e:
+        print(f"  -> WARNING: Failed to generate tool_schema.json. Skipping. Reason: {e}")
+
+    # Establish database connection
     conn = get_db_connection(DB_FILE)
     if not conn:
+        print("\nSkipping all DB-related manifests due to connection failure.")
+        # Even if the DB fails, we should still attempt to create the master manifest.
+        try:
+            generate_master_manifest(OUTPUT_DIR)
+        except Exception as e:
+            print(f"  -> WARNING: Failed to generate master_manifest.json. Skipping. Reason: {e}")
+        
+        print("\n--- Manifest generation process finished. ---")
         return
 
+    # Proceed with DB-dependent manifests
     try:
-        # --- Generate Existing Manifests ---
-        generate_user_profile_manifest(conn, OUTPUT_DIR)
-        generate_long_term_memory_manifest(conn, OUTPUT_DIR)
-        generate_active_memory_manifest(conn, OUTPUT_DIR)
-        generate_pending_logs_json(conn, OUTPUT_DIR)
-        generate_db_schema_json(conn, OUTPUT_DIR)
-        generate_tool_schema_json(OUTPUT_DIR)
-        generate_master_manifest(OUTPUT_DIR)
+        # A list of database-dependent generator functions to iterate through.
+        db_generators = [
+            generate_user_profile_manifest,
+            generate_long_term_memory_manifest,
+            generate_active_memory_manifest,
+            generate_pending_logs_json,
+            generate_db_schema_json
+        ]
+        
+        for generator_func in db_generators:
+            try:
+                # The function name (e.g., "generate_user_profile_manifest") is used for logging.
+                generator_name = generator_func.__name__
+                generator_func(conn, OUTPUT_DIR)
+            except Exception as e:
+                print(f"  -> WARNING: Failed to run {generator_name}. Skipping. Reason: {e}")
+
     finally:
-        conn.close()
-        print("\n--- Manifest generation complete. ---")
+        # --- Finalization ---
+        # Always close the connection and generate the master list of manifests.
+        if conn:
+            conn.close()
+            print("\nDatabase connection closed.")
+        
+        # The master manifest should always be generated last.
+        try:
+            generate_master_manifest(OUTPUT_DIR)
+        except Exception as e:
+            print(f"  -> WARNING: Failed to generate master_manifest.json. Skipping. Reason: {e}")
+            
+        print("\n--- Manifest generation process finished. ---")
 
 if __name__ == "__main__":
     main()

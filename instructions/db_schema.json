@@ -1,16 +1,4 @@
 {
-  "knowledge_base": {
-    "columns": [
-      "id",
-      "type",
-      "name",
-      "source",
-      "data"
-    ],
-    "primary_key": "id",
-    "text_column": "data",
-    "vdb_id_strategy": "direct"
-  },
   "deep_memory": {
     "columns": [
       "id",
@@ -41,86 +29,11 @@
     "text_column": "notes",
     "vdb_id_strategy": "direct"
   },
-  "active_memory": {
-    "columns": [
-      "topic",
-      "prompt",
-      "ruling",
-      "status",
-      "last_modified"
-    ],
-    "primary_key": "topic",
-    "text_column": "ruling",
-    "vdb_id_strategy": "generate"
-  },
-  "pending_logs": {
-    "columns": [
-      "event_id",
-      "date",
-      "title",
-      "category",
-      "description",
-      "snippet"
-    ]
-  },
   "restart_state": {
     "columns": [
       "session_id",
       "history_blob",
       "excluded_ids_blob"
-    ]
-  },
-  "instruction_proposals": {
-    "columns": [
-      "proposal_name",
-      "file_path",
-      "new_content",
-      "diff_text",
-      "status",
-      "proposal_timestamp",
-      "resolution_timestamp"
-    ],
-    "primary_key": "proposal_name",
-    "text_column": "diff_text",
-    "vdb_id_strategy": "generate"
-  },
-  "character_resources": {
-    "columns": [
-      "resource_id",
-      "user_id",
-      "resource_name",
-      "current_value",
-      "max_value",
-      "last_updated"
-    ]
-  },
-  "character_status": {
-    "columns": [
-      "status_id",
-      "user_id",
-      "effect_name",
-      "effect_details",
-      "duration_in_rounds",
-      "timestamp"
-    ]
-  },
-  "knowledge_schema": {
-    "columns": [
-      "id",
-      "type",
-      "path",
-      "count",
-      "data_type"
-    ],
-    "primary_key": "id",
-    "text_column": "path",
-    "vdb_id_strategy": "direct"
-  },
-  "diagnostic_test_table": {
-    "columns": [
-      "id",
-      "data",
-      "timestamp"
     ]
   },
   "long_term_memory": {
@@ -135,5 +48,15 @@
     "primary_key": "event_id",
     "text_column": "description",
     "vdb_id_strategy": "direct"
+  },
+  "pending_logs": {
+    "columns": [
+      "event_id",
+      "date",
+      "title",
+      "category",
+      "description",
+      "snippet"
+    ]
   }
 }

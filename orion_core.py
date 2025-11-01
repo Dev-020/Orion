@@ -2,16 +2,18 @@
 import importlib
 import os
 import sqlite3
+import pkgutil
 from datetime import datetime, timezone
 import sys
 from google import genai
 from google.genai import types
-import functions
 import io
 from dotenv import load_dotenv
 import json
 import pickle
+from main_utils import main_functions as functions
 from system_utils import run_startup_diagnostics, generate_manifests
+
 
 # This single class now manages everything: state, sessions, and core logic.
 
@@ -23,19 +25,21 @@ INSTRUCTIONS_FILES = [
     #'DND_Handout.md',
     'master_manifest.json'
 ]
-persona = "default"
+
+# --- Persona Configuration ---
+load_dotenv() # Load environment variables from .env file for other modules
+
+# --- Paths ---
 INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
-DB_FILE = functions.get_db_paths(persona).get("db_file", "orion_database.sqlite")
-load_dotenv() # Load environment variables from .env file
 
 class OrionCore:
     
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, model_name: str = "gemini-2.5-flash", persona: str = "default"):
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
         self.session_excluded_ids: dict[str, list[str]] = {}
-
+        self.persona = persona
         # Initialize or refresh database paths from functions module
         functions.initialize_persona(persona)
 
@@ -89,16 +93,33 @@ class OrionCore:
 
     def _load_tools(self) -> list:
         """
-        Dynamically loads only the tools explicitly defined in the `__all__`
-        list within the 'functions' module. This is a robust and safe method
-        for tool discovery.
+        Dynamically loads tools from the 'main_utils' package based on the active persona.
+        It loads all tools from 'main_utils.main_functions' and persona-specific tools
+        (e.g., 'main_utils.dnd_functions') if they exist.
         """
-        if hasattr(functions, '__all__'):
-            print(f"--- Loading {len(functions.__all__)} tools from functions.__all__ ---")
-            return [getattr(functions, func_name) for func_name in functions.__all__]
-        else:
-            print("WARNING: 'functions.py' does not define __all__. No tools will be loaded.")
-            return []
+        loaded_tools = []
+        # Always load main tools from main_functions
+        try:
+            if hasattr(functions, '__all__'):
+                print(f"--- Loading {len(functions.__all__)} main tools from main_functions.py ---")
+                for func_name in functions.__all__:
+                    loaded_tools.append(getattr(functions, func_name))
+        except Exception as e:
+            print(f"WARNING: Could not import main functions: {e}")
+
+        # Load persona-specific tools if the persona is not 'default'
+        if self.persona != "default":
+            persona_module_name = f"main_utils.{self.persona}_functions"
+            try:
+                persona_module = importlib.import_module(persona_module_name)
+                if hasattr(persona_module, '__all__'):
+                    print(f"--- Loading {len(persona_module.__all__)} tools from {persona_module_name} ---")
+                    for func_name in persona_module.__all__:
+                        loaded_tools.append(getattr(persona_module, func_name))
+            except ImportError:
+                print(f"--- No specific tools module found for persona '{self.persona}'. Loading main tools only. ---")
+        
+        return loaded_tools
 
     def _get_session(self, session_id: str, history: list = []) -> list:
         """Retrieves an existing chat session or creates a new one."""
@@ -119,7 +140,11 @@ class OrionCore:
         print("---! HOT-SWAP INSTRUCTIONS TRIGGERED !---")
         # --- NEW: Reload the tools first ---
         try:
-            importlib.reload(functions) # Force Python to re-read functions.py
+            # Reload all modules within the 'main_utils' package
+            for loader, modname, is_pkg in pkgutil.walk_packages(path=functions.__path__, prefix=functions.__name__ + '.'):
+                if modname in sys.modules:
+                    importlib.reload(sys.modules[modname])
+
             self.tools = self._load_tools() # Re-run our tool discovery
             self.tools.append(self.trigger_instruction_refresh) # Adds the tools found in the same file
             print("  - Tools have been successfully reloaded.")
@@ -140,7 +165,7 @@ class OrionCore:
         """Serializes the comprehensive history of all active sessions to the database."""
         print("--- Saving session states for system restart... ---")
         try:
-            with sqlite3.connect(DB_FILE) as conn:
+            with sqlite3.connect(functions.config.DB_FILE) as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM restart_state") # Clear any old state
                 
@@ -165,7 +190,7 @@ class OrionCore:
     def _load_state_on_restart(self) -> bool:
         """Deserializes session histories from the database and rebuilds sessions."""
         try:
-            with sqlite3.connect(DB_FILE) as conn:
+            with sqlite3.connect(functions.config.DB_FILE) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT session_id, history_blob, excluded_ids_blob FROM restart_state")
                 rows = cursor.fetchall()
@@ -189,7 +214,7 @@ class OrionCore:
             print(f"  - ERROR: Failed to load restart state: {e}. Starting with a clean slate.")
             # Attempt to clean up a potentially corrupted table
             try:
-                with sqlite3.connect(DB_FILE) as conn:
+                with sqlite3.connect(functions.config.DB_FILE) as conn:
                     conn.execute("DELETE FROM restart_state")
                     conn.commit()
             except Exception as cleanup_e:
@@ -213,7 +238,6 @@ class OrionCore:
             # --- CONTEXT INJECTION CONTROL ---
             # Automatic Past-Memory Recall to provide additional context on-demand based on the User Prompt.
             # These recalls will not be saved to the chat history.
-            vdb_result = ""
             vdb_content = None
             excluded_ids = self.session_excluded_ids.get(session_id, [])
             
@@ -222,8 +246,8 @@ class OrionCore:
             if excluded_ids:
                 deep_memory_where = {"$and": [
                     {"source_table": "deep_memory"},
-                    {"id": {"$nin": excluded_ids}},
-                    #{"token": {"$lte": 190000}}
+                    {"source_id": {"$nin": excluded_ids}},
+                    {"session_id": session_id}
                 ]}
 
             deep_memory_results_raw = functions.execute_vdb_read(
@@ -254,12 +278,15 @@ class OrionCore:
             # The formatted string for the AI's context
             formatted_vdb_context = f"{formatted_deep_mem}\n{formatted_long_term}\n{formatted_op_protocol}".strip()
 
-            # The raw JSON to be archived in the database for future analysis and compression
-            raw_vdb_results_for_db = {
-                "deep_memory": json.loads(deep_memory_results_raw),
-                "long_term_memory": json.loads(long_term_results_raw),
-                "operational_protocols": json.loads(operational_protocols_results_raw)
-            }
+            # --- REFACTORED: Store by Reference (ID) instead of by Value ---
+            # Extract only the source_ids from the VDB results to be archived.
+            # This prevents the recursive data explosion.
+            context_ids_for_db = []
+            for raw_result in [deep_memory_results_raw, long_term_results_raw, operational_protocols_results_raw]:
+                if raw_result:
+                    result_data = json.loads(raw_result)
+                    if result_data.get('ids') and result_data['ids'][0]:
+                        context_ids_for_db.extend(result_data['ids'][0])
 
             vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
             vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response)) if vdb_response else None
@@ -390,7 +417,7 @@ class OrionCore:
             print(f"----- Chat History Length: {len(excluded_ids)} -----")
             print(f"----- Current Excluded IDs for session {excluded_ids}. -----")
             print(f"  - Final response generated. Total tokens for exchange: {token_count}")
-            self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, json.dumps(raw_vdb_results_for_db))
+            self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, json.dumps(context_ids_for_db))
             #print(chat_session)
             
             should_restart = self.restart_pending
@@ -470,8 +497,7 @@ class OrionCore:
                 "vdb_context": vdb_context
             }
             
-            # DEBUG: Check the length of the context string before it's sent for archival.
-            print(f"  - [DEBUG] Archiving vdb_context of length: {len(vdb_context)}")
+            print(f"  - [DEBUG] Archiving exchange to deep_memory. Context used: {vdb_context}")
 
             # 3. Call the high-level orchestrator to perform the synchronized write.
             result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data_payload)

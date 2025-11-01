@@ -6,13 +6,14 @@ import asyncio
 from dotenv import load_dotenv
 from orion_core import OrionCore
 from discord.ext import commands
-import functions
 
 # All genai and file processing (fitz) imports are now removed.
 
 # Load environment variables
 load_dotenv()
 MAX_TEXT_FILE_SIZE = 51200  # 50 * 1024 bytes
+persona = os.getenv("ORION_PERSONA", "default")
+print(f"--- Bot starting with Persona: {persona} ---")
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -22,10 +23,12 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # --- Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-bot = discord.Bot(intents=intents)
+bot = discord.Bot(intents=intents, debug_guilds=[os.getenv("DISCORD_GUILD_ID")] if os.getenv("DISCORD_GUILD_ID") else None)
 
 # --- The single, unified instance of Orion's "Brain" ---
-core = OrionCore()
+core = OrionCore(persona=persona) 
+# Attach the core to the bot instance so cogs can access it
+bot.core = core
 
 # --- Security Check (is_owner) remains the same ---
 def is_owner():
@@ -41,191 +44,10 @@ async def on_ready():
     print(f"--- {bot.user} has connected to Discord! ---")
     print(f"--- Operating on {len(bot.guilds)} servers. ---")
 
-# --- Command: /lookup (New) ---
-@bot.command(name="lookup", description="Performs a targeted search of Orion's knowledge base.")
-async def lookup(
-    ctx: discord.ApplicationContext,
-    query: discord.Option(str, "A general search term for a summary list (e.g., 'fireball', 'eldritch blast', 'divine smite').", required=False, default=None),
-    id: discord.Option(str, "The specific ID of an item to get its full details.", required=False, default=None),
-    item_type: discord.Option(str, "Filter by a specific type (valid types: 'spells', 'misc', 'bestiary', 'adventure', 'book').", required=False, default=None),
-    source: discord.Option(str, "Filter by a specific source (e.g., 'PHB', 'DMG', 'XGE', 'XPHB').", required=False, default=None),
-    max_results: discord.Option(int, "The maximum number of results to return. (default is 25)", default=25)
-):
-    """
-    Executes a knowledge base search, then passes the result to Orion for formatting.
-    """
-    await ctx.defer()
-
-    if not query and not id:
-        await ctx.respond("Please provide either a `query` for a summary search or an `id` for a detailed lookup.", ephemeral=True)
-        return
-
-    # 1. Directly execute the search using the trusted function
-    search_result = None
-    fallback_notification = ""
-    if id:
-        # An 'id' was provided, so we perform a 'full' lookup
-        id_search_result = functions.search_knowledge_base(id=id, mode='full')
-        # Check if the 'full' lookup failed. A successful result will be a JSON string.
-        # A failed lookup returns a plain text error/info message.
-        is_json = id_search_result.strip().startswith('{') or id_search_result.strip().startswith('[')
-        if not is_json and query:
-            # The ID lookup failed, but a query was also provided. Fall back to it.
-            print(f"-> ID '{id}' not found. Falling back to query: '{query}'")
-            fallback_notification = f"[System Note: The initial lookup for id='{id}' failed. The system has fallen back to a summary search for the query='{query}'. Inform the user about this fallback before presenting the results.]\n\n"
-        else:
-            search_result = id_search_result
-
-    if query and search_result is None:
-        # A 'query' was provided and either no 'id' was given or the 'id' fallback was triggered.
-        search_result = functions.search_knowledge_base(
-            query=query, item_type=item_type, source=source, mode='summary', max_results=max_results
-        )
-
-    # 2. Construct the prompt for Orion
-    prompt_for_orion = f"{fallback_notification}A user performed a direct knowledge base lookup.\nThe raw JSON result is: {search_result}\n\nPlease present this information to the user in a clear, well-formatted, and easy-to-read manner. If it's a list of search results, make it scannable and include the `id` for each item. If it's a single detailed entry, structure it logically with headers."
-
-    # 3. Get the session ID
-    if isinstance(ctx.channel, discord.Thread):
-        session_id = f"discord-thread-{ctx.channel.parent.id}-{ctx.channel.id}"
-    elif ctx.guild:
-        session_id = f"discord-channel-{ctx.channel.id}"
-    else: # DM
-        session_id = f"discord-dm-{ctx.author.id}"
-
-    # 4. Process the prompt through the core
-    response_text, token_count, _ = await asyncio.to_thread(
-        core.process_prompt, session_id=session_id, user_prompt=prompt_for_orion, file_check=[],
-        user_id=str(ctx.author.id), user_name=ctx.author.name
-    )
-    await ctx.respond(f"{response_text}\n\n*(`Tokens: {token_count}`)*")
-
-# --- Command: /resource (New) ---
-@bot.command(name="resource", description="Manage one of your character's resources (e.g., HP, spell slots).")
-async def resource(
-    ctx: discord.ApplicationContext,
-    operation: discord.Option(str, "Choose the operation to perform.", choices=['set', 'add', 'subtract', 'create', 'view']),
-    resource_name: discord.Option(str, "The name of the resource (e.g., 'HP'). Not needed to view all.", required=False, default=None),
-    value: discord.Option(int, "The value to apply to the resource's current value.", required=False, default=None),
-    max_value: discord.Option(int, "The value to apply to the resource's maximum value.", required=False, default=None)
-):
-    """
-    Directly manages a character's resource and asks Orion to format the result.
-    """
-    await ctx.defer()
-
-    if operation != 'view' and not resource_name:
-        await ctx.respond(f"A `resource_name` is required for the '{operation}' operation.", ephemeral=True)
-        return
-
-    if operation == 'create' and value is None:
-        await ctx.respond(f"A `value` is required for the 'create' operation.", ephemeral=True)
-        return
-
-    # 1. Execute the resource management function directly
-    result = functions.manage_character_resource(
-        user_id=str(ctx.author.id),
-        operation=operation,
-        resource_name=resource_name,
-        value=value,
-        max_value=max_value
-    )
-
-    # 2. Construct the prompt for Orion
-    prompt_for_orion = f"A user just managed their character resource using the command `/resource`.\nThe raw result is: '{result}'\n\nPlease present this result to the user in a clear and concise confirmation message. Add narrative flair where appropriate (e.g., for taking damage or healing)."
-
-    # 3. Get the session ID
-    if isinstance(ctx.channel, discord.Thread):
-        session_id = f"discord-thread-{ctx.channel.parent.id}-{ctx.channel.id}"
-    elif ctx.guild:
-        session_id = f"discord-channel-{ctx.channel.id}"
-    else: # DM
-        session_id = f"discord-dm-{ctx.author.id}"
-
-    # 4. Process the prompt through the core
-    response_text, token_count, _ = await asyncio.to_thread(
-        core.process_prompt, session_id=session_id, user_prompt=prompt_for_orion, file_check=[],
-        user_id=str(ctx.author.id), user_name=ctx.author.name
-    )
-    await ctx.respond(f"{response_text}\n\n*(`Tokens: {token_count}`)*")
-
-# --- Command: /status (New) ---
-@bot.command(name="status", description="Manage a temporary status effect on your character.")
-async def status(
-    ctx: discord.ApplicationContext,
-    operation: discord.Option(str, "Choose whether to add, remove, update, or view an effect.", choices=['add', 'remove', 'update', 'view']),
-    effect_name: discord.Option(str, "The name of the status effect. Not needed to view all.", required=False, default=None),
-    details: discord.Option(str, "Add descriptive details for the status effect.", required=False, default=None),
-    duration: discord.Option(int, "Set a duration in rounds for the effect.", required=False, default=None)
-):
-    """
-    Directly manages a character's status effect and asks Orion to format the result.
-    """
-    await ctx.defer()
-
-    if operation != 'view' and not effect_name:
-        await ctx.respond(f"An `effect_name` is required for the '{operation}' operation.", ephemeral=True)
-        return
-
-    # 1. Execute the status management function directly
-    result = functions.manage_character_status(
-        user_id=str(ctx.author.id),
-        operation=operation,
-        effect_name=effect_name,
-        details=details,
-        duration=duration
-    )
-
-    # 2. Construct the prompt for Orion
-    prompt_for_orion = f"A user just managed their character status using the command `/status`.\nThe raw result is: '{result}'\n\nPlease present this result to the user as a clear and concise confirmation message."
-
-    # 3. Process the prompt through the core (session ID is not strictly needed but good for consistency)
-    session_id = f"discord-dm-{ctx.author.id}" # Status effects are personal, so a DM session is a safe default
-    response_text, token_count, _ = await asyncio.to_thread(
-        core.process_prompt, session_id=session_id, user_prompt=prompt_for_orion, file_check=[],
-        user_id=str(ctx.author.id), user_name=ctx.author.name
-    )
-    await ctx.respond(f"{response_text}\n\n*(`Tokens: {token_count}`)*")
-
-# --- Command: /dice_roll (New) ---
-@bot.command(name="dice_roll", description="Rolls dice and asks Orion to interpret the result.")
-async def roll(
-    ctx: discord.ApplicationContext,
-    dice: str,
-    reason: discord.Option(str, "The reason for this roll (e.g., 'to hit an goblin')", required=False, default=None)
-):
-    """
-    Executes a dice roll, then passes the structured result to Orion for formatting.
-    """
-    await ctx.defer() # Acknowledge the command immediately
-
-    # 1. Execute the dice roll using the trusted function
-    roll_result = functions.roll_dice(dice)
-
-    # 2. Construct the prompt for Orion
-    prompt_for_orion = f"A user just performed a direct dice roll with the command `/dice_roll {dice}`."
-    if reason:
-        prompt_for_orion += f" The stated reason for the roll was: '{reason}'."
-    prompt_for_orion += f"\n\nThe raw result of the roll is this JSON object: {roll_result}\n\nPlease present this result to the user in a clear and engaging D&D-style format. If the roll was a critical success or failure on a d20, add appropriate narrative flair."
-
-    # 3. Get the session ID to maintain context
-    if isinstance(ctx.channel, discord.Thread):
-        session_id = f"discord-thread-{ctx.channel.parent.id}-{ctx.channel.id}"
-    elif ctx.guild:
-        session_id = f"discord-channel-{ctx.channel.id}"
-    else: # DM
-        session_id = f"discord-dm-{ctx.author.id}"
-
-    # 4. Process the prompt through the core
-    response_text, token_count, _ = await asyncio.to_thread(
-        core.process_prompt,
-        session_id=session_id,
-        user_prompt=prompt_for_orion,
-        file_check=[],
-        user_id=str(ctx.author.id),
-        user_name=ctx.author.name
-    )
-    await ctx.respond(f"{response_text}\n\n*(`Tokens: {token_count}`)*")
+# --- Persona-Specific Commands ---
+if persona == "dnd":
+    print("--- Loading D&D commands cog... ---")
+    bot.load_extension("cogs.dnd_commands")
 
 # --- Event: on_message (Final Refactored Logic) ---
 @bot.event
@@ -341,6 +163,13 @@ async def shutdown(
 
 if __name__ == "__main__":
     if BOT_TOKEN:
-        bot.run(BOT_TOKEN)
+        try:
+            print("--- Starting Bot ---")
+            bot.run(BOT_TOKEN)
+        except KeyboardInterrupt:
+            # When Ctrl+C is pressed, bot.run() handles the graceful shutdown.
+            # This block is here to catch the interrupt and prevent an ugly traceback,
+            # allowing the program to exit cleanly after bot.run() finishes its cleanup.
+            print("\n--- Ctrl+C detected. Shutting down gracefully. ---")
     else:
         print("FATAL ERROR: DISCORD_BOT_TOKEN not found in .env file.")

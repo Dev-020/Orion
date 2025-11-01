@@ -9,63 +9,6 @@
       }
     ]
   },
-  "search_knowledge_base": {
-    "description": "Searches the knowledge base using a structured query and the low-level SQL execution function.\nThis tool has two modes: 'summary' (default) and 'full'.\n- 'summary' mode returns a list of matching items with basic info (id, name, type, source).\n- 'full' mode requires a specific 'id' and returns the complete data for that single item.\n- 'data_query' can be a dictionary (e.g., {'metadata.is_official': True}) to filter results based on the content of the 'data' JSON column.",
-    "parameters": [
-      {
-        "name": "query",
-        "type": "typing.Optional[str]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "id",
-        "type": "typing.Optional[str]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "item_type",
-        "type": "typing.Optional[str]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "source",
-        "type": "typing.Optional[str]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "data_query",
-        "type": "typing.Optional[dict]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "mode",
-        "type": "<class 'str'>",
-        "required": false,
-        "default": "summary"
-      },
-      {
-        "name": "max_results",
-        "type": "<class 'int'>",
-        "required": false,
-        "default": 25
-      }
-    ]
-  },
-  "roll_dice": {
-    "description": "Rolls one or more dice based on standard D&D notation (e.g., '1d20', '3d6+4, 1d8', '2d8-1 and 1d4').\nReturns a JSON object with a list of individual roll results and a grand total.",
-    "parameters": [
-      {
-        "name": "dice_notation",
-        "type": "<class 'str'>",
-        "required": true
-      }
-    ]
-  },
   "manual_sync_instructions": {
     "description": "Triggers a manual synchronization of the AI's core instruction files.\nSECURITY: This is a restricted tool.",
     "parameters": [
@@ -85,10 +28,6 @@
         "required": true
       }
     ]
-  },
-  "update_character_from_web": {
-    "description": "Downloads the character sheet JSON from D&D Beyond and generates its schema.",
-    "parameters": []
   },
   "search_dnd_rules": {
     "description": "Performs a web search using Google's Custom Search API.",
@@ -111,16 +50,6 @@
     "parameters": [
       {
         "name": "url",
-        "type": "<class 'str'>",
-        "required": true
-      }
-    ]
-  },
-  "lookup_character_data": {
-    "description": "Retrieves a specific piece of data from the local character sheet file.",
-    "parameters": [
-      {
-        "name": "query",
         "type": "<class 'str'>",
         "required": true
       }
@@ -292,72 +221,6 @@
       {
         "name": "where",
         "type": "typing.Optional[dict]",
-        "required": false,
-        "default": null
-      }
-    ]
-  },
-  "manage_character_resource": {
-    "description": "Manages a character's resource. Operations: 'set', 'add', 'subtract', 'create', 'view'.\n'create' is used to add a new resource, requires a 'value', and can optionally take a 'max_value'.\n'set' overwrites the current value and can optionally update the max_value.\n'add'/'subtract' modifies the current_value (using 'value') and/or the max_value (using 'max_value').\n'view' returns the current and max value of a specific resource, or all resources if no name is provided.",
-    "parameters": [
-      {
-        "name": "user_id",
-        "type": "<class 'str'>",
-        "required": true
-      },
-      {
-        "name": "operation",
-        "type": "<class 'str'>",
-        "required": true
-      },
-      {
-        "name": "resource_name",
-        "type": "typing.Optional[str]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "value",
-        "type": "typing.Optional[int]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "max_value",
-        "type": "typing.Optional[int]",
-        "required": false,
-        "default": null
-      }
-    ]
-  },
-  "manage_character_status": {
-    "description": "Manages a character's temporary status effects. Operations: 'add', 'remove', 'update', 'view'.\n'add' applies a new status effect. 'details' and 'duration' are optional.\n'remove' deletes a status effect from the table based on its name.\n'update' modifies the details or duration of an existing status effect.\n'view' returns the details of a specific effect, or all effects if no name is provided.",
-    "parameters": [
-      {
-        "name": "user_id",
-        "type": "<class 'str'>",
-        "required": true
-      },
-      {
-        "name": "operation",
-        "type": "<class 'str'>",
-        "required": true
-      },
-      {
-        "name": "effect_name",
-        "type": "typing.Optional[str]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "details",
-        "type": "typing.Optional[str]",
-        "required": false,
-        "default": null
-      },
-      {
-        "name": "duration",
-        "type": "typing.Optional[int]",
         "required": false,
         "default": null
       }

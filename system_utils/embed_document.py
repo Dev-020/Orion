@@ -10,7 +10,7 @@ import chromadb
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CHROMA_DB_PATH = PROJECT_ROOT / "chroma_db_store"
+CHROMA_DB_PATH = PROJECT_ROOT / "databases" / "dnd" / "chroma_db_store"
 COLLECTION_NAME = "orion_semantic_memory"
 
 # --- CORE FUNCTIONS ---
