@@ -6,11 +6,11 @@ import keyboard
 import time
 import os
 
-# --- Configuration ---
-WINDOW_TITLE = "Blue Protocol: Star Resonance"  # Exact title of the game window
-SAVE_FOLDER = "dataset/images/baru_ore"              # Folder to save screenshots (will be created if needed)
-FILENAME_PREFIX = "baru_ore"                # Base name for your files
-HOTKEY = "'"                     # The key combination to trigger a screenshot
+# --- Configuration ---s
+WINDOW_TITLE = "Blue Protocol: Star Resonance"      # Exact title of the game window
+FILENAME_PREFIX = "raw_ore_of_ruby"                        # Base name for your files
+SAVE_FOLDER = f"dataset/images/{FILENAME_PREFIX}"             # Folder to save screenshots (will be created if needed)
+HOTKEY = "'"                                        # The key combination to trigger a screenshot
 
 # --- Global variable for the counter ---
 screenshot_counter = 1
@@ -78,9 +78,6 @@ def take_screenshot():
     except Exception as e:
         print(f"Error taking or saving screenshot: {e}")
         print("Make sure the window is not minimized when taking the screenshot.")
-
-# --- (Rest of the script remains the same) ---
-
 
 # --- Main execution ---
 if __name__ == "__main__":
