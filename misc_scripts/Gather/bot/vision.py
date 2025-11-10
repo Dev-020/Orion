@@ -271,6 +271,13 @@ class VisionThread(QThread):
                 
                 # Emit the QImage and the text
                 self.update_debug_frame_signal.emit(q_image, status_text)
+                
+                # --- [FIX] ---
+                # Add a 1ms Qt-aware sleep. This yields control back
+                # to the Qt event loop, preventing this thread from
+                # starving the main loop and causing a deadlock.
+                self.msleep(1)
+                # --- [END FIX] ---
 
                 # --- [FIX 4] ---
                 # REMOVE the print statement! This is the cause of the deadlock.

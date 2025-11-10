@@ -14,14 +14,13 @@ import pickle
 from main_utils import main_functions as functions
 from system_utils import run_startup_diagnostics, generate_manifests
 
-
 # This single class now manages everything: state, sessions, and core logic.
 
 # Define instruction files for clarity
 INSTRUCTIONS_FILES = [
     'Primary_Directive.md', 
     #'Homebrew_Compendium.md',
-    'General_Prompt_Optimizer.md',
+    #'General_Prompt_Optimizer.md',
     #'DND_Handout.md',
     'master_manifest.json'
 ]
@@ -38,7 +37,7 @@ class OrionCore:
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
-        self.session_excluded_ids: dict[str, list[str]] = {}
+        #self.session_excluded_ids: dict[str, list[str]] = {}
         self.persona = persona
         # Initialize or refresh database paths from functions module
         functions.initialize_persona(persona)
@@ -172,12 +171,12 @@ class OrionCore:
                 records_to_save = []
                 for session_id, history in self.sessions.items():
                     history_blob = pickle.dumps(history)
-                    excluded_ids_list = self.session_excluded_ids.get(session_id, [])
-                    excluded_ids_blob = pickle.dumps(excluded_ids_list)
-                    records_to_save.append((session_id, history_blob, excluded_ids_blob))
+                    #excluded_ids_list = self.session_excluded_ids.get(session_id, [])
+                    #excluded_ids_blob = pickle.dumps(excluded_ids_list)
+                    records_to_save.append((session_id, history_blob))
                 
                 cursor.executemany(
-                    "INSERT INTO restart_state (session_id, history_blob, excluded_ids_blob) VALUES (?, ?, ?)",
+                    "INSERT INTO restart_state (session_id, history_blob) VALUES (?, ?)",
                     records_to_save
                 )
                 conn.commit()
@@ -192,19 +191,18 @@ class OrionCore:
         try:
             with sqlite3.connect(functions.config.DB_FILE) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT session_id, history_blob, excluded_ids_blob FROM restart_state")
+                # Note the simpler SQL query
+                cursor.execute("SELECT session_id, history_blob FROM restart_state")
                 rows = cursor.fetchall()
                 if not rows:
                     return False # No state to load
 
                 print("--- Restart state detected in database. Loading sessions... ---")
                 self.sessions = {}
-                self.session_excluded_ids = {}
-                for session_id, history_blob, excluded_ids_blob in rows:
+                # self.session_excluded_ids is gone
+                for session_id, history_blob in rows:
                     history = pickle.loads(history_blob)
                     self._get_session(session_id, history=history)
-                    if excluded_ids_blob:
-                        self.session_excluded_ids[session_id] = pickle.loads(excluded_ids_blob)
 
                 cursor.execute("DELETE FROM restart_state") # Clean up the state table
                 conn.commit()
@@ -239,7 +237,13 @@ class OrionCore:
             # Automatic Past-Memory Recall to provide additional context on-demand based on the User Prompt.
             # These recalls will not be saved to the chat history.
             vdb_content = None
-            excluded_ids = self.session_excluded_ids.get(session_id, [])
+            
+            # --- MODIFICATION: Dynamically build excluded_ids from session ---
+            excluded_ids = []
+            for exchange in chat_session:
+                if exchange.get("db_id"):
+                    excluded_ids.append(exchange["db_id"])
+            # --- END OF MODIFICATION ---
             
             # Query 1: Deep Memory (with token limit)
             deep_memory_where = {"source_table": "deep_memory"}
@@ -331,7 +335,16 @@ class OrionCore:
             final_content=types.UserContent(parts=final_prompt)
 
             # Sending User Content to Orion
-            contents_to_send = chat_session
+            # --- MODIFICATION: "Unroll" new ExchangeDict structure into flat list ---
+            contents_to_send = []
+            for exchange in chat_session:
+                contents_to_send.append(exchange["user_content"])
+                if exchange.get("tool_calls"):
+                    contents_to_send.extend(exchange["tool_calls"])
+                if exchange.get("model_content"):
+                    contents_to_send.append(exchange["model_content"])
+            # --- END OF MODIFICATION ---
+            
             if vdb_content:
                 contents_to_send.append(vdb_content)
             contents_to_send.append(final_content)
@@ -347,17 +360,13 @@ class OrionCore:
                         types.SafetySetting(
                             category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
                             threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
-
                         )
                     ]
                 )
             )
             
             # --- Append to Chat History ---
-            # 1. Append the user's content
-            chat_session.append(final_content)
-            
-            # 2. Isolate and append only the new tool calls and responses from this turn
+            # 1. Isolate only the new tool calls and responses from this turn
             new_tool_turns = []
             if response.automatic_function_calling_history:
                 # First, filter the API's history to *only* include tool-related turns.
@@ -367,20 +376,17 @@ class OrionCore:
                 ]
 
                 # Second, find the tool-related turns already in our session history.
-                previous_tool_turns_in_session = [
-                    content for content in chat_session 
-                    if any(part.function_call or part.function_response for part in content.parts)
-                ]
+                previous_tool_turn_count = 0
+                for exchange in chat_session: # chat_session is our list[ExchangeDict]
+                    if exchange.get("tool_calls"):
+                        previous_tool_turn_count += len(exchange["tool_calls"])
                 
                 # The new tool turns are the ones at the end of the filtered API history.
-                new_tool_turns = all_tool_turns_from_api[len(previous_tool_turns_in_session):]
-                
-                # Extend the session with only the new tool turns.
-                #print(new_tool_turns)
-                chat_session.extend(new_tool_turns)
+                new_tool_turns = all_tool_turns_from_api[previous_tool_turn_count:]
 
-            # 3. Append the model's final text response
+            # 2. Get the model's final text response and token count
             response_content = response.candidates[0].content
+            token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
             final_text = ""
             if not response_content:
                 print(response)
@@ -391,33 +397,47 @@ class OrionCore:
                 for part in response_content.parts:
                     if part.text:
                         final_text += part.text
-                chat_session.append(response_content)
             
-            # --- Enforce History Limit (using the 'excluded_ids' list from the VDB query) ---
-            # This ensures the chat history and the VDB exclusion list stay in sync.
-            if len(excluded_ids) > self.MAX_HISTORY_EXCHANGES:
-                print(f"  - History limit reached for session '{session_id}'. Truncating...")
+            # 3. Archive the exchange and get its new DB ID
+            # (We will modify _archive_exchange_to_db to return the ID)
+            new_db_id = self._archive_exchange_to_db(
+                session_id,
+                user_id,
+                user_name,
+                user_prompt,
+                final_text, 
+                attachments_for_db,
+                token_count,
+                new_tool_turns,
+                json.dumps(context_ids_for_db)
+            )
 
-                # 1. Trim the chat history by removing the oldest user/model exchange.
-                user_message_indices = [
-                    i for i, content in enumerate(chat_session)
-                    if content.role == 'user' and any(part.text for part in content.parts)
-                ]
-                trim_until_index = user_message_indices[1]
-                original_length = len(chat_session)
-                self.sessions[session_id] = chat_session[trim_until_index:]
-                items_removed = original_length - len(self.sessions[session_id])
-                print(f"    - Chat history truncated, removing oldest exchange ({items_removed} items).")
+            # 4. Create the new ExchangeDict
+            new_exchange = {
+                "user_content": final_content,
+                "tool_calls": new_tool_turns,
+                "model_content": response_content,
+                "db_id": new_db_id, # Store the new ID
+                "token_count": token_count # <-- ADD THIS LINE
+            }
+            
+            # 5. Append the single new exchange to our session
+            chat_session.append(new_exchange)
+            
+            # --- Enforce History Limit ---
+            # --- MODIFICATION: Updated to use new unified function ---
+            total_exchanges = len(chat_session)
+            if total_exchanges > self.MAX_HISTORY_EXCHANGES:
+                count_to_remove = 5 # Number of oldest exchanges to remove
+                print(f"  - History limit reached. Truncating {count_to_remove} oldest exchange(s)...")
+                # Calls the new function with index=0
+                self.manage_session_history(session_id, count=count_to_remove, index=0)
+            # --- END OF MODIFICATION ---
 
-                # 2. Trim the VDB exclusion list by removing the oldest ID.
-                self.session_excluded_ids[session_id] = excluded_ids[1:]
-                print(f"    - VDB exclusion list truncated, removing 1 oldest ID.")
-
-            token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
             print(f"----- Chat History Length: {len(excluded_ids)} -----")
             print(f"----- Current Excluded IDs for session {excluded_ids}. -----")
             print(f"  - Final response generated. Total tokens for exchange: {token_count}")
-            self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, json.dumps(context_ids_for_db))
+            #self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, json.dumps(context_ids_for_db))
             #print(chat_session)
             
             should_restart = self.restart_pending
@@ -508,13 +528,55 @@ class OrionCore:
                 latest_id_data = json.loads(latest_id_result)
                 if latest_id_data:
                     newest_id = str(latest_id_data[0]['id'])
-                    self.session_excluded_ids.setdefault(session_id, []).append(newest_id)
-                    print(f"  - Updated session '{session_id}' exclusion list with new ID: {newest_id}")
+                    print(f"  - Returning new DB ID for session '{session_id}': {newest_id}")
+                    return newest_id # <-- MODIFICATION
+            
+            return None # <-- MODIFICATION
 
         except Exception as e:
             print(f"ERROR: An unexpected error occurred during archival for user {user_id}: {e}")
+            return None # <-- MODIFICATION
 
+    # --- MODIFICATION: Replaced with new unified function as per user spec ---
+    def manage_session_history(self, session_id: str, count: int, index: int = 0):
+        """
+        Manages the active chat session history using count and index.
+        - Deletes 'count' items starting from 'index'.
+        - If 'index' is 0, it deletes the 'count' oldest.
+        - If 'count' is >= (total - index), it truncates from 'index' to the end.
+        
+        Args:
+            session_id: The ID of the session to manage.
+            count: The number of exchanges to remove.
+            index: The starting index to remove from. Defaults to 0.
+        """
+        if session_id not in self.sessions:
+            print(f"--- manage_session_history: No session found for ID {session_id} ---")
+            return "Error: No session found."
+        
+        if count <= 0:
+            return "No action taken: Count must be > 0."
+        if index < 0:
+            return "No action taken: Index must be >= 0."
 
+        chat_session = self.sessions[session_id]
+        total_exchanges = len(chat_session)
+        
+        if index >= total_exchanges:
+            return f"No action taken: Index {index} is out of bounds."
+
+        # Your logic: If count is "too large", clamp it to "delete until end"
+        if (index + count) > total_exchanges:
+            count = total_exchanges - index # This clamps it
+            print(f"--- manage_session_history: Count clamped to {count} (delete until end).")
+
+        print(f"--- manage_session_history: Deleting {count} exchange(s) starting from index {index}. ---")
+        
+        # This single line handles all cases:
+        self.sessions[session_id] = chat_session[:index] + chat_session[index+count:]
+        
+        return f"Success: {count} exchange(s) removed."
+    
 # ... inside the OrionCore class ...
     def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str):
         """
@@ -538,6 +600,13 @@ class OrionCore:
             print(f"ERROR: File API upload failed for '{display_name}'. Error: {e}")
             return None
 
+    def list_sessions(self) -> list[str]:
+        """
+        Returns a list of all active session IDs currently
+        being managed by the core.
+        """
+        return list(self.sessions.keys())
+    
     def shutdown(self):
         """Performs a clean shutdown."""
         print("--- Orion Core shutting down. ---")

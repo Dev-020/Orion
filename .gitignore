@@ -8,3 +8,7 @@ orion_database.sqlite
 misc_scripts/Gather/best.pt
 misc_scripts/Gather/tasks-for-import.json
 output.label_config.xml
+/misc_scripts/TTS/rvc models
+/misc_scripts/TTS/orion_voice
+misc_scripts/TTS/cloned_output.wav
+*.png
