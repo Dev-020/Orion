@@ -58,5 +58,12 @@
       "description",
       "snippet"
     ]
+  },
+  "diagnostic_test_table": {
+    "columns": [
+      "id",
+      "data",
+      "timestamp"
+    ]
   }
 }

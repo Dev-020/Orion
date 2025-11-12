@@ -8,19 +8,15 @@ import inspect
 import os
 
 # --- ROBUST PATHING & IMPORT FIX ---
-# 1. Determine the project root directory (which is the parent of 'system_utils')
+# By moving path resolution into the main() block and importing config,
+# we make the functions in this script reusable by other modules.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# 2. Add the project root to the system path to allow for absolute imports
 sys.path.insert(0, str(PROJECT_ROOT))
+from main_utils import config, main_functions as functions
 
-# --- DYNAMICALLY IMPORT THE TOOLS ---
-# This is crucial for the tool schema generation.
-from main_utils import main_functions as functions
-
-# --- CONFIGURATION ---
-# Centralized paths for clarity and easy modification.
-DB_FILE = PROJECT_ROOT / "databases" / "default" / "orion_database.sqlite"
-OUTPUT_DIR = PROJECT_ROOT / "instructions"
+# These will be initialized in main() from the config module.
+DB_FILE = None
+OUTPUT_DIR = None
 
 def get_db_connection(db_file_path):
     """Establishes and returns a read-only connection to the SQLite database."""
@@ -262,8 +258,13 @@ def main():
     Main function to run the entire manifest generation process.
     Each generator is wrapped in a try/except block to make the process resilient.
     """
+    # Initialize paths from the config module when running as a script.
+    global DB_FILE, OUTPUT_DIR
+    DB_FILE = Path(config.DB_FILE)
+    OUTPUT_DIR = Path(config.OUTPUT_DIR)
+
     # Ensure the output directory exists.
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    Path(OUTPUT_DIR).mkdir(exist_ok=True)
 
     # --- Manifest Generation ---
     # The process is designed to be resilient. If one manifest fails, the script
@@ -282,7 +283,7 @@ def main():
         print("\nSkipping all DB-related manifests due to connection failure.")
         # Even if the DB fails, we should still attempt to create the master manifest.
         try:
-            generate_master_manifest(OUTPUT_DIR)
+            generate_master_manifest(Path(OUTPUT_DIR))
         except Exception as e:
             print(f"  -> WARNING: Failed to generate master_manifest.json. Skipping. Reason: {e}")
         
@@ -301,9 +302,9 @@ def main():
         ]
         
         for generator_func in db_generators:
+            # The function name (e.g., "generate_user_profile_manifest") is used for logging.
+            generator_name = generator_func.__name__
             try:
-                # The function name (e.g., "generate_user_profile_manifest") is used for logging.
-                generator_name = generator_func.__name__
                 generator_func(conn, OUTPUT_DIR)
             except Exception as e:
                 print(f"  -> WARNING: Failed to run {generator_name}. Skipping. Reason: {e}")
@@ -317,11 +318,13 @@ def main():
         
         # The master manifest should always be generated last.
         try:
-            generate_master_manifest(OUTPUT_DIR)
+            generate_master_manifest(Path(OUTPUT_DIR))
         except Exception as e:
             print(f"  -> WARNING: Failed to generate master_manifest.json. Skipping. Reason: {e}")
             
         print("\n--- Manifest generation process finished. ---")
 
 if __name__ == "__main__":
+    # --- PATH INITIALIZATION ---
+    functions.initialize_persona()  # Ensure persona is set for any function dependencies.
     main()

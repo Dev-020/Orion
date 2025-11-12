@@ -6,7 +6,7 @@ import asyncio
 from dotenv import load_dotenv
 from orion_core import OrionCore
 from discord.ext import commands
-
+from system_utils import orion_tts # Import the tts module
 # All genai and file processing (fitz) imports are now removed.
 
 # Load environment variables
@@ -132,8 +132,18 @@ async def on_message(message: discord.Message):
             # --- Orchestrated Restart Logic ---
             if restart_pending:
                 print("---! DELAYED RESTART SEQUENCE ACTIVATED !---")
-                if core.save_state_for_restart():
-                    core.execute_restart() # This will terminate the bot.py process
+                if core.save_state_for_restart(): # Save state first
+                    core.execute_restart() # Now call the graceful restart
+
+# --- NEW: Stop Speech Command ---
+@bot.command(name="shutup", description="Stops the currently playing speech and clears the queue.")
+async def shutup(ctx: discord.ApplicationContext):
+    """Stops Orion's current speech."""
+    if config.VOICE:
+        await asyncio.to_thread(orion_tts.stop_speech)
+        await ctx.respond("Speech interrupted.", ephemeral=True, delete_after=5)
+    else:
+        await ctx.respond("Voice is not currently enabled.", ephemeral=True, delete_after=5)
 
 # --- Shutdown command remains the same ---
 @bot.command(name="shutdown", description="Shuts down the bot gracefully. (Owner only)")
@@ -154,7 +164,7 @@ async def shutdown(
         # Replicate the restart logic from on_message
         if core.save_state_for_restart():
             await ctx.followup.send("State saved. Executing restart now.", ephemeral=True)
-            core.execute_restart() # This will terminate and restart the process
+            core.execute_restart() # This now handles the shutdown internally
 
     else: # 'poweroff'
         await ctx.respond("Acknowledged. Shutting down completely.", ephemeral=True)

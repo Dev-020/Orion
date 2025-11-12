@@ -1,4 +1,3 @@
-
 import os
 import argparse
 import hashlib
@@ -6,12 +5,16 @@ import json
 import logging
 from pathlib import Path
 import chromadb
+import sys
+
+# Add the project root to the Python path to enable imports from main_utils
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from main_utils import config as cfg
 
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CHROMA_DB_PATH = PROJECT_ROOT / "databases" / "dnd" / "chroma_db_store"
-COLLECTION_NAME = "orion_semantic_memory"
+
 
 # --- CORE FUNCTIONS ---
 
@@ -109,11 +112,11 @@ def run_embedding_sync(file_path_str: str):
     logging.info(f"Starting 'Intelligent Sync' for document: {source_name}")
 
     try:
-        chroma_client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-        collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
-        logging.info(f"Successfully connected to ChromaDB collection '{COLLECTION_NAME}'.")
+        chroma_client = chromadb.PersistentClient(path=str(cfg.CHROMA_DB_PATH))
+        collection = chroma_client.get_or_create_collection(name=cfg.COLLECTION_NAME)
+        logging.info(f"Successfully connected to ChromaDB collection '{cfg.COLLECTION_NAME}'.")
     except Exception as e:
-        logging.error(f"Fatal: Could not connect to ChromaDB at '{CHROMA_DB_PATH}'. Error: {e}")
+        logging.error(f"Fatal: Could not connect to ChromaDB at '{cfg.CHROMA_DB_PATH}'. Error: {e}")
         return
 
     logging.info(f"Step 1: Generating new state from '{source_name}'...")
@@ -175,5 +178,12 @@ def run_embedding_sync(file_path_str: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Embed a Markdown document into the ChromaDB vector store.')
     parser.add_argument('file_path', type=str, help='The absolute path to the Markdown file to process.')
+    parser.add_argument('--persona', type=str, default='default', help='The persona to use for database paths.')
     args = parser.parse_args()
+
+    # When run as a standalone script, initialize with a persona.
+    # This ensures that the config variables are set correctly.
+    from main_utils.main_functions import initialize_persona
+    initialize_persona(args.persona)
+
     run_embedding_sync(args.file_path)

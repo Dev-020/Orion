@@ -3,6 +3,7 @@ import os
 import json
 import io
 import re
+import sys
 import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -10,12 +11,13 @@ from googleapiclient.http import MediaIoBaseDownload
 from pathlib import Path
 from .embed_document import run_embedding_sync
 
-# --- PATH CONFIGURATION ---
-# Determine the project root directory (which is the parent of 'system_utils')
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Add project root to be able to import main_utils
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from main_utils import config
 
-MANIFEST_FILE = Path(__file__).resolve().parent / 'docs_manifest.json'
-INSTRUCTIONS_DIR = PROJECT_ROOT / 'instructions'
+# --- PATH CONFIGURATION ---
+INSTRUCTIONS_DIR = Path(config.OUTPUT_DIR)
+MANIFEST_FILE = Path(config.PROJECT_ROOT) / 'data' / f'docs_{config.PERSONA}.json'
 
 def get_authenticated_service(service_name, version):
     """Gets a Google API service object with Application Default Credentials."""

@@ -40,7 +40,7 @@ from . import config
 
 # --- CONSTANTS ---
 DAILY_SEARCH_QUOTA = 10000
-PROJECT_ROOT = Path(__file__).parent.parent.resolve() # Go up two levels to get the project root
+PROJECT_ROOT = Path(config.PROJECT_ROOT) # Go up two levels to get the project root
 
 # --- PERSONA INITIALIZATION ---
 def get_db_paths(persona: str) -> dict:
@@ -59,7 +59,7 @@ def get_db_paths(persona: str) -> dict:
         "collection_name": "orion_semantic_memory"
     }
 
-def initialize_persona(persona: str):
+def initialize_persona(persona: str = "default"):
     """Initializes the database paths for the given persona."""
     paths = get_db_paths(persona)
     config.DB_FILE = paths["db_file"]
@@ -567,12 +567,12 @@ def manual_sync_instructions(user_id: str) -> str:
 
 def rebuild_manifests(manifest_names: list[str]) -> str:
     """
-    Rebuilds specified manifest JSON files.
+    Rebuilds specified manifest JSON files using the central config.
     """
     print(f"--- ACTION: Rebuilding manifests: {manifest_names} ---")
-    base_path = Path(__file__).parent.resolve()
-    db_path = base_path / generate_manifests.DB_FILE
-    output_path = base_path / generate_manifests.OUTPUT_DIR
+    # Use the centrally managed config for paths
+    db_path = Path(config.DB_FILE)
+    output_path = Path(config.OUTPUT_DIR)
     
     db_required_map = {
         "db_schema": generate_manifests.generate_db_schema_json,
@@ -591,6 +591,7 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
         name = name.lower().strip()
         if name in db_not_required_map:
             try:
+                # Pass the output path to the generator function
                 db_not_required_map[name](output_path)
                 rebuilt_successfully.append(name)
             except Exception as e:
@@ -601,12 +602,14 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
             invalid_names.append(name)
 
     if db_manifests_to_run:
+        # Pass the db path to the connection function
         conn = generate_manifests.get_db_connection(db_path)
         if not conn:
             return "Error: Could not connect to the database to rebuild manifests."
         try:
             for name in db_manifests_to_run:
                 try:
+                    # Pass both connection and output path to the generator
                     db_required_map[name](conn, output_path)
                     rebuilt_successfully.append(name)
                 except Exception as e:
@@ -621,7 +624,7 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
 
 def search_dnd_rules(query: str, num_results: int = 5) -> str:
     """Performs a web search using Google's Custom Search API."""
-    quota_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'quota_tracker.json')
+    quota_file = os.path.join(PROJECT_ROOT, 'data','quota_tracker.json')
     lock_file = quota_file + ".lock"
     with FileLock(lock_file, timeout=5):
         today = str(date.today())

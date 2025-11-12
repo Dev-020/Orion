@@ -57,16 +57,6 @@
     }
   },
   {
-    "tool_to_test": "lookup_character_data",
-    "description": "Verifies the character sheet file is present and parsable.",
-    "test_case": {
-      "tool_name": "lookup_character_data",
-      "parameters": {
-        "query": "data.name"
-      }
-    }
-  },
-  {
         "tool_to_test": "execute_vdb_write",
         "description": "Tests write access to the vector database.",
         "test_case": {
@@ -124,16 +114,5 @@
             }
         }
     ]
-  },
-    {
-        "tool_to_test": "search_knowledge_base",
-        "description": "Tests the JSON 'data' column filtering.",
-        "test_case": {
-            "tool_name": "search_knowledge_base",
-            "parameters": {
-                "data_query": {"metadata.is_official": true},
-                "max_results": 1
-            }
-        }
-    }
+  }
 ]

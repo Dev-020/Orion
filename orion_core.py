@@ -7,12 +7,17 @@ from datetime import datetime, timezone
 import sys
 from google import genai
 from google.genai import types
+import threading
 import io
 from dotenv import load_dotenv
 import json
 import pickle
-from main_utils import main_functions as functions
-from system_utils import run_startup_diagnostics, generate_manifests
+from main_utils import config, main_functions as functions
+from system_utils import run_startup_diagnostics, generate_manifests, orion_tts
+
+# --- TTS Integration ---
+# Import the speak function from your chosen TTS script.
+# Using tts_piper as it's a clean, self-contained implementation.
 
 # This single class now manages everything: state, sessions, and core logic.
 
@@ -37,10 +42,14 @@ class OrionCore:
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
-        #self.session_excluded_ids: dict[str, list[str]] = {}
-        self.persona = persona
+        self.persona = config.PERSONA = persona
+        
         # Initialize or refresh database paths from functions module
-        functions.initialize_persona(persona)
+        functions.initialize_persona(self.persona)
+
+        # --- NEW: Start the persistent TTS thread ---
+        if config.VOICE:
+            orion_tts.start_tts_thread()
 
         # Refreshing Core Instructions
         print("--- Syncing Core Instructions... ---")
@@ -444,6 +453,12 @@ class OrionCore:
             if self.restart_pending:
                 self.restart_pending = False # Reset flag after it's been captured
 
+            # --- TTS INVOCATION POINT ---
+            # If voice is enabled in the config and there's text, speak it.
+            # --- MODIFICATION: Add text to the TTS queue ---
+            if config.VOICE and final_text:
+                orion_tts.speak(final_text)
+
             return final_text, token_count, should_restart
             
         except Exception as e:
@@ -610,12 +625,17 @@ class OrionCore:
     def shutdown(self):
         """Performs a clean shutdown."""
         print("--- Orion Core shutting down. ---")
+        # --- NEW: Stop the TTS thread on shutdown ---
+        if config.VOICE:
+            orion_tts.stop_tts_thread()
         print("--- Orion is now offline. ---")
 
     def execute_restart(self):
         """
-        Executes the final step of the restart by replacing the current process.
-        This should only be called after the state has been successfully saved.
+        Executes the final step of the restart by shutting down gracefully
+        and then replacing the current process.
         """
-        print("  - State saved. Executing restart...")
+        print("  - State saved. Performing graceful shutdown before restart...")
+        self.shutdown() # <-- CRITICAL: Call the shutdown method here.
+        print("  - Shutdown complete. Executing process replacement...")
         os.execv(sys.executable, ['python'] + sys.argv)

@@ -5,7 +5,8 @@
       {
         "name": "persona",
         "type": "<class 'str'>",
-        "required": true
+        "required": false,
+        "default": "default"
       }
     ]
   },
@@ -20,7 +21,7 @@
     ]
   },
   "rebuild_manifests": {
-    "description": "Rebuilds specified manifest JSON files.",
+    "description": "Rebuilds specified manifest JSON files using the central config.",
     "parameters": [
       {
         "name": "manifest_names",

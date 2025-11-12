@@ -7,15 +7,10 @@ import json
 import os, sys
 from typing import Callable, Dict, Any
 import dotenv
+from pathlib import Path
 
-# Get the path of the directory containing the current script (system_utils)
-current_script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Get the path of the parent directory (the project root, Orion)
-project_root = os.path.dirname(current_script_dir)
-
-# Add the project root to Python's path
-sys.path.append(project_root)
+# Add the project root to the Python path to enable imports from main_utils
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from main_utils import main_functions as functions
 
@@ -33,7 +28,7 @@ def run_heartbeat_check(tools: Dict[str, Callable]) -> bool:
     """
     dotenv.load_dotenv()
     owner_id = os.getenv("DISCORD_OWNER_ID")
-    suite_path = os.path.join('instructions', 'diagnostic_suite.json')
+    suite_path = os.path.join('data', 'diagnostic_suite.json')
     all_tests_passed = True
 
     print("--- INITIATING TIER 1 HEARTBEAT CHECK ---")

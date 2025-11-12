@@ -1,5 +1,5 @@
 .env
-/old_files
+/_old_files
 /__pycache__
 /chroma_db_store
 orion_database.sqlite
@@ -12,3 +12,11 @@ output.label_config.xml
 /misc_scripts/TTS/orion_voice
 misc_scripts/TTS/cloned_output.wav
 *.png
+/misc_scripts/TTS/audio_samples
+/misc_scripts/TTS/HSR
+/misc_scripts/TTS/converted_dataset
+/misc_scripts/TTS/audio_logs
+*.csv
+/misc_scripts/TTS/piper_model
+/data/character
+/data/piper_models
