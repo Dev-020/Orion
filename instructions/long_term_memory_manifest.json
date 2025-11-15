@@ -1,5 +1,13 @@
 [
   {
+    "event_id": "2025-11-15T17:22:25.074956+00:00",
+    "title": "Leo plans to add terminal reminder for Orion's voice module"
+  },
+  {
+    "event_id": "2025-11-15T17:26:19.296688+00:00",
+    "title": "Leo implements terminal reminder for Orion's voice module"
+  },
+  {
     "event_id": "2025-11-09T02:22:52.514391+00:00",
     "title": "Deprecated Tools and Built-in Grounding/URL Context Tools Identified"
   },

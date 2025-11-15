@@ -50,6 +50,7 @@ class OrionCore:
         # --- NEW: Start the persistent TTS thread ---
         if config.VOICE:
             orion_tts.start_tts_thread()
+            print("--- TTS Module is Activated. ---")
 
         # Refreshing Core Instructions
         print("--- Syncing Core Instructions... ---")

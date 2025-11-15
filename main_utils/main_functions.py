@@ -506,10 +506,16 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
         return "Error: Authorization failed. This tool is restricted to the Primary Operator."
 
     try:
-        repo = Repo(PROJECT_ROOT)
-        target_path = (PROJECT_ROOT / file_path).resolve()
-        if not target_path.is_relative_to(PROJECT_ROOT):
-            return "Error: Access denied. Cannot access files outside the project directory."
+        # Initialize repo and get the actual, case-correct path for the repo's working directory
+        repo = Repo(str(PROJECT_ROOT), search_parent_directories=True)
+        repo_root = Path(repo.working_dir)
+
+        # Construct the target path using the case-correct repo root
+        target_path = (repo_root / file_path).resolve()
+
+        # Security check: Ensure the resolved path is within the repository
+        if not target_path.is_relative_to(repo_root):
+            return f"Error: Access denied. Path '{file_path}' is outside the project directory."
 
         timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
         sanitized_message = re.sub(r'[^a-zA-Z0-9\-]', '-', commit_message.splitlines()[0]).strip('-')
