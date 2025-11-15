@@ -13,7 +13,7 @@ Project Orion aims to create a long-term AI capable of assisting with a diverse 
 *   **Self-Modification & Evolution:** Equipped with tools to inspect, propose changes to, and update its own codebase and operational instructions, fostering continuous self-improvement under operator supervision.
 *   **Adaptive Persona:** Switches between a default sarcastic and pragmatic persona ("Orion") for conversational and creative tasks, and a formal, data-driven subroutine ("The Codex") for technical inquiries.
 *   **Persistent User & Conversational Memory:** Maintains detailed profiles for users and archives all past interactions, providing a personalized and continuous experience.
-*   **Tool-Augmented Capabilities:** Integrates various external and internal tools for tasks such as web browsing, D&D rules lookups, and direct database manipulation.
+*   **Tool-Augmented Capabilities:** Integrates various external and internal tools, including a functioning voice module and a vision module to provide further context and a more interactive and richer conversational environment, alongside direct database manipulation.
 
 ## Persona: Orion
 
