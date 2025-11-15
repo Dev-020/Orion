@@ -5,6 +5,7 @@ import cv2
 import mss
 import time
 import utils, config
+from ultralytics import YOLO  # type: ignore
 
 def run_perception(bot_state):
     """
@@ -18,8 +19,8 @@ def run_perception(bot_state):
         recast_template = cv2.imread(config.RECAST_PROMPT_TEMPLATE, 0)
         
         # NEW: Load arrow templates (also grayscale) for shape matching
-        left_arrow_template = cv2.imread(config.LEFT_ARROW_TEMPLATE, 0)
-        right_arrow_template = cv2.imread(config.RIGHT_ARROW_TEMPLATE, 0)
+        # left_arrow_template = cv2.imread(config.LEFT_ARROW_TEMPLATE, 0)
+        # right_arrow_template = cv2.imread(config.RIGHT_ARROW_TEMPLATE, 0)
         
         # NEW: Load rod swap templates
         rod_prompt_template = cv2.imread(config.ROD_PROMPT_TEMPLATE, 0) # <-- NEW
@@ -29,6 +30,18 @@ def run_perception(bot_state):
         print(f"[Perception] ERROR: Could not load template images. {e}")
         return
 
+    # --- NEW: Load YOLO Model ---
+    try:
+        print("[Perception] Loading custom YOLO model...")
+        # !!! UPDATE THIS PATH to your 'best.pt' file !!!
+        model = YOLO(config.YOLO_MODEL)
+        print("[Perception] YOLO model loaded successfully.")
+    except Exception as e:
+        print(f"[Perception] ERROR: Could not load YOLO model from {config.YOLO_MODEL}")
+        print(f"Make sure 'best.pt' is at that path. Error: {e}")
+        return
+    # --- END NEW ---
+    
     print("[Perception] Thread started. Managing FSM...")
     
     with bot_state.lock:
@@ -58,10 +71,12 @@ def run_perception(bot_state):
                 screen_gray = utils.capture_screen(sct, window_state["monitor_object"], format='gray')
                 # 2. HSV (for color UI)
                 screen_hsv = utils.capture_screen(sct, window_state["monitor_object"], format='hsv')
+                # 3. BGR (for our YOLO model)
+                screen_bgr = utils.capture_screen(sct, window_state["monitor_object"], format='bgr')
                 
                 # --- THIS IS THE FIX ---
                 # Add a safety check to ensure our captures worked
-                if screen_gray is None or screen_hsv is None:
+                if screen_gray is None or screen_hsv is None or screen_bgr is None:
                     print("[Perception] Screen capture failed. Skipping frame.", end="\r")
                     time.sleep(0.5) # Wait a bit before retrying
                     continue
@@ -81,9 +96,6 @@ def run_perception(bot_state):
                 # --- END NEW SECTION ---
                 
                 # We find all templates *before* the logic
-                #excl_coords = utils.find_template(
-                #    screen_gray, exclamation_template, config.EXCLAMATION_THRESHOLD
-                #)
                 cont_coords = utils.find_template(
                     screen_gray, continue_template, config.CONTINUE_THRESHOLD
                 )
@@ -137,51 +149,93 @@ def run_perception(bot_state):
                         elif utils.find_template(screen_gray, recast_template, config.RECAST_THRESHOLD):
                             bot_state.current_state = config.STATE_IDLE
                     
+                    # --- THIS IS THE MODIFIED STATE ---
                     elif state == config.STATE_REELING:
-                        ## --- NEW: Create a smaller ROI just for arrows ---
-                        # Crop 25% from all sides
-                        y_start = int(window_height * 0.25)
-                        y_end = int(window_height * 0.75) # (h * 1.0) - (h * 0.25)
-                        x_start = int(window_width * 0.25)
-                        x_end = int(window_width * 0.75) # (w * 1.0) - (w * 0.25)
                         
-                        # Create the new, smaller "arrow" ROIs
-                        screen_gray_roi_reeling = screen_gray[y_start:y_end, x_start:x_end]
-                        # screen_hsv_roi_reeling = screen_hsv[y_start:y_end, x_start:x_end]
+                        # --- NEW YOLOv8 DETECTION LOGIC ---
                         
-                        # --- MODIFIED: Use the new 'reeling' ROI ---
+                        # 2. Get screen center and dead zone
+                        window_width = bot_state.monitor_object['width']
+                        center_x = window_width / 2
+                        dead_zone_width = (window_width * config.DEAD_ZONE_PERCENT) / 2
+                        dead_zone_left = center_x - dead_zone_width
+                        dead_zone_right = center_x + dead_zone_width
                         
-                        # 1. Look for the left arrow in the SMALLER cropped gray image
-                        left_coords = utils.find_template(
-                            screen_gray_roi_reeling, left_arrow_template, config.ARROW_MATCH_THRESHOLD
-                        )
-                        
-                        # 2. Look for the right arrow in the SMALLER cropped gray image
-                        right_coords = utils.find_template(
-                            screen_gray_roi_reeling, right_arrow_template, config.ARROW_MATCH_THRESHOLD
-                        )
-                        
-                        # 3. Decide the direction
-                        if left_coords:
-                            bot_state.arrow_direction = "LEFT"
-                        elif right_coords:
-                            bot_state.arrow_direction = "RIGHT"
-                        else:
-                            bot_state.arrow_direction = "NONE"
+                        # 3. Run the YOLO model on the BGR screen capture
+                        results = model(screen_bgr, verbose=False, stream=True, imgsz=320)
 
-                        # 4. Failsafe: Check for "Continue" button (unchanged)
-                        cont_coords = utils.find_template(screen_gray, continue_template, config.CONTINUE_THRESHOLD)
+                        # Check if 'results' is None before looping
+                        if results is None:
+                            print("[Perception] YOLO model returned None. Skipping frame.")
+                            found_fish = False
+                        else:
+                            found_fish = False
+                            # 4. Process the results
+                            for r in results:
+
+                                # --- !!! THIS IS THE FIX !!! ---
+                                # OBB models store results in 'r.obb', not 'r.boxes'
+                                if r.obb is None:
+                                    # This is normal, means no fish was detected in this frame
+                                    found_fish = False
+                                    continue # Go to the next frame/result
+                                
+                                # Loop over the OBB (Oriented Bounding Box) objects
+                                for box in r.obb: 
+                                # --- !!! END OF FIX !!! ---
+                                
+                                    # Check if confidence is high enough
+                                    if box.conf[0] > config.CONF_THRESHOLD:
+                                        
+                                        # Get the standard (non-rotated) bounding box coordinates
+                                        # The OBB object handily provides this for us in .xyxy
+                                        x1, y1, x2, y2 = box.xyxy[0] 
+                                        
+                                        # Calculate the center of the fish
+                                        fish_center_x = (x1 + x2) / 2
+                                        
+                                        # 5. Compare fish position to dead zone
+                                        if fish_center_x < dead_zone_left:
+                                            bot_state.arrow_direction = "LEFT"
+                                        elif fish_center_x > dead_zone_right:
+                                            bot_state.arrow_direction = "RIGHT"
+                                        else:
+                                            # Fish is in the dead zone, do nothing
+                                            bot_state.arrow_direction = "NONE"
+                                            
+                                        found_fish = True
+                                        break # We only care about the most confident fish
+                                if found_fish:
+                                    break # Stop processing other results in the batch
+
+                        if not found_fish:
+                            # If the model saw nothing (or confidence was too low), don't move.
+                            bot_state.arrow_direction = "NONE"
+                            
+                        # --- END OF NEW YOLOv8 LOGIC ---
+
+                        # 6. Failsafe: Check for "Continue" button (unchanged)
                         if cont_coords:
                             print("[Perception] Fish caught! State changing to CAUGHT.")
                             monitor = bot_state.monitor_object
                             bot_state.cached_button_coords = (cont_coords[0] + monitor['left'], cont_coords[1] + monitor['top'])
                             bot_state.current_state = config.STATE_CAUGHT
                             bot_state.arrow_direction = "NONE" # Clear arrows
-                        # 5. Failsafe: Check for "B" prompt (unchanged)
-                        elif utils.find_template(screen_gray, recast_template, config.RECAST_THRESHOLD):
+                            
+                        # 7. Failsafe: Check for "B" prompt (unchanged)
+                        elif recast_coords:
+                            print("[Perception] Fish got away. State changing to IDLE.")
                             bot_state.current_state = config.STATE_IDLE
                             bot_state.arrow_direction = "NONE"
-                        # --- END OF NEW LOGIC ---
+                        
+                    elif state == config.STATE_CAUGHT:
+                        # (This state is unchanged)
+                        # Look for "Continue" button in the FULL gray screen
+                        if not cont_coords:
+                            print("[Perception] Button clicked. Waiting for next cycle...")
+                            time.sleep(config.CAST_WAIT_TIME_SEC) 
+                            print("[Perception] State changing to IDLE.")
+                            bot_state.current_state = config.STATE_IDLE
                         
                     elif state == config.STATE_CAUGHT:
                         # Look for "Continue" button in the FULL gray screen

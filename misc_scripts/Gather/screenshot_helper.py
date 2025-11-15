@@ -8,7 +8,7 @@ import os
 
 # --- Configuration ---s
 WINDOW_TITLE = "Blue Protocol: Star Resonance"      # Exact title of the game window
-FILENAME_PREFIX = "raw_ore_of_ruby"                        # Base name for your files
+FILENAME_PREFIX = "fish"                        # Base name for your files
 SAVE_FOLDER = f"dataset/images/{FILENAME_PREFIX}"             # Folder to save screenshots (will be created if needed)
 HOTKEY = "'"                                        # The key combination to trigger a screenshot
 

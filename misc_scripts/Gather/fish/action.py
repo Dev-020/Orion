@@ -17,10 +17,6 @@ def run_action(bot_state):
     last_cast_attempt = 0
     last_continue_click = 0
     
-    # How many seconds to wait before re-trying an action
-    CAST_COOLDOWN = 2.0
-    CLICK_COOLDOWN = 0.5
-    
     # --- NEW: Track which key we are holding down ---
     current_key_pressed = "NONE"
     
@@ -50,7 +46,7 @@ def run_action(bot_state):
                 pyautogui.mouseUp(button='left') # Ensure mouse is up
                 
                 # Check if our cooldown has passed
-                if (time.time() - last_cast_attempt) > CAST_COOLDOWN:
+                if (time.time() - last_cast_attempt) > config.CAST_WAIT_TIME_SEC:
                     print("[Action] State is IDLE. Simulating cast click...")
                     pyautogui.mouseDown(button='left')
                     time.sleep(0.2) # Your proven hold time
@@ -105,7 +101,7 @@ def run_action(bot_state):
                     current_key_pressed = "NONE"
                 
                 # Check if our click cooldown has passed
-                if (time.time() - last_continue_click) > CLICK_COOLDOWN:
+                if (time.time() - last_continue_click) > config.CAST_WAIT_TIME_SEC:
                     with bot_state.lock:
                         coords = bot_state.cached_button_coords
                         
@@ -119,7 +115,7 @@ def run_action(bot_state):
 
             # --- NEW: Handle the Rod Swap State ---
             elif state == config.STATE_SWAP_ROD:
-                if (time.time() - last_continue_click) > CLICK_COOLDOWN:
+                if (time.time() - last_continue_click) > config.CAST_WAIT_TIME_SEC:
                     if bot_state.swap_step == "PRESS_M":
                         print("[Action] Broken rod! Pressing 'M'...")
                         pyautogui.press('m')

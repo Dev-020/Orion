@@ -19,13 +19,13 @@ def capture_screen(sct, monitor_object, format='gray'):
     
     if format == 'gray':
         return cv2.cvtColor(screen_cv, cv2.COLOR_BGR2GRAY)
-    if format == 'bgr':
-        return screen_cv
-    if format == 'hsv':
+    if format == 'bgr' or format == 'hsv':
         # Convert to BGR (from BGRA) and then to HSV
         screen_bgr = cv2.cvtColor(screen_cv, cv2.COLOR_BGRA2BGR)
-        return cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2HSV)
-        
+        if format == 'hsv':
+            # Convert to HSV from BGR
+            return cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2HSV)
+        return screen_bgr
     return None # Should not happen
 
 def find_template(screen_gray, template_cv, threshold):
