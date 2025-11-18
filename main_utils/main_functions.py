@@ -6,9 +6,9 @@ __all__ = [
     "initialize_persona",
     "manual_sync_instructions",
     "rebuild_manifests",
-    "search_dnd_rules",
     "browse_website",
     "list_project_files",
+    "delegate_to_native_tools_agent",
     "read_file",
     "execute_sql_read",
     "execute_sql_write",
@@ -23,14 +23,18 @@ import hashlib
 import re
 import os
 import json
+import mimetypes
 import requests
 from bs4 import BeautifulSoup
+from google.genai import types
 from googleapiclient.discovery import build
 from datetime import date
 import google.auth
 from datetime import datetime, timezone
 from filelock import FileLock
 from typing import Optional, List, Union
+from agents.file_processing_agent import FileProcessingAgent
+from agents.native_tools_agent import NativeToolsAgent
 import sqlite3
 import chromadb
 from chromadb.types import Metadata
@@ -657,34 +661,6 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
         summary += f" Invalid names provided: {sorted(invalid_names)}."
     return json.dumps({"status": bool(rebuilt_successfully), "summary": summary})
 
-def search_dnd_rules(query: str, num_results: int = 5) -> str:
-    """Performs a web search using Google's Custom Search API."""
-    quota_file = os.path.join(PROJECT_ROOT, 'data','quota_tracker.json')
-    lock_file = quota_file + ".lock"
-    with FileLock(lock_file, timeout=5):
-        today = str(date.today())
-        try:
-            with open(quota_file, 'r') as f: tracker = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            tracker = {"date": today, "count": 0}
-        if tracker.get("date") != today: tracker = {"date": today, "count": 0}
-        if tracker.get("count", 0) >= DAILY_SEARCH_QUOTA:
-            return "Error: Daily search quota has been reached."
-        print(f"--- Performing web search for URLs about: '{query}' (Query {tracker.get('count', 0) + 1}/{DAILY_SEARCH_QUOTA}) ---")
-        try:
-            search_engine_id = os.getenv("SEARCH_ENGINE_ID")
-            credentials, _ = google.auth.default()
-            service = build("customsearch", "v1", credentials=credentials, static_discovery=False)
-            res = service.cse().list(q=query, cx=search_engine_id, num=num_results).execute()
-            tracker["count"] += 1
-            with open(quota_file, 'w') as f: json.dump(tracker, f)
-            if 'items' in res and len(res['items']) > 0:
-                return "\n\n".join([f"Title: {i.get('title')}\nURL: {i.get('link')}" for i in res['items']])
-            else:
-                return "No relevant URLs found."
-        except Exception as e:
-            return f"An error occurred during web search: {e}"
-
 def browse_website(url: str) -> str:
     """Reads the text content of a single webpage."""
     print(f"--- Browsing website: {url} ---")
@@ -722,20 +698,111 @@ def list_project_files(subdirectory: str = ".") -> str:
     except Exception as e:
         return f"Error listing files: {e}"
 
-def read_file(file_path: str) -> str:
+def delegate_to_native_tools_agent(task: str) -> str:
     """
-    Reads the contents of a specific file within the project.
+    (HIGH-LEVEL ORCHESTRATOR) Delegates a complex task that requires native tool use (like Google Search or Code Execution) to a specialized agent.
+    This tool should be used when a user's query cannot be answered directly and requires external information or computation.
+    The 'task' parameter should be a detailed description of what the agent needs to accomplish.
+    """
+    print(f"--- Delegating task to Native Tools Agent: {task} ---")
+
+    core = config.ORION_CORE_INSTANCE
+    if not core:
+        return "Error: Orion Core instance not available for agent delegation."
+
+    # 1. Instantiate the agent. The agent's __init__ method is responsible for its own setup.
+    agent = NativeToolsAgent(orion_core=core)
+
+    # 2. Run the agent with the specified task.
+    agent_response = agent.run(task=task)
+
+    return agent_response
+
+def read_file(file_path: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> Union[str, list]:
+    """
+    Reads a file from the project directory. For text files, it returns the content as a string,
+    optionally within a specified line range. For binary files (images, PDFs, audio, etc.)
+    or very large text files, it uploads the file and returns a file object for the LLM to process.
     """
     print(f"--- Reading File located on: {file_path} ---")
     try:
         target_path = (PROJECT_ROOT / file_path).resolve()
+
         if not target_path.is_relative_to(PROJECT_ROOT):
-            return "Error: Access denied."
+            return "Error: Access denied. File is outside the project directory."
         if not target_path.is_file():
             return f"Error: File not found at '{file_path}'."
-        with open(target_path, 'r', encoding='utf-8') as f:
-            return f"[System Note: The following are the contents inside the file found in the filepath: {file_path}]{f.read()}"
-    except UnicodeDecodeError:
-        return f"Error: Could not decode the file at '{file_path}'. It may not be a text file."
+
+        # --- 1. Identify file type ---
+        mime_type, _ = mimetypes.guess_type(target_path)
+        is_text = False
+        if mime_type:
+            # Treat common script/data formats as text, in addition to 'text/*'
+            if mime_type.startswith('text/') or mime_type in ['application/json', 'application/javascript', 'application/xml']:
+                is_text = True
+        
+        # --- 2. Handle Large or Non-Text Files via Upload ---
+        file_size = target_path.stat().st_size
+        # Use upload for non-text files OR for text files larger than ~200k tokens (800KB)
+        if not is_text or file_size > 800_000:
+            print(f"  - File is non-text ({mime_type}) or large ({file_size / 1_000_000:.2f} MB). Uploading to File API...")
+            if not config.ORION_CORE_INSTANCE:
+                return "Error: Orion Core instance not available for file upload."
+            
+            try:
+                with open(target_path, 'rb') as f:
+                    file_bytes = f.read()
+                
+                display_name = target_path.name
+                # Use detected mime_type or a default if none was found
+                upload_mime_type = mime_type if mime_type else 'application/octet-stream'
+
+                # Call the upload_file method from the OrionCore instance
+                file_handle = config.ORION_CORE_INSTANCE.upload_file(file_bytes, display_name, upload_mime_type)
+
+                # --- AGENTIC WORKFLOW INITIATION ---
+                if file_handle:
+                    print("--- Delegating to File Processing Agent ---")
+                    core = config.ORION_CORE_INSTANCE
+                    if not core:
+                        return "Error: Orion Core instance not available for agent delegation."
+
+                    # 1. Instantiate the agent. The agent's __init__ method is now responsible
+                    # for its own setup by taking the core instance.
+                    agent = FileProcessingAgent(orion_core=core)
+                    
+                    # 2. Run the agent. Its job is to focus solely on the file and the user's immediate request.
+                    # The main model will integrate the agent's response into the broader conversation. 
+                    return agent.run(file_handles=[file_handle])
+                else:
+                    return f"Error: File upload failed for '{file_path}'."
+            except Exception as upload_e:
+                return f"Error during file upload process: {upload_e}"
+
+        # --- 3. Handle Text Files Directly ---
+        # This 'else' block handles the case where the file is a text file and is NOT large.
+        # This makes the control flow exhaustive and guarantees a return value.
+        else:
+            try:
+                with open(target_path, 'r', encoding='utf-8') as f:
+                    if start_line is not None and end_line is not None:
+                        if start_line <= 0 or end_line < start_line:
+                            return "Error: Invalid line range. 'start_line' must be > 0 and 'end_line' must be >= 'start_line'."
+                        lines = f.readlines()
+                        total_lines = len(lines)
+                        start_idx = start_line - 1
+                        end_idx = min(end_line, total_lines)
+
+                        if start_idx >= total_lines:
+                             return f"Error: 'start_line' ({start_line}) is beyond the end of the file ({total_lines} lines)."
+
+                        content = "".join(lines[start_idx:end_idx])
+                        return f"[System Note: The following are the contents of lines {start_line}-{end_idx} from the text file '{file_path}']\n---\n{content}"
+                    else:
+                        content = f.read()
+                        return f"[System Note: The following are the contents of the text file '{file_path}']\n---\n{content}"
+            except UnicodeDecodeError:
+                return f"Error: Could not decode the file '{file_path}' with UTF-8. It may be a binary file misidentified as text."
+        
     except Exception as e:
-        return f"Error reading file: {e}"
+        return f"An unexpected error occurred while reading file: {e}"

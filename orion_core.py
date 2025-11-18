@@ -39,10 +39,16 @@ INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ins
 
 class OrionCore:
     
-    def __init__(self, model_name: str = "gemini-2.5-flash", persona: str = "default"):
+    def __init__(self, model_name: str = "gemini-3-pro-preview", persona: str = "default"):
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
+        # --- MODIFICATION: Make the core instance accessible to tools ---
+        config.ORION_CORE_INSTANCE = self
+
+        # --- NEW: Context holder for the current turn ---
+        self.current_turn_context = None
+
         self.persona = config.PERSONA = persona
         
         # Initialize or refresh database paths from functions module
@@ -115,6 +121,22 @@ class OrionCore:
                 print(f"WARNING: Instruction file not found, skipping: {filepath}")
         return "\n\n---\n\n".join(prompt_parts)
 
+    def flatten_history(self, session_id: str) -> list:
+        """
+        Takes a session ID, retrieves the custom ExchangeDict history, and flattens
+        it into the simple list[Content] format required by the GenAI API.
+        """
+        chat_session = self.sessions.get(session_id, [])
+        contents_to_send = []
+        for exchange in chat_session:
+            if exchange.get("user_content"):
+                contents_to_send.append(exchange["user_content"])
+            if exchange.get("tool_calls"):
+                contents_to_send.extend(exchange["tool_calls"])
+            if exchange.get("model_content"):
+                contents_to_send.append(exchange["model_content"])
+        return contents_to_send
+
     def _load_tools(self) -> list:
         """
         Dynamically loads tools from the 'main_utils' package based on the active persona.
@@ -165,7 +187,7 @@ class OrionCore:
         # --- NEW: Reload the tools first ---
         try:
             # Reload all modules within the 'main_utils' package
-            for loader, modname, is_pkg in pkgutil.walk_packages(path=functions.__path__, prefix=functions.__name__ + '.'):
+            for loader, modname, is_pkg in pkgutil.walk_packages(path=functions.__all__, prefix=functions.__name__ + '.'):
                 if modname in sys.modules:
                     importlib.reload(sys.modules[modname])
 
@@ -276,7 +298,6 @@ class OrionCore:
             # --- CONTEXT INJECTION CONTROL ---
             # Automatic Past-Memory Recall to provide additional context on-demand based on the User Prompt.
             # These recalls will not be saved to the chat history.
-            vdb_content = None
             
             # --- MODIFICATION: Dynamically build excluded_ids from session ---
             excluded_ids = []
@@ -401,20 +422,14 @@ class OrionCore:
             final_content=types.UserContent(parts=final_part)
             
             # Sending User Content to Orion
-            # --- MODIFICATION: "Unroll" new ExchangeDict structure into flat list ---
-            contents_to_send = []
-            for exchange in chat_session:
-                # The user_content is already a valid Content object
-                if exchange.get("user_content"):
-                    contents_to_send.append(exchange["user_content"])
-                if exchange.get("tool_calls"):
-                    contents_to_send.extend(exchange["tool_calls"])
-                if exchange.get("model_content"):
-                    contents_to_send.append(exchange["model_content"])
+            contents_to_send = self.flatten_history(session_id)
 
-            # The final_content object, which is a UserContent object, is the current turn.
             # It gets appended after the entire history has been unrolled.
             contents_to_send.append(final_content)
+
+            # --- NEW: Make the current turn's content available to agents ---
+            # Store the data_envelope dictionary directly
+            self.current_turn_context = data_envelope
 
             print("----- All necessary content prepared. Sending Prompt to Orion. . . -----")
             response = self.client.models.generate_content(
@@ -423,6 +438,9 @@ class OrionCore:
                 config=types.GenerateContentConfig(
                     system_instruction=self.current_instructions,
                     tools=self.tools,
+                    thinking_config=types.ThinkingConfig(
+                        thinking_level=types.ThinkingLevel.HIGH
+                        ),
                     safety_settings=[
                         types.SafetySetting(
                             category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
@@ -432,6 +450,9 @@ class OrionCore:
                 )
             )
             
+            # --- NEW: Clear the temporary context after the API call ---
+            self.current_turn_context = None
+
             # --- Append to Chat History ---
             # 1. Isolate only the new tool calls and responses from this turn
             new_tool_turns = []

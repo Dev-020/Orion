@@ -21,3 +21,4 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "instructions")
 PERSONA = "default"
 VOICE = True
 VISION = False
+ORION_CORE_INSTANCE = None

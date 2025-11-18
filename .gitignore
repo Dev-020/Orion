@@ -27,3 +27,5 @@ misc_scripts/TTS/cloned_output.wav
 *.pyc
 *.pyc
 /main_utils/__pycache__
+/text
+*.pyc

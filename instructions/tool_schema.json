@@ -30,22 +30,6 @@
       }
     ]
   },
-  "search_dnd_rules": {
-    "description": "Performs a web search using Google's Custom Search API.",
-    "parameters": [
-      {
-        "name": "query",
-        "type": "<class 'str'>",
-        "required": true
-      },
-      {
-        "name": "num_results",
-        "type": "<class 'int'>",
-        "required": false,
-        "default": 5
-      }
-    ]
-  },
   "browse_website": {
     "description": "Reads the text content of a single webpage.",
     "parameters": [
@@ -67,13 +51,35 @@
       }
     ]
   },
+  "delegate_to_native_tools_agent": {
+    "description": "(HIGH-LEVEL ORCHESTRATOR) Delegates a complex task that requires native tool use (like Google Search or Code Execution) to a specialized agent.\nThis tool should be used when a user's query cannot be answered directly and requires external information or computation.\nThe 'task' parameter should be a detailed description of what the agent needs to accomplish.",
+    "parameters": [
+      {
+        "name": "task",
+        "type": "<class 'str'>",
+        "required": true
+      }
+    ]
+  },
   "read_file": {
-    "description": "Reads the contents of a specific file within the project.",
+    "description": "Reads a file from the project directory. For text files, it returns the content as a string,\noptionally within a specified line range. For binary files (images, PDFs, audio, etc.)\nor very large text files, it uploads the file and returns a file object for the LLM to process.",
     "parameters": [
       {
         "name": "file_path",
         "type": "<class 'str'>",
         "required": true
+      },
+      {
+        "name": "start_line",
+        "type": "typing.Optional[int]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "end_line",
+        "type": "typing.Optional[int]",
+        "required": false,
+        "default": null
       }
     ]
   },
