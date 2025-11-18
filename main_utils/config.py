@@ -20,3 +20,4 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "instructions")
 # --- GLOBAL VARIABLES ---
 PERSONA = "default"
 VOICE = True
+VISION = False

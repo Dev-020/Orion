@@ -505,9 +505,27 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
     if str(user_id) != owner_id:
         return "Error: Authorization failed. This tool is restricted to the Primary Operator."
 
+    repo = None
+    original_branch = None
+    branch_name = None
     try:
         # Initialize repo and get the actual, case-correct path for the repo's working directory
         repo = Repo(str(PROJECT_ROOT), search_parent_directories=True)
+        original_branch = repo.active_branch
+
+        # --- START: Improvement ---
+        # Ensure the repository is not in a detached HEAD state and the working tree is clean.
+        if repo.is_dirty(untracked_files=True):
+            return "Error: The repository has uncommitted changes or untracked files. Please resolve this manually before proceeding."
+        
+        # Fetch latest changes from origin and ensure the local main branch is up-to-date.
+        origin = repo.remote(name='origin')
+        print("  - Fetching latest from origin...")
+        origin.fetch()
+        repo.heads.master.checkout(force=True) # Use master or main as appropriate
+        repo.git.reset('--hard', 'origin/master')
+        # --- END: Improvement ---
+
         repo_root = Path(repo.working_dir)
 
         # Construct the target path using the case-correct repo root
@@ -519,6 +537,7 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
 
         timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
         sanitized_message = re.sub(r'[^a-zA-Z0-9\-]', '-', commit_message.splitlines()[0]).strip('-')
+        # --- FIX: Restore branch_name assignment ---
         branch_name = f"orion-changes/{timestamp}-{sanitized_message[:50]}"
 
         print(f"  - Creating new branch: {branch_name}")
@@ -538,17 +557,27 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
         origin = repo.remote(name='origin')
         origin.push(branch_name)
 
-        repo.heads.master.checkout()
-
         return (f"Success. A new branch '{branch_name}' was created and pushed to the remote repository "
                 f"with your changes for `{file_path}`. Please review and merge the pull request on GitHub.")
 
     except GitCommandError as e:
         print(f"ERROR: A Git command failed: {e}")
-        return f"An error occurred during a Git operation: {e}"
+        # --- START: Improvement ---
+        if branch_name and "push" in str(e).lower():
+            return (f"Error: The commit was created locally in branch '{branch_name}', but failed to push to GitHub. "
+                    f"Please check your connection or repository permissions and push it manually. Details: {e}")
+        return f"A Git command failed, but your changes might be saved locally in branch '{branch_name}'. Please review. Details: {e}"
+        # --- END: Improvement ---
     except Exception as e:
         print(f"ERROR: An unexpected error occurred in create_git_commit_proposal: {e}")
-        return f"An unexpected error occurred: {e}"
+        return f"An unexpected error occurred. Your changes might be saved locally in branch '{branch_name}'. Please review. Details: {e}"
+    finally:
+        # --- START: Improvement ---
+        # Ensure we always return to the original branch, even on failure.
+        if repo and original_branch:
+            print(f"  - Returning to original branch: {original_branch.name}")
+            original_branch.checkout()
+        # --- END: Improvement ---
 
 # --- RETAINED SPECIALIZED & EXTERNAL TOOLS ---
 

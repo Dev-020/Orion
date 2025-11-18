@@ -22,3 +22,8 @@ misc_scripts/TTS/cloned_output.wav
 /data/piper_models
 /misc_scripts/replay/video_replays
 *.pt
+*.pyc
+*.pyc
+*.pyc
+*.pyc
+/main_utils/__pycache__

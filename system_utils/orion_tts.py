@@ -94,7 +94,7 @@ def _process_tts_queue():
             text_to_speak = tts_queue.get(timeout=1)
             interrupt_event.clear() # NEW: Clear interrupt flag for new utterance
 
-            print(f"\n>>> Speaking: '{text_to_speak}'")
+            print(f"\n>>> Orion is Speaking <<<")
             print("Generating and streaming speech (on CPU)...")
             start_time = time.time()
 

@@ -469,20 +469,29 @@ class OrionGUI:
 
             user_content = exchange.get("user_content")
             if user_content:
-                # --- MODIFICATION: Extract user_name from JSON ---
-                try:
-                    user_data = json.loads(user_content.parts[0].text)
-                    prompt_text = user_data.get("prompt", "[User prompt]")
-                    # Get the name from the saved 'auth' block
-                    user_name = user_data.get("auth", {}).get("user_name", "User") 
-                except (json.JSONDecodeError, IndexError, AttributeError):
-                    prompt_text = "[User prompt]"
-                    user_name = "User" # Fallback
-                # --- END OF MODIFICATION ---
+                # --- REFACTORED: Intelligently parse user content parts ---
+                prompt_text = "[User prompt not found]"
+                user_name = "User"
+                file_text = ""
+
+                for part in user_content.parts:
+                    # Check if it's a file part (File object from File API)
+                    if hasattr(part, 'display_name'):
+                        file_text += f"[File: {part.display_name}]\n"
+                    # Check if it's a text part containing our JSON envelope
+                    elif hasattr(part, 'text') and part.text:
+                        try:
+                            user_data = json.loads(part.text)
+                            # Extract the actual prompt and user name from the JSON
+                            prompt_text = user_data.get("user_prompt", "[User prompt]")
+                            user_name = user_data.get("auth", {}).get("user_name", "User")
+                        except (json.JSONDecodeError, TypeError):
+                            # This handles cases where a text part is not our JSON envelope
+                            continue
 
                 user_bubble = customtkinter.CTkLabel(
                     master_frame,
-                    text=f"{user_name}: {prompt_text}", # --- MODIFICATION: Use dynamic user name ---
+                    text=f"{user_name}: {prompt_text}",
                     text_color="cyan",
                     anchor="w",
                     justify="left",
@@ -491,11 +500,7 @@ class OrionGUI:
                 user_bubble.pack(fill="x", padx=10, pady=(5, 2))
                 labels_to_wrap.append(user_bubble)
                 
-                file_text = ""
-                for part in user_content.parts[1:]:
-                    if hasattr(part, 'file_uri'):
-                        file_text += f"[File: {part.file_uri.split('/')[-1]}]\n"
-                if file_text:
+                if file_text: # Only create the file label if files were found
                     file_label = customtkinter.CTkLabel(
                         master_frame,
                         text=file_text.strip(),
@@ -574,10 +579,14 @@ class OrionGUI:
         try:
             # --- Use the dynamic session ID ---
             exchange = self.core.sessions[self.current_session_id][index]
+            prompt_text = ""
             user_content = exchange.get("user_content")
-            user_data = json.loads(user_content.parts[0].text)
-            prompt_text = user_data.get("prompt", "")
-            
+            # Find the text part in the exchange to extract the original prompt
+            for part in user_content.parts:
+                if hasattr(part, 'text') and part.text:
+                    user_data = json.loads(part.text)
+                    prompt_text = user_data.get("user_prompt", "")
+                    break
             self.prompt_box.delete("1.0", "end")
             self.prompt_box.insert("1.0", prompt_text)
             self.tab_view.set("Prompt")

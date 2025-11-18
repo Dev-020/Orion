@@ -5,6 +5,7 @@ import sqlite3
 import pkgutil
 from datetime import datetime, timezone
 import sys
+import time
 from google import genai
 from google.genai import types
 import threading
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 import json
 import pickle
 from main_utils import config, main_functions as functions
-from system_utils import run_startup_diagnostics, generate_manifests, orion_tts
+from system_utils import orion_replay, run_startup_diagnostics, generate_manifests, orion_tts
 
 # --- TTS Integration ---
 # Import the speak function from your chosen TTS script.
@@ -47,10 +48,22 @@ class OrionCore:
         # Initialize or refresh database paths from functions module
         functions.initialize_persona(self.persona)
 
+        self.vision_attachments = {} # NEW: To store incoming video file handles
+
         # --- NEW: Start the persistent TTS thread ---
+        voice_notification = None
         if config.VOICE:
             orion_tts.start_tts_thread()
             print("--- TTS Module is Activated. ---")
+            voice_notification = "Voice Module: Your voice is activated. Structure your response to be spoken aloud. Use a conversational, direct-to-user tone. Avoid complex formatting like large tables, code blocks, or deeply nested lists that are difficult to read verbally. Instead, summarize complex data and present it in a clear, narrative style."
+
+        # --- NEW: Start the persistent Vision thread ---
+        if config.VISION:
+            print("--- Vision Module is Activated. ---")
+            orion_replay.launch_obs_hidden()
+            if orion_replay.connect_to_obs():
+                orion_replay.start_replay_watcher(orion_replay.REPLAY_SAVE_PATH, self._vision_file_handler)
+                orion_replay.start_vision_thread()
 
         # Refreshing Core Instructions
         print("--- Syncing Core Instructions... ---")
@@ -64,8 +77,8 @@ class OrionCore:
         print("--- Initializing Orion Core (Unified Model) ---")
         self.model_name = model_name
         self.client = genai.Client(
-            api_key=os.getenv("GOOGLE_API_KEY"),
-            http_options=types.HttpOptions(api_version='v1alpha')
+            api_key=os.getenv("GOOGLE_API_KEY")
+            #http_options=types.HttpOptions(api_version='v1alpha')
         )
         self.tools = self._load_tools()
         self.tools.append(self.trigger_instruction_refresh)
@@ -79,9 +92,11 @@ class OrionCore:
         else:
             diagnostic_message = "[System Diagnostic: WARNING - One or more core tools failed the initial heartbeat check. Functionality may be impaired. Advise the Primary Operator.]"
         
-        # --- Inject diagnostic result into instructions ---
+        # --- Inject diagnostic result and voice notification into instructions ---
         base_instructions = self._read_all_instructions()
         self.current_instructions = f"{base_instructions}\n\n---\n\n{diagnostic_message}"
+        if voice_notification:
+            self.current_instructions += f"\n\n---\n\n{voice_notification}"
 
         if not self._load_state_on_restart():
             self.sessions: dict[str, list] = {}
@@ -229,6 +244,21 @@ class OrionCore:
                 print(f"  - CRITICAL: Failed to even clean up restart_state table: {cleanup_e}")
             return False
 
+    def _vision_file_handler(self, file_path: str):
+        """Callback function for the replay_buffer's file watcher."""
+        print(f"[Vision Handler] New replay file detected: {file_path}")
+        try:
+            display_name = os.path.basename(file_path)
+            mime_type = "video/mp4"
+            
+            with open(file_path, 'rb') as f:
+                video_bytes = f.read()
+
+            self.vision_attachments = {"video_bytes": video_bytes, "display_name": display_name, "mime_type": mime_type}
+            print(f"[Vision Handler] '{display_name}' uploaded and queued for next prompt.")
+        except Exception as e:
+            print(f"[Vision Handler] Error processing vision file: {e}")
+
     def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str) -> tuple[str | None, int | None, bool]:
         """
         Processes a prompt using automatic function calling and archives the result.
@@ -303,8 +333,9 @@ class OrionCore:
                         context_ids_for_db.extend(result_data['ids'][0])
 
             vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
-            vdb_content = types.UserContent(parts=types.Part.from_text(text=vdb_response)) if vdb_response else None
             #print(vdb_response)
+            
+            # Format User Content
             data_envelope = {
                 "auth": {
                     "user_id": user_id,
@@ -313,22 +344,32 @@ class OrionCore:
                     "authentication_status": "PRIMARY_OPERATOR" if user_id == os.getenv("DISCORD_OWNER_ID") else "EXTERNAL_ENTITY"
                 },
                 "timestamp_utc": timestamp_utc_iso,
-                "prompt": user_prompt,
+                "system_notifications": [],
+                "user_prompt": user_prompt,
+
             }
             
-            # Convert vdb result and data_envelope to Parts
-            structured_prompt = types.Part.from_text(text=json.dumps(data_envelope))
+            # --- NEW: Vision Module Notification ---
+            if config.VISION and self.vision_attachments:
+                print(f"  - Attaching {self.vision_attachments["display_name"]} queued vision captures...")
+                uploaded_file = self.upload_file(
+                    self.vision_attachments["video_bytes"], 
+                    self.vision_attachments["display_name"],
+                    self.vision_attachments["mime_type"]
+                )
+                if uploaded_file:
+                    file_check.append(uploaded_file)
+                    data_envelope["system_notifications"].append(f"[Vision Module: The following video file '{self.vision_attachments['display_name']}' is from an autonomous replay buffer system. They represent the last 30 seconds of screen activity prior to your activation. Analyze them for any relevant context or interesting events that may have occurred.]")
+                else:
+                    # If the upload or processing fails, add a notification for the AI.
+                    data_envelope["system_notifications"].append(f"[Vision Module: A video file named '{self.vision_attachments['display_name']}' was detected by the replay buffer but failed to be processed by the File API. Inform the user that the video context for this prompt is missing.]")
+                
+                self.vision_attachments = {} # Clear the queue regardless of success
             
             # Convert File Attachments to Parts
-            final_prompt = structured_prompt
             attachments_for_db = []
-            if file_check:
-                # print("IT RUNS 2")
+            if file_check: # file_check contains the raw, valid File objects
                 for file in file_check:
-                    # This adds the file object to the prompt for immediate use by the AI
-                    final_prompt = [structured_prompt]
-                    final_prompt.append(types.Part.from_uri(file_uri=file.uri, mime_type=file.mime_type))
-                    
                     print(f"  - File '{file.display_name}' added to prompt for AI processing.")
                     # This creates a clean dictionary with the most essential, permanent
                     # data to be archived in your database.
@@ -340,26 +381,42 @@ class OrionCore:
                     }
                     print(f"  - Prepared metadata for DB: {file_metadata}")
                     attachments_for_db.append(file_metadata)
+                print(f"--- Processed a total of {len(file_check)} files ---")
+            user_content_for_db = types.UserContent(parts=[types.Part.from_text(text=json.dumps(data_envelope, indent=2))])
             
-            # Wrapping all User Parts into User Content
-            final_content=types.UserContent(parts=final_prompt)
+            # --- CORRECTED STRUCTURE: Consolidate all text context ---
+            # All contextual information (VDB, metadata) is formatted into a single
+            # text block that precedes the user's actual prompt.
+            # Add the metadata envelope to the context block
+            data_envelope["vdb_context"] = vdb_response
+            context_block = json.dumps(data_envelope, indent=2)
+            
+            # The final text part combines the context block and the user's prompt.
+            final_text_part = types.Part.from_text(text=context_block)
 
+            # Wrapping all User Parts into User Content
+            # The final user turn consists ONLY of the file parts and the single, consolidated text part.
+            # This is the valid structure the API expects.
+            final_part = file_check + [final_text_part] # The File objects from file_check are used directly as parts.
+            final_content=types.UserContent(parts=final_part)
+            
             # Sending User Content to Orion
             # --- MODIFICATION: "Unroll" new ExchangeDict structure into flat list ---
             contents_to_send = []
             for exchange in chat_session:
-                contents_to_send.append(exchange["user_content"])
+                # The user_content is already a valid Content object
+                if exchange.get("user_content"):
+                    contents_to_send.append(exchange["user_content"])
                 if exchange.get("tool_calls"):
                     contents_to_send.extend(exchange["tool_calls"])
                 if exchange.get("model_content"):
                     contents_to_send.append(exchange["model_content"])
-            # --- END OF MODIFICATION ---
-            
-            if vdb_content:
-                contents_to_send.append(vdb_content)
+
+            # The final_content object, which is a UserContent object, is the current turn.
+            # It gets appended after the entire history has been unrolled.
             contents_to_send.append(final_content)
 
-            print(f"----- All necessary content prepared. Sending Prompt to Orion. . . -----")
+            print("----- All necessary content prepared. Sending Prompt to Orion. . . -----")
             response = self.client.models.generate_content(
                 model=f'{self.model_name}',
                 contents=contents_to_send,
@@ -424,7 +481,7 @@ class OrionCore:
 
             # 4. Create the new ExchangeDict
             new_exchange = {
-                "user_content": final_content,
+                "user_content": user_content_for_db,
                 "tool_calls": new_tool_turns,
                 "model_content": response_content,
                 "db_id": new_db_id, # Store the new ID
@@ -601,8 +658,7 @@ class OrionCore:
         """
         try:
             print(f"  - Uploading file '{display_name}' to the File API...")
-            # Use the central client to access the 'files' service and upload
-            # The 'file' parameter correctly takes a file-like object.
+            # 1. Upload the file
             file_handle = self.client.files.upload(
                 file=io.BytesIO(file_bytes),
                 config=types.UploadFileConfig(
@@ -610,8 +666,23 @@ class OrionCore:
                     display_name=display_name
                 )
             )
-            print(f"  - Upload successful. URI: {file_handle.uri}")
+            print(f"  - Upload successful. File Name: {file_handle.name}. Waiting for processing...")
+
+            # 2. Poll for ACTIVE state
+            while file_handle.state.name == "PROCESSING":
+                time.sleep(1) # Wait for 1 seconds before checking again
+                file_handle = self.client.files.get(name=file_handle.name)
+
+            # 3. Check final state
+            if file_handle.state.name == "FAILED":
+                print(f"ERROR: File '{display_name}' failed processing by the API.")
+                # Optionally, delete the failed file to clean up
+                self.client.files.delete(name=file_handle.name)
+                return None
+            
+            print(f"  - File '{display_name}' is now ACTIVE and ready. URI: {file_handle.uri}")
             return file_handle
+
         except Exception as e:
             print(f"ERROR: File API upload failed for '{display_name}'. Error: {e}")
             return None
@@ -629,6 +700,8 @@ class OrionCore:
         # --- NEW: Stop the TTS thread on shutdown ---
         if config.VOICE:
             orion_tts.stop_tts_thread()
+        if config.VISION:
+            orion_replay.shutdown_obs()
         print("--- Orion is now offline. ---")
 
     def execute_restart(self):
