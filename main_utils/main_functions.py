@@ -409,7 +409,7 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
         return f"Database Error: {e}"
 
 
-def execute_sql_write(query: str, params: List[Union[str, int, float, None]], user_id: str) -> str:
+def execute_sql_write(query: str, params: list, user_id: str) -> str:
     """
     Executes a write query (INSERT, UPDATE, DELETE) on the database using a
     tiered security model.

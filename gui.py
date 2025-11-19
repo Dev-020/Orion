@@ -1,8 +1,10 @@
-# gui_app.py (v3.2 - Multi-Session Management)
+# gui_app.py (v3.3 - Restored & Fixed)
 # 1. Adds a "Sessions" tab to create, switch, and refresh sessions.
 # 2. Replaces hardcoded 'GUI_SESSION_ID' with 'self.current_session_id'.
 # 3. All GUI actions (chat, delete, clear) now target the active session.
 # 4. RESTORES the "loading" placeholder bubble.
+# 5. FIXES: Chat bubble text wrapping.
+# 6. FIXES: Dynamic user name display.
 
 import customtkinter
 import tkinter
@@ -55,6 +57,9 @@ class OrionGUI:
         
         # --- MODIFICATION: Restore placeholder variable ---
         self.current_loading_frame = None 
+        
+        # --- MODIFICATION: Streaming Toggle ---
+        self.use_streaming_var = customtkinter.BooleanVar(value=True)
         
         # --- (PanedWindow and Top Pane setup is unchanged) ---
         self.paned_window = tkinter.PanedWindow(
@@ -322,6 +327,24 @@ class OrionGUI:
         )
         shutdown_button.pack(side="left", fill="x", expand=True)
 
+        # --- Generation Settings Frame ---
+        gen_settings_frame = customtkinter.CTkFrame(tab_frame, fg_color="transparent")
+        gen_settings_frame.pack(fill="x", padx=10, pady=20)
+        
+        gen_label = customtkinter.CTkLabel(
+            gen_settings_frame,
+            text="Generation Settings",
+            font=customtkinter.CTkFont(weight="bold")
+        )
+        gen_label.pack(anchor="w")
+        
+        stream_switch = customtkinter.CTkSwitch(
+            gen_settings_frame,
+            text="Enable Streaming Response",
+            variable=self.use_streaming_var
+        )
+        stream_switch.pack(anchor="w", pady=(5, 0))
+
     def _update_user_dropdown(self):
         """Helper function to rebuild the user dropdown list."""
         user_options = [f"{name} ({uid})" for uid, name in self.user_list.items()]
@@ -475,18 +498,16 @@ class OrionGUI:
                 file_text = ""
 
                 for part in user_content.parts:
-                    # Check if it's a file part (File object from File API)
+                    # Check if it's a file part
                     if hasattr(part, 'display_name'):
                         file_text += f"[File: {part.display_name}]\n"
                     # Check if it's a text part containing our JSON envelope
                     elif hasattr(part, 'text') and part.text:
                         try:
                             user_data = json.loads(part.text)
-                            # Extract the actual prompt and user name from the JSON
                             prompt_text = user_data.get("user_prompt", "[User prompt]")
                             user_name = user_data.get("auth", {}).get("user_name", "User")
                         except (json.JSONDecodeError, TypeError):
-                            # This handles cases where a text part is not our JSON envelope
                             continue
 
                 user_bubble = customtkinter.CTkLabel(
@@ -495,12 +516,12 @@ class OrionGUI:
                     text_color="cyan",
                     anchor="w",
                     justify="left",
-                    font=customtkinter.CTkFont(size=15) # Your font size
+                    font=customtkinter.CTkFont(size=15)
                 )
                 user_bubble.pack(fill="x", padx=10, pady=(5, 2))
                 labels_to_wrap.append(user_bubble)
                 
-                if file_text: # Only create the file label if files were found
+                if file_text:
                     file_label = customtkinter.CTkLabel(
                         master_frame,
                         text=file_text.strip(),
@@ -533,7 +554,7 @@ class OrionGUI:
                     text=f"Orion: {model_text.strip()}",
                     anchor="w",
                     justify="left",
-                    font=customtkinter.CTkFont(size=15) # Your font size
+                    font=customtkinter.CTkFont(size=15)
                 )
                 model_bubble.pack(fill="x", padx=10, pady=(2, 0))
                 labels_to_wrap.append(model_bubble)
@@ -570,27 +591,21 @@ class OrionGUI:
             print(f"ERROR: Failed to draw chat bubble for index {index}: {e}")
             self._add_system_message(f"--- Error rendering exchange {index} ---", "error")
 
-    # --- MODIFICATION: This function now targets 'self.current_session_id' ---
     def _on_delete_exchange_pressed(self, index: int):
-        """
-        Called by a chat bubble's 'X' button.
-        Copies the prompt, truncates the history, and rebuilds the GUI.
-        """
         try:
-            # --- Use the dynamic session ID ---
             exchange = self.core.sessions[self.current_session_id][index]
             prompt_text = ""
             user_content = exchange.get("user_content")
-            # Find the text part in the exchange to extract the original prompt
             for part in user_content.parts:
                 if hasattr(part, 'text') and part.text:
-                    user_data = json.loads(part.text)
-                    prompt_text = user_data.get("user_prompt", "")
-                    break
+                    try:
+                        user_data = json.loads(part.text)
+                        prompt_text = user_data.get("user_prompt", "")
+                        break
+                    except: continue
             self.prompt_box.delete("1.0", "end")
             self.prompt_box.insert("1.0", prompt_text)
             self.tab_view.set("Prompt")
-            
         except Exception as e:
             print(f"--- GUI: Could not copy prompt text: {e} ---")
         
@@ -602,14 +617,12 @@ class OrionGUI:
             return
             
         print(f"--- GUI: User confirmed 'Truncate at {index}' ---")
-        
-        # --- Use the dynamic session ID ---
         result = self.core.manage_session_history(self.current_session_id, count=99999, index=index)
-        
         self._rebuild_chat_display()
+        self.history_index_entry.delete(0, "end")
+        self.history_count_entry.delete(0, "end")
         print(f"--- GUI: {result} ---")
 
-    # --- (scroll and wrap functions are unchanged) ---
     def _scroll_chat_to_bottom(self):
         try:
             self.app.update_idletasks()
@@ -624,7 +637,6 @@ class OrionGUI:
         for label in labels:
             label.configure(wraplength=new_wraplength)
 
-    # --- (File Uploading functions are unchanged) ---
     def open_upload_dialog(self):
         if self.is_processing:
             return
@@ -699,16 +711,10 @@ class OrionGUI:
         else:
             self.file_label.configure(text=f"{count} file(s) ready.", text_color="cyan")
 
-    # --- MODIFICATION: This function now targets 'self.current_session_id' ---
     def on_truncate_history_pressed(self):
-        """
-        Called by the 'Execute Truncation' button.
-        Parses count/index and calls the core function.
-        """
         try:
             index_str = self.history_index_entry.get().strip()
             count_str = self.history_count_entry.get().strip()
-            
             index = int(index_str) if index_str else 0
             count = int(count_str) if count_str else 0
 
@@ -718,7 +724,6 @@ class OrionGUI:
             if index < 0:
                 messagebox.showerror("Invalid Input", "Index must be 0 or greater.")
                 return
-
         except ValueError:
             messagebox.showerror("Invalid Input", "Index and Count must be valid numbers.")
             return
@@ -730,19 +735,13 @@ class OrionGUI:
             print(f"--- GUI: User cancelled truncation. ---")
             return
             
-        print(f"--- GUI: User requested truncation: count={count}, index={index} ---")
-        
-        # --- Use the dynamic session ID ---
+        print(f"--- GUI: User confirmed truncation: count={count}, index={index} ---")
         result = self.core.manage_session_history(self.current_session_id, count=count, index=index)
-
         self._rebuild_chat_display()
-        
         self.history_index_entry.delete(0, "end")
         self.history_count_entry.delete(0, "end")
-        
         print(f"--- GUI: {result} ---")
 
-    # --- (Shutdown functions are unchanged, they are GLOBAL) ---
     def on_shutdown_pressed(self):
         mode = self.shutdown_mode_var.get()
         title = f"{mode} Confirmation"
@@ -778,177 +777,206 @@ class OrionGUI:
 
     def do_hard_restart_thread(self):
         try:
-            self.app.after(0, lambda: self._add_system_message(
-                "--- System: Saving state... ---"
-            ))
+            self.app.after(0, lambda: self._add_system_message("--- System: Saving state... ---"))
             if self.core.save_state_for_restart():
-                self.app.after(0, lambda: self._add_system_message(
-                    "--- System: State saved. Executing restart now. ---"
-                ))
+                self.app.after(0, lambda: self._add_system_message("--- System: State saved. Executing restart now. ---"))
                 self.core.execute_restart()
             else:
                 raise Exception("save_state_for_restart() returned False.")
         except Exception as e:
             print(f"ERROR: Hard restart failed: {e}")
-            self.app.after(0, lambda: self._add_system_message(
-                f"--- ERROR: Hard restart failed: {e} ---", "error"
-            ))
+            self.app.after(0, lambda: self._add_system_message(f"--- ERROR: Hard restart failed: {e} ---", "error"))
 
-    # --- MODIFICATION: Restored placeholder logic ---
+    def _add_user_message_bubble(self, text, file_handles):
+        master_frame = customtkinter.CTkFrame(self.chat_frame, fg_color="#303030")
+        master_frame.pack(fill="x", pady=(5, 5), padx=5)
+        
+        user_bubble = customtkinter.CTkLabel(
+            master_frame,
+            text=f"{self.current_user_name}: {text}",
+            text_color="cyan",
+            anchor="w",
+            justify="left",
+            font=customtkinter.CTkFont(size=15)
+        )
+        user_bubble.pack(fill="x", padx=10, pady=(5, 2))
+        
+        # --- FIX: Ensure text wrapping works dynamically ---
+        user_bubble.configure(wraplength=400)
+        master_frame.bind(
+            "<Configure>", 
+            lambda event, labels=[user_bubble]: self._update_bubble_wraps(event, labels)
+        )
+        
+        if file_handles:
+            file_text = "\n".join([f"[File: {f.display_name}]" for f in file_handles])
+            file_label = customtkinter.CTkLabel(
+                master_frame,
+                text=file_text,
+                text_color="cyan",
+                font=customtkinter.CTkFont(size=11, slant="italic"),
+                anchor="w",
+                justify="left"
+            )
+            file_label.pack(fill="x", padx=15, pady=(0, 5))
+            
+        self._scroll_chat_to_bottom()
+
+    def _add_model_message_bubble(self, initial_text):
+        master_frame = customtkinter.CTkFrame(self.chat_frame, fg_color="#303030")
+        master_frame.pack(fill="x", pady=(5, 5), padx=5)
+        
+        model_bubble = customtkinter.CTkLabel(
+            master_frame,
+            text=initial_text,
+            anchor="w",
+            justify="left",
+            font=customtkinter.CTkFont(size=15)
+        )
+        model_bubble.pack(fill="x", padx=10, pady=(2, 5))
+        
+        # --- FIX: Ensure text wrapping works dynamically ---
+        # Set an initial wrap length (arbitrary, will be updated by event)
+        model_bubble.configure(wraplength=400) 
+        
+        # Bind the Configure event to update wraplength on resize
+        master_frame.bind(
+            "<Configure>", 
+            lambda event, labels=[model_bubble]: self._update_bubble_wraps(event, labels)
+        )
+        
+        self._scroll_chat_to_bottom()
+        return model_bubble
+
     def on_send_pressed(self, event=None):
         if self.is_processing:
             return
         
-        prompt_text = self.prompt_box.get("1.0", "end-1c").strip()
-        handles_to_send = list(self.uploaded_file_handles)
-        
-        if not prompt_text and not handles_to_send:
+        user_input = self.prompt_box.get("1.0", "end-1c").strip()
+        if not user_input and not self.uploaded_file_handles:
             return
 
         self.is_processing = True
-        self.send_button.configure(state="disabled", text="...")
-        self.upload_button.configure(state="disabled")
         self.prompt_box.delete("1.0", "end")
+        self.send_button.configure(state="disabled")
+        self.upload_button.configure(state="disabled")
 
-        # --- Draw the placeholder bubble ---
-        # --- MODIFICATION: Pass the current user's name ---
-        self._draw_placeholder_bubbles(prompt_text, handles_to_send, self.current_user_name)
+        # 1. Create User Bubble immediately
+        self._add_user_message_bubble(user_input, self.uploaded_file_handles)
+
+        # 2. Create Model Placeholder Bubble immediately
+        model_bubble = self._add_model_message_bubble("Orion: ...")
+        
+
+        # 3. Start Processing Thread
+        # We pass the file handles and then clear the staging list
+        files_to_process = list(self.uploaded_file_handles)
+        self._clear_staging_area()
         
         threading.Thread(
-            target=self.process_in_thread,
-            args=(prompt_text, handles_to_send),
+            target=self.process_in_thread, 
+            args=(user_input, files_to_process, model_bubble),
             daemon=True
         ).start()
-        
+
+    def process_in_thread(self, user_prompt, file_handles, model_bubble):
+        try:
+            # --- Streaming Call ---
+            use_stream = self.use_streaming_var.get()
+            
+            # We iterate over the generator returned by process_prompt (which is now ALWAYS a generator)
+            response_generator = self.core.process_prompt(
+                session_id=self.current_session_id,
+                user_prompt=user_prompt,
+                file_check=file_handles,
+                user_id=self.current_user_id,
+                user_name=self.current_user_name,
+                stream=use_stream
+            )
+            
+            full_response_text = ""
+            
+            for chunk in response_generator:
+                # Handle Dictionary Events
+                if isinstance(chunk, dict):
+                    msg_type = chunk.get("type")
+                    
+                    if msg_type == "status":
+                        # Update bubble with status
+                        status_text = chunk.get("content", "Processing...")
+                        self.app.after(0, lambda t=status_text: model_bubble.configure(text=f"Orion: [{t}] ..."))
+                        
+                    elif msg_type == "token":
+                        # Streaming text
+                        text_chunk = chunk.get("content", "")
+                        full_response_text += text_chunk
+                        self.app.after(0, lambda t=full_response_text: model_bubble.configure(text=f"Orion: {t}"))
+                        
+                    elif msg_type == "usage":
+                        # Streaming complete - Show tokens
+                        token_count = chunk.get("token_count", 0)
+                        restart_pending = chunk.get("restart_pending", False)
+                        print(f"--- Stream Complete. Tokens: {token_count} ---")
+                        
+                        # Add token label
+                        def add_token_label(cnt=token_count):
+                            master_frame = model_bubble.master
+                            token_label = customtkinter.CTkLabel(
+                                master_frame, 
+                                text=f"({cnt} tokens)", 
+                                font=customtkinter.CTkFont(size=10), 
+                                text_color="gray"
+                            )
+                            token_label.pack(anchor="e", padx=10, pady=(0, 2))
+                            
+                        self.app.after(0, add_token_label)
+                        
+                        if restart_pending:
+                             self.app.after(0, lambda: self._add_system_message("--- System: Restart Required. Initiating... ---"))
+                             self.app.after(2000, self.do_hard_restart_thread)
+
+                    elif msg_type == "full_response":
+                        # Non-streaming complete
+                        full_text = chunk.get("text", "")
+                        token_count = chunk.get("token_count", 0)
+                        restart_pending = chunk.get("restart_pending", False)
+                        
+                        self.app.after(0, lambda t=full_text: model_bubble.configure(text=f"Orion: {t}"))
+                        
+                        # Add token label
+                        def add_token_label_full(cnt=token_count):
+                            master_frame = model_bubble.master
+                            token_label = customtkinter.CTkLabel(
+                                master_frame, 
+                                text=f"({cnt} tokens)", 
+                                font=customtkinter.CTkFont(size=10), 
+                                text_color="gray"
+                            )
+                            token_label.pack(anchor="e", padx=10, pady=(0, 2))
+                        
+                        self.app.after(0, add_token_label_full)
+
+                        if restart_pending:
+                             self.app.after(0, lambda: self._add_system_message("--- System: Restart Required. Initiating... ---"))
+                             self.app.after(2000, self.do_hard_restart_thread)
+
+        except Exception as e:
+            error_msg = f"Error: {e}"
+            print(error_msg)
+            self.app.after(0, lambda: self._add_system_message(f"--- {error_msg} ---", "error"))
+            
+        finally:
+            self.is_processing = False
+            self.app.after(0, lambda: self.send_button.configure(state="normal"))
+            self.app.after(0, lambda: self.upload_button.configure(state="normal"))
+            self.app.after(0, self._scroll_chat_to_bottom)
+
+    def _clear_staging_area(self):
         self.uploaded_file_handles.clear()
         self.update_file_count_label()
         for widget in self.staging_frame.winfo_children():
             widget.destroy()
 
-    # --- MODIFICATION: Restored placeholder logic ---
-    def process_in_thread(self, prompt_text: str, file_handles: list):
-        # --- MODIFICATION: Store the session ID locally ---
-        session_id_for_this_thread = self.current_session_id
-        # --- END OF MODIFICATION ---
-        
-        try:
-            _, _, restart_pending = self.core.process_prompt(
-                # --- Use the dynamic session ID ---
-                session_id=self.current_session_id,
-                user_prompt=prompt_text,
-                file_check=file_handles,
-                user_id=self.current_user_id,
-                user_name=self.current_user_name
-            )
-            
-            # --- Use the dynamic session ID ---
-            new_exchange_index = len(self.core.sessions[self.current_session_id]) - 1
-            new_exchange = self.core.sessions[self.current_session_id][-1]
-            
-            # --- Call the "replace" function ---
-            self.app.after(0, self._replace_placeholder_with_final_exchange, new_exchange, new_exchange_index, session_id_for_this_thread)
-            
-            if restart_pending:
-                self.app.after(500, self.execute_gui_restart)
-
-        except Exception as e:
-            print(f"ERROR: process_prompt failed: {e}")
-            # --- Clean up placeholder on error ---
-            if self.current_loading_frame:
-                self.app.after(0, self.current_loading_frame.destroy)
-                self.current_loading_frame = None
-                
-            self.app.after(0, lambda: self._add_system_message(
-                f"--- ERROR: {e} ---", "error"
-            ))
-        
-        finally:
-            self.app.after(0, self.reset_gui_state)
-
-    # --- MODIFICATION: Restore placeholder functions ---
-    def _draw_placeholder_bubbles(self, prompt_text: str, file_handles: list, user_name: str):
-        """
-        Draws a temporary 'loading' bubble to give the user
-        immediate feedback.
-        """
-        try:
-            if self.current_loading_frame:
-                self.current_loading_frame.destroy()
-
-            master_frame = customtkinter.CTkFrame(self.chat_frame, fg_color="#303030")
-            master_frame.pack(fill="x", pady=(5, 5), padx=5)
-            self.current_loading_frame = master_frame
-
-            user_bubble = customtkinter.CTkLabel(
-                master_frame,
-                text=f"{user_name}: {prompt_text}", # --- MODIFICATION: Use dynamic user name ---
-                text_color="cyan",
-                anchor="w",
-                justify="left",
-                font=customtkinter.CTkFont(size=15)
-            )
-            user_bubble.pack(fill="x", padx=10, pady=(5, 2))
-
-            file_text = ""
-            for handle in file_handles:
-                file_text += f"[File: {handle.display_name}]\n"
-            if file_text:
-                file_label = customtkinter.CTkLabel(
-                    master_frame,
-                    text=file_text.strip(),
-                    text_color="cyan",
-                    font=customtkinter.CTkFont(size=11, slant="italic"),
-                    anchor="w",
-                    justify="left"
-                )
-                file_label.pack(fill="x", padx=15, pady=(0, 5))
-
-            loading_bubble = customtkinter.CTkLabel(
-                master_frame,
-                text="Orion: ...",
-                anchor="w",
-                justify="left",
-                text_color="gray",
-                font=customtkinter.CTkFont(size=15)
-            )
-            loading_bubble.pack(fill="x", padx=10, pady=(2, 5))
-            
-            master_frame.bind(
-                "<Configure>", 
-                lambda event, labels=[user_bubble]: self._update_bubble_wraps(event, labels)
-            )
-            
-            self._scroll_chat_to_bottom()
-
-        except Exception as e:
-            print(f"ERROR: Failed to draw placeholder bubble: {e}")
-
-    # --- MODIFICATION: Add 'session_id' to the function signature ---
-    def _replace_placeholder_with_final_exchange(self, new_exchange: Dict[str, Any], new_exchange_index: int, session_id: str):
-        """
-        Destroys the temporary 'loading' bubble and draws the
-        final, complete exchange widget.
-        """
-        
-        # --- MODIFICATION: Add this check ---
-        # If the session_id from the worker thread is NOT the
-        # currently active GUI session, DO NOTHING.
-        # The placeholder is already gone, and the new message
-        # will be drawn when the user switches back.
-        if session_id != self.current_session_id:
-            print(f"--- GUI: Suppressing response from non-active session: {session_id} ---")
-            return
-        # --- END OF MODIFICATION ---
-
-        if self.current_loading_frame:
-            self.current_loading_frame.destroy()
-            self.current_loading_frame = None
-            
-        self._add_exchange_widget(new_exchange, new_exchange_index)
-        
-        self._scroll_chat_to_bottom()
-        
-    # --- (Rest of file is unchanged) ---
     def reset_gui_state(self):
         self.is_processing = False
         self.send_button.configure(state="normal", text="Send")

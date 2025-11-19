@@ -1,5 +1,6 @@
 # orion_core.py (Final Unified Model)
 import importlib
+from typing import Generator
 import os
 import sqlite3
 import pkgutil
@@ -55,6 +56,7 @@ class OrionCore:
         functions.initialize_persona(self.persona)
 
         self.vision_attachments = {} # NEW: To store incoming video file handles
+        self.file_processing_agent = None # NEW: For delegating file tasks on Vertex
 
         # --- NEW: Start the persistent TTS thread ---
         voice_notification = None
@@ -82,10 +84,10 @@ class OrionCore:
         # Initializes Orion AI
         print("--- Initializing Orion Core (Unified Model) ---")
         self.model_name = model_name
-        self.client = genai.Client(
-            api_key=os.getenv("GOOGLE_API_KEY")
-            #http_options=types.HttpOptions(api_version='v1alpha')
-        )
+        if config.VERTEX:
+            self.client = genai.Client(vertexai=True, project=os.getenv("GEMINI_PROJECT_ID"), location="global")
+        else:
+            self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
         self.tools = self._load_tools()
         self.tools.append(self.trigger_instruction_refresh)
         
@@ -281,157 +283,216 @@ class OrionCore:
         except Exception as e:
             print(f"[Vision Handler] Error processing vision file: {e}")
 
-    def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str) -> tuple[str | None, int | None, bool]:
+    def _prepare_prompt_data(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str):
         """
-        Processes a prompt using automatic function calling and archives the result.
+        Internal helper: Prepares all data, context, and file attachments for the AI prompt.
+        Returns a tuple of collected data needed for generation and archival.
         """
         print(f"----- Processing prompt for session {session_id} and user {user_name} -----")
-        try:
-            chat_session = self._get_session(session_id)
-            
-            # The SDK handles the entire tool-use loop automatically.
-            # We send the message once and get the final text response.
-            
-            # Setting up User Content
-            timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
-            
-            # --- CONTEXT INJECTION CONTROL ---
-            # Automatic Past-Memory Recall to provide additional context on-demand based on the User Prompt.
-            # These recalls will not be saved to the chat history.
-            
-            # --- MODIFICATION: Dynamically build excluded_ids from session ---
-            excluded_ids = []
-            for exchange in chat_session:
-                if exchange.get("db_id"):
-                    excluded_ids.append(exchange["db_id"])
-            # --- END OF MODIFICATION ---
-            
-            # Query 1: Deep Memory (with token limit)
-            deep_memory_where = {"source_table": "deep_memory"}
-            if excluded_ids:
-                deep_memory_where = {"$and": [
-                    {"source_table": "deep_memory"},
-                    {"source_id": {"$nin": excluded_ids}},
-                    {"session_id": session_id}
-                ]}
+        chat_session = self._get_session(session_id)
+        
+        # Setting up User Content
+        timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
+        
+        # --- CONTEXT INJECTION CONTROL ---
+        # Dynamically build excluded_ids from session
+        excluded_ids = []
+        for exchange in chat_session:
+            if exchange.get("db_id"):
+                excluded_ids.append(exchange["db_id"])
+        
+        # Query 1: Deep Memory (with token limit)
+        deep_memory_where = {"source_table": "deep_memory"}
+        if excluded_ids:
+            deep_memory_where = {"$and": [
+                {"source_table": "deep_memory"},
+                {"source_id": {"$nin": excluded_ids}},
+                {"session_id": session_id}
+            ]}
 
-            deep_memory_results_raw = functions.execute_vdb_read(
-                query_texts=[user_prompt], 
-                n_results=5, 
-                where=deep_memory_where
+        deep_memory_results_raw = functions.execute_vdb_read(
+            query_texts=[user_prompt], 
+            n_results=5, 
+            where=deep_memory_where
+        )
+
+        # Query 2: Long-Term Memory
+        long_term_results_raw = functions.execute_vdb_read(
+            query_texts=[user_prompt], 
+            n_results=3, 
+            where={"source_table": "long_term_memory"}
+        )
+        
+        # Query 3: Operational Protocols
+        operational_protocols_results_raw = functions.execute_vdb_read(
+            query_texts=[user_prompt], 
+            n_results=3, 
+            where={"source": "Operational_Protocols.md"}
+        )
+        
+        # Combine and format results
+        formatted_deep_mem = self._format_vdb_results_for_context(deep_memory_results_raw, "Deep Memory")
+        formatted_long_term = self._format_vdb_results_for_context(long_term_results_raw, "Long-Term Memory")
+        formatted_op_protocol = self._format_vdb_results_for_context(operational_protocols_results_raw, "Operational Protocols")
+        
+        # The formatted string for the AI's context
+        formatted_vdb_context = f"{formatted_deep_mem}\n{formatted_long_term}\n{formatted_op_protocol}".strip()
+
+        # Extract only the source_ids from the VDB results to be archived.
+        context_ids_for_db = []
+        for raw_result in [deep_memory_results_raw, long_term_results_raw, operational_protocols_results_raw]:
+            if raw_result:
+                result_data = json.loads(raw_result)
+                if result_data.get('ids') and result_data['ids'][0]:
+                    context_ids_for_db.extend(result_data['ids'][0])
+
+        vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
+        
+        # Format User Content
+        data_envelope = {
+            "auth": {
+                "user_id": user_id,
+                "user_name": user_name,
+                "session_id": session_id,
+                "authentication_status": "PRIMARY_OPERATOR" if user_id == os.getenv("DISCORD_OWNER_ID") else "EXTERNAL_ENTITY"
+            },
+            "timestamp_utc": timestamp_utc_iso,
+            "system_notifications": [],
+            "user_prompt": user_prompt,
+        }
+        
+        # --- Vision Module Notification ---
+        if config.VISION and self.vision_attachments:
+            print(f"  - Attaching {self.vision_attachments['display_name']} queued vision captures...")
+            uploaded_file = self.upload_file(
+                self.vision_attachments["video_bytes"], 
+                self.vision_attachments["display_name"],
+                self.vision_attachments["mime_type"]
             )
-
-            # Query 2: Long-Term Memory
-            long_term_results_raw = functions.execute_vdb_read(
-                query_texts=[user_prompt], 
-                n_results=3, 
-                where={"source_table": "long_term_memory"}
-            )
+            if uploaded_file:
+                file_check.append(uploaded_file)
+                data_envelope["system_notifications"].append(f"[Vision Module: The following video file '{self.vision_attachments['display_name']}' is from an autonomous replay buffer system. They represent the last 30 seconds of screen activity prior to your activation. Analyze them for any relevant context or interesting events that may have occurred.]")
+            else:
+                data_envelope["system_notifications"].append(f"[Vision Module: A video file named '{self.vision_attachments['display_name']}' was detected by the replay buffer but failed to be processed by the File API. Inform the user that the video context for this prompt is missing.]")
             
-            # Query 3: Operational Protocols
-            operational_protocols_results_raw = functions.execute_vdb_read(
-                query_texts=[user_prompt], 
-                n_results=3, 
-                where={"source": "Operational_Protocols.md"}
-            )
-            
-            # Combine and format results
-            formatted_deep_mem = self._format_vdb_results_for_context(deep_memory_results_raw, "Deep Memory")
-            formatted_long_term = self._format_vdb_results_for_context(long_term_results_raw, "Long-Term Memory")
-            formatted_op_protocol = self._format_vdb_results_for_context(operational_protocols_results_raw, "Operational Protocols")
-            
-            # The formatted string for the AI's context
-            formatted_vdb_context = f"{formatted_deep_mem}\n{formatted_long_term}\n{formatted_op_protocol}".strip()
-
-            # --- REFACTORED: Store by Reference (ID) instead of by Value ---
-            # Extract only the source_ids from the VDB results to be archived.
-            # This prevents the recursive data explosion.
-            context_ids_for_db = []
-            for raw_result in [deep_memory_results_raw, long_term_results_raw, operational_protocols_results_raw]:
-                if raw_result:
-                    result_data = json.loads(raw_result)
-                    if result_data.get('ids') and result_data['ids'][0]:
-                        context_ids_for_db.extend(result_data['ids'][0])
-
-            vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
-            #print(vdb_response)
-            
-            # Format User Content
-            data_envelope = {
-                "auth": {
-                    "user_id": user_id,
-                    "user_name": user_name,
-                    "session_id": session_id,
-                    "authentication_status": "PRIMARY_OPERATOR" if user_id == os.getenv("DISCORD_OWNER_ID") else "EXTERNAL_ENTITY"
-                },
-                "timestamp_utc": timestamp_utc_iso,
-                "system_notifications": [],
-                "user_prompt": user_prompt,
-
-            }
-            
-            # --- NEW: Vision Module Notification ---
-            if config.VISION and self.vision_attachments:
-                print(f"  - Attaching {self.vision_attachments["display_name"]} queued vision captures...")
-                uploaded_file = self.upload_file(
-                    self.vision_attachments["video_bytes"], 
-                    self.vision_attachments["display_name"],
-                    self.vision_attachments["mime_type"]
-                )
-                if uploaded_file:
-                    file_check.append(uploaded_file)
-                    data_envelope["system_notifications"].append(f"[Vision Module: The following video file '{self.vision_attachments['display_name']}' is from an autonomous replay buffer system. They represent the last 30 seconds of screen activity prior to your activation. Analyze them for any relevant context or interesting events that may have occurred.]")
-                else:
-                    # If the upload or processing fails, add a notification for the AI.
-                    data_envelope["system_notifications"].append(f"[Vision Module: A video file named '{self.vision_attachments['display_name']}' was detected by the replay buffer but failed to be processed by the File API. Inform the user that the video context for this prompt is missing.]")
+            self.vision_attachments = {} # Clear the queue regardless of success
+        
+        # Convert File Attachments to Parts
+        attachments_for_db = []
+        if file_check: 
+            for file in file_check:
+                print(f"  - File '{file.display_name}' added to prompt for AI processing.")
+                file_metadata = {
+                    "file_ref": file.name,
+                    "file_name": file.display_name,
+                    "mime_type": file.mime_type,
+                    "size_bytes": file.size_bytes
+                }
+                attachments_for_db.append(file_metadata)
+            print(f"--- Processed a total of {len(file_check)} files ---")
+        user_content_for_db = types.UserContent(parts=[types.Part.from_text(text=json.dumps(data_envelope, indent=2))])
+        
+        # Finalize User Content Structure
+        data_envelope["vdb_context"] = vdb_response
+        final_text_part = types.Part.from_text(text=json.dumps(data_envelope, indent=2))
+        
+        # The final user turn consists of file parts + consolidated text part
+        
+        # --- MODIFICATION: Agent Pre-Processing for VertexAI ---
+        if config.VERTEX and file_check:
+            print("--- [System] VertexAI detected with files. Engaging FileProcessingAgent for pre-analysis... ---")
+            try:
+                if self.file_processing_agent is None:
+                    from agents.file_processing_agent import FileProcessingAgent
+                    self.file_processing_agent = FileProcessingAgent(self)
                 
-                self.vision_attachments = {} # Clear the queue regardless of success
-            
-            # Convert File Attachments to Parts
-            attachments_for_db = []
-            if file_check: # file_check contains the raw, valid File objects
-                for file in file_check:
-                    print(f"  - File '{file.display_name}' added to prompt for AI processing.")
-                    # This creates a clean dictionary with the most essential, permanent
-                    # data to be archived in your database.
-                    file_metadata = {
-                        "file_ref": file.name,           # CRITICAL: The permanent API reference
-                        "file_name": file.display_name,  # The original, human-readable name
-                        "mime_type": file.mime_type,     # The type of the file
-                        "size_bytes": file.size_bytes    # The size of the file
-                    }
-                    print(f"  - Prepared metadata for DB: {file_metadata}")
-                    attachments_for_db.append(file_metadata)
-                print(f"--- Processed a total of {len(file_check)} files ---")
-            user_content_for_db = types.UserContent(parts=[types.Part.from_text(text=json.dumps(data_envelope, indent=2))])
-            
-            # --- CORRECTED STRUCTURE: Consolidate all text context ---
-            # All contextual information (VDB, metadata) is formatted into a single
-            # text block that precedes the user's actual prompt.
-            # Add the metadata envelope to the context block
-            data_envelope["vdb_context"] = vdb_response
-            context_block = json.dumps(data_envelope, indent=2)
-            
-            # The final text part combines the context block and the user's prompt.
-            final_text_part = types.Part.from_text(text=context_block)
+                # The agent analyzes the files and returns a text description
+                agent_analysis_text = self.file_processing_agent.run(file_check, context=data_envelope)
+                
+                # We inject this analysis into the prompt instead of the raw file handles
+                analysis_context = f"\n\n[System: The user attached {len(file_check)} file(s). The File Processing Agent analyzed them and provided this context:]\n{agent_analysis_text}"
+                
+                # Update the final text part to include this analysis
+                # We need to reconstruct the text part since we can't easily append to the object
+                current_text = json.dumps(data_envelope, indent=2)
+                combined_text = current_text + analysis_context
+                final_text_part = types.Part.from_text(text=combined_text)
+                
+                # For Vertex, we DO NOT send the file handles, only the text analysis
+                final_part = [final_text_part]
+                print("--- [System] File analysis complete. Context injected. Raw files detached from Vertex prompt. ---")
+                
+            except Exception as e:
+                print(f"ERROR: File Processing Agent failed: {e}")
+                # Fallback? If we send files to Vertex it might crash, but let's try or just send text
+                final_part = [final_text_part] # Send text only to be safe
+                data_envelope["system_notifications"].append(f"[System Error: File analysis failed: {e}]")
+        else:
+            # Standard GenAI behavior: Attach files directly
+            final_part = file_check + [final_text_part]
 
-            # Wrapping all User Parts into User Content
-            # The final user turn consists ONLY of the file parts and the single, consolidated text part.
-            # This is the valid structure the API expects.
-            final_part = file_check + [final_text_part] # The File objects from file_check are used directly as parts.
-            final_content=types.UserContent(parts=final_part)
-            
-            # Sending User Content to Orion
-            contents_to_send = self.flatten_history(session_id)
+        final_content = types.UserContent(parts=final_part)
+        
+        # Prepare history
+        contents_to_send = self.flatten_history(session_id)
+        contents_to_send.append(final_content)
 
-            # It gets appended after the entire history has been unrolled.
-            contents_to_send.append(final_content)
+        return (contents_to_send, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db)
 
-            # --- NEW: Make the current turn's content available to agents ---
-            # Store the data_envelope dictionary directly
-            self.current_turn_context = data_envelope
+    def _finalize_exchange(self, session_id, user_id, user_name, user_prompt, response_text, token_count, attachments_for_db, new_tool_turns, context_ids_for_db, user_content_for_db, model_content_obj):
+        """
+        Internal helper: Handles post-processing, database archival, and history management.
+        Returns boolean indicating if a restart is pending.
+        """
 
-            print("----- All necessary content prepared. Sending Prompt to Orion. . . -----")
+        # 2. Archive to Database
+        new_db_id = self._archive_exchange_to_db(
+            session_id,
+            user_id,
+            user_name,
+            user_prompt,
+            response_text, 
+            attachments_for_db,
+            token_count,
+            new_tool_turns,
+            json.dumps(context_ids_for_db)
+        )
+
+        # 3. Update Session History
+        new_exchange = {
+            "user_content": user_content_for_db,
+            "tool_calls": new_tool_turns,
+            "model_content": model_content_obj,
+            "db_id": new_db_id,
+            "token_count": token_count
+        }
+        
+        chat_session = self._get_session(session_id)
+        chat_session.append(new_exchange)
+        
+        # 4. Enforce History Limit
+        total_exchanges = len(chat_session)
+        if total_exchanges > self.MAX_HISTORY_EXCHANGES:
+            count_to_remove = 5
+            print(f"  - History limit reached. Truncating {count_to_remove} oldest exchange(s)...")
+            self.manage_session_history(session_id, count=count_to_remove, index=0)
+
+        print(f"----- Response Generated ({token_count} tokens) -----")
+        
+        should_restart = self.restart_pending
+        if self.restart_pending:
+            self.restart_pending = False 
+
+        return should_restart
+
+    def _generate_full_response(self, contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db):
+        """
+        Internal helper: Handles non-streaming generation.
+        """
+        self.current_turn_context = data_envelope
+        print("----- Sending Prompt to Orion (Non-Streaming) . . . -----")
+        
+        try:
             response = self.client.models.generate_content(
                 model=f'{self.model_name}',
                 contents=contents_to_send,
@@ -440,7 +501,7 @@ class OrionCore:
                     tools=self.tools,
                     thinking_config=types.ThinkingConfig(
                         thinking_level=types.ThinkingLevel.HIGH
-                        ),
+                    ),
                     safety_settings=[
                         types.SafetySetting(
                             category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
@@ -450,99 +511,187 @@ class OrionCore:
                 )
             )
             
-            # --- NEW: Clear the temporary context after the API call ---
-            self.current_turn_context = None
+            self.current_turn_context = None # Clear context
 
-            # --- Append to Chat History ---
-            # 1. Isolate only the new tool calls and responses from this turn
+            # Handle Tool Calls
             new_tool_turns = []
             if response.automatic_function_calling_history:
-                # First, filter the API's history to *only* include tool-related turns.
                 all_tool_turns_from_api = [
                     content for content in response.automatic_function_calling_history
                     if any(part.function_call or part.function_response for part in content.parts)
                 ]
-
-                # Second, find the tool-related turns already in our session history.
+                # Filter out tools from previous turns (simplified logic)
+                chat_session = self._get_session(session_id)
                 previous_tool_turn_count = 0
-                for exchange in chat_session: # chat_session is our list[ExchangeDict]
+                for exchange in chat_session:
                     if exchange.get("tool_calls"):
                         previous_tool_turn_count += len(exchange["tool_calls"])
-                
-                # The new tool turns are the ones at the end of the filtered API history.
                 new_tool_turns = all_tool_turns_from_api[previous_tool_turn_count:]
 
-            # 2. Get the model's final text response and token count
+            # Extract Text and Tokens
             response_content = response.candidates[0].content
             token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
             final_text = ""
-            if not response_content:
-                print(response)
-                final_text = None
-                #print(final_content)
-                #print(vdb_result)
-            else:
+            if response_content:
                 for part in response_content.parts:
                     if part.text:
                         final_text += part.text
             
-            # 3. Archive the exchange and get its new DB ID
-            # (We will modify _archive_exchange_to_db to return the ID)
-            new_db_id = self._archive_exchange_to_db(
-                session_id,
-                user_id,
-                user_name,
-                user_prompt,
-                final_text, 
-                attachments_for_db,
-                token_count,
-                new_tool_turns,
-                json.dumps(context_ids_for_db)
-            )
-
-            # 4. Create the new ExchangeDict
-            new_exchange = {
-                "user_content": user_content_for_db,
-                "tool_calls": new_tool_turns,
-                "model_content": response_content,
-                "db_id": new_db_id, # Store the new ID
-                "token_count": token_count # <-- ADD THIS LINE
-            }
-            
-            # 5. Append the single new exchange to our session
-            chat_session.append(new_exchange)
-            
-            # --- Enforce History Limit ---
-            # --- MODIFICATION: Updated to use new unified function ---
-            total_exchanges = len(chat_session)
-            if total_exchanges > self.MAX_HISTORY_EXCHANGES:
-                count_to_remove = 5 # Number of oldest exchanges to remove
-                print(f"  - History limit reached. Truncating {count_to_remove} oldest exchange(s)...")
-                # Calls the new function with index=0
-                self.manage_session_history(session_id, count=count_to_remove, index=0)
-            # --- END OF MODIFICATION ---
-
-            print(f"----- Chat History Length: {len(excluded_ids)} -----")
-            print(f"----- Current Excluded IDs for session {excluded_ids}. -----")
-            print(f"  - Final response generated. Total tokens for exchange: {token_count}")
-            #self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, final_text, attachments_for_db, token_count, new_tool_turns, json.dumps(context_ids_for_db))
-            #print(chat_session)
-            
-            should_restart = self.restart_pending
-            if self.restart_pending:
-                self.restart_pending = False # Reset flag after it's been captured
-
-            # --- TTS INVOCATION POINT ---
-            # If voice is enabled in the config and there's text, speak it.
-            # --- MODIFICATION: Add text to the TTS queue ---
+            # TTS Side Effect
             if config.VOICE and final_text:
                 orion_tts.speak(final_text)
 
-            return final_text, token_count, should_restart
+            # Finalize
+            should_restart = self._finalize_exchange(
+                session_id, user_id, user_name, user_prompt, final_text, token_count,
+                attachments_for_db, new_tool_turns, context_ids_for_db, user_content_for_db, response_content
+            )
             
+            return final_text, token_count, should_restart
+
         except Exception as e:
-            print(f"ERROR processing prompt for '{session_id}': {e}")
-            return "I'm sorry, an internal error occurred while processing your request.", 0, False
+            print(f"ERROR in _generate_full_response: {e}")
+            return f"[System Error: {e}]", 0, False
+
+    def _generate_stream_response(self, contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db):
+        """
+        Internal helper: Handles streaming generation.
+        Yields chunks of text, then yields a final metadata dict.
+        """
+        self.current_turn_context = data_envelope
+        print("----- Sending Prompt to Orion (Streaming) . . . -----")
+        
+        full_response_text = ""
+        token_count = 0
+
+        if config.VERTEX:
+            model_name = self.model_name
+        else:
+            model_name = "gemini-2.5-pro"
+
+        try:
+            response_stream = self.client.models.generate_content_stream(
+                model=model_name,
+                contents=contents_to_send,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.current_instructions,
+                    tools=self.tools,
+                    thinking_config=types.ThinkingConfig(
+                        thinking_level=types.ThinkingLevel.LOW
+                    ),
+                    safety_settings=[
+                        types.SafetySetting(
+                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
+                        )
+                    ]
+                )
+            )
+
+            last_chunk = None
+            for chunk in response_stream:
+                # Print what we receive
+                last_chunk = chunk
+                if chunk.candidates:
+                    for part in chunk.candidates[0].content.parts:
+                        if part.function_call:
+                            print(f"CHUNK: Function Call -> {part.function_call.name}")
+                        if part.text:
+                            print(f"CHUNK: Text -> {part.text.strip()}")
+                            if config.VOICE:
+                                orion_tts.process_stream_chunk(part.text)
+                            
+                            # Yield token chunk
+                            yield {"type": "token", "content": part.text}
+                            full_response_text += part.text
+                else:
+                    print(f"CHUNK: No candidates (Usage/Other) -> {chunk}")
+                
+                if chunk.usage_metadata:
+                    token_count = chunk.usage_metadata.total_token_count
+
+            if config.VOICE:
+                orion_tts.flush_stream()
+                
+            self.current_turn_context = None
+
+            # Reconstruct Model Content (Simplified for Stream)
+            model_content_obj = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=full_response_text)]
+            )
+
+            # Handle Tool Calls
+            new_tool_turns = []
+            if last_chunk and last_chunk.automatic_function_calling_history:
+                all_tool_turns_from_api = [
+                    content for content in last_chunk.automatic_function_calling_history
+                    if any(part.function_call or part.function_response for part in content.parts)
+                ]
+                # Filter out tools from previous turns (simplified logic)
+                chat_session = self._get_session(session_id)
+                previous_tool_turn_count = 0
+                for exchange in chat_session:
+                    if exchange.get("tool_calls"):
+                        previous_tool_turn_count += len(exchange["tool_calls"])
+                new_tool_turns = all_tool_turns_from_api[previous_tool_turn_count:]
+            
+            # Finalize
+            should_restart = self._finalize_exchange(
+                session_id, user_id, user_name, user_prompt, full_response_text, token_count,
+                attachments_for_db, new_tool_turns, context_ids_for_db, user_content_for_db, model_content_obj
+            )
+            
+            yield {
+                "type": "usage",
+                "token_count": token_count,
+                "restart_pending": should_restart
+            }
+
+        except Exception as e:
+            print(f"ERROR in _generate_stream_response: {e}")
+            yield {"type": "token", "content": f"[System Error: {e}]"}
+
+    def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str, stream: bool = False) -> Generator:
+        """
+        Orchestrator: Processes a prompt by preparing data, delegating to the appropriate
+        generation method (stream vs full), and ensuring proper archival.
+        Now a generator function to provide immediate status feedback.
+        """
+        try:
+            # Yield initial status
+            yield {"type": "status", "content": "Initializing Request..."}
+
+            # 1. Prepare Data (This includes VDB lookups and File Uploads)
+            # We yield a status before this potentially blocking call
+            yield {"type": "status", "content": "Accessing Memory & Processing Files..."}
+            
+            (contents_to_send, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db) = \
+                self._prepare_prompt_data(session_id, user_prompt, file_check, user_id, user_name)
+            
+            # 2. Generate Response (Stream or Full)
+            yield {"type": "status", "content": "Thinking..."}
+            
+            if stream:
+                yield from self._generate_stream_response(
+                    contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt,
+                    attachments_for_db, context_ids_for_db, user_content_for_db
+                )
+            else:
+                final_text, token_count, restart = self._generate_full_response(
+                    contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt,
+                    attachments_for_db, context_ids_for_db, user_content_for_db
+                )
+                yield {
+                    "type": "full_response", 
+                    "text": final_text, 
+                    "token_count": token_count, 
+                    "restart_pending": restart
+                }
+
+        except Exception as e:
+            print(f"CRITICAL ERROR in process_prompt: {e}")
+            yield {"type": "token", "content": f"I'm sorry, an internal error occurred: {e}"}
 
     def _format_vdb_results_for_context(self, raw_json: str, source_name: str) -> str:
         """
@@ -677,6 +826,20 @@ class OrionCore:
         Uploads a file-like object to the GenAI File API via the client.
         Returns a File handle object on success, or an error string on failure.
         """
+        # --- MODIFICATION: Delegate to Agent if on VertexAI ---
+        if config.VERTEX:
+            try:
+                if self.file_processing_agent is None:
+                    from agents.file_processing_agent import FileProcessingAgent
+                    self.file_processing_agent = FileProcessingAgent(self)
+                
+                print(f"  - [System] VertexAI detected. Delegating upload of '{display_name}' to FileProcessingAgent...")
+                return self.file_processing_agent.upload_file(file_bytes, display_name, mime_type)
+            except Exception as e:
+                print(f"ERROR: Failed to delegate upload to agent: {e}")
+                return None
+        
+        # --- Original Logic for GenAI SDK ---
         try:
             print(f"  - Uploading file '{display_name}' to the File API...")
             # 1. Upload the file
@@ -703,7 +866,6 @@ class OrionCore:
             
             print(f"  - File '{display_name}' is now ACTIVE and ready. URI: {file_handle.uri}")
             return file_handle
-
         except Exception as e:
             print(f"ERROR: File API upload failed for '{display_name}'. Error: {e}")
             return None

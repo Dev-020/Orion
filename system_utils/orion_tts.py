@@ -71,39 +71,103 @@ def _normalize_text_for_speech(text: str) -> str:
 
     return text
 
-# --- 5. MODIFIED CORE TTS FUNCTION ---
+# --- NEW: Streaming TTS Support ---
+_stream_buffer = ""
+
+def process_stream_chunk(text_chunk: str):
+    """
+    Buffers incoming text chunks and speaks complete sentences.
+    """
+    global _stream_buffer
+    _stream_buffer += text_chunk
+    
+    # Regex to find sentence boundaries (., !, ?, or newline) followed by a space or end of string
+    sentences = re.split(r'(?<=[.!?\n])\s+', _stream_buffer)
+    
+    if len(sentences) > 1:
+        # Speak all complete sentences
+        for sentence in sentences[:-1]:
+            if sentence.strip():
+                speak(sentence)
+        
+        # Keep the remainder in the buffer
+        _stream_buffer = sentences[-1]
+
+def flush_stream():
+    """
+    Speaks any remaining text in the buffer and signals end of stream.
+    """
+    global _stream_buffer
+    if _stream_buffer.strip():
+        speak(_stream_buffer)
+    _stream_buffer = ""
+    # Signal the TTS thread that the stream is complete
+    tts_queue.put(None)
+
 def speak(text: str):
-    """
-    Public function to add text to the TTS queue.
-    This is what other modules will call.
-    """
-    # --- MODIFICATION: Normalize the text before queueing ---
+    """Adds text to the TTS queue."""
+    if not text:
+        return
     normalized_text = _normalize_text_for_speech(text)
     if normalized_text:
         tts_queue.put(normalized_text)
 
+# --- 5. MODIFIED CORE TTS FUNCTION ---
 def _process_tts_queue():
     """
-    Generates audio from text, streams it to the default speaker,
-    and saves a copy to the audio_logs folder.
+    Worker thread function that processes text from the queue and speaks it.
     """
+    accumulated_audio_chunks = []  # Accumulates audio across multiple utterances
+    stream_start_time = None  # Track when streaming started
+    
     while not stop_event.is_set():
         try:
             # Wait for an item to appear in the queue.
             # The timeout allows the thread to check the stop_event periodically.
             text_to_speak = tts_queue.get(timeout=1)
-            interrupt_event.clear() # NEW: Clear interrupt flag for new utterance
+            
+            # Check for end-of-stream sentinel
+            if text_to_speak is None:
+                # Save all accumulated audio to a single file
+                if accumulated_audio_chunks:
+                    print("\n>>> Saving consolidated audio file <<<")
+                    audio_data_bytes = b"".join(accumulated_audio_chunks)
+                    audio_array_int16 = np.frombuffer(audio_data_bytes, dtype=np.int16)
+                    audio_tensor_float = torch.tensor(audio_array_int16, dtype=torch.float32) / 32768.0
+                    audio_tensor = audio_tensor_float.unsqueeze(0)
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    output_filename = os.path.join(LOG_FOLDER, f"{timestamp}.flac")
+                    try:
+                        torchaudio.save(output_filename, audio_tensor, sample_rate)
+                        total_duration = time.time() - stream_start_time if stream_start_time else 0
+                        print(f"Audio logged to: {output_filename}")
+                        print(f"Total stream duration: {total_duration:.2f}s")
+                    except Exception as e:
+                        print(f"Error saving log file: {e}")
+                    
+                    # Reset accumulator for next stream
+                    accumulated_audio_chunks = []
+                    stream_start_time = None
+                
+                tts_queue.task_done()
+                continue
+            
+            # Process text utterance
+            interrupt_event.clear() # Clear interrupt flag for new utterance
 
             print(f"\n>>> Orion is Speaking <<<")
             print("Generating and streaming speech (on CPU)...")
-            start_time = time.time()
-
-            audio_chunks_for_saving = []
+            
+            # Track start time for first utterance in stream
+            if stream_start_time is None:
+                stream_start_time = time.time()
+            
+            utterance_start = time.time()
 
             with sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype='int16') as stream:
                 first_chunk = True
                 for chunk in voice.synthesize(text_to_speak):
-                    # NEW: Check for interrupt during synthesis
+                    # Check for interrupt during synthesis
                     if interrupt_event.is_set():
                         print("TTS interrupt event received, halting playback.")
                         stream.abort()
@@ -112,28 +176,14 @@ def _process_tts_queue():
                         print("TTS stop event received, halting playback.")
                         break
                     if first_chunk:
-                        first_chunk_time = time.time() - start_time
+                        first_chunk_time = time.time() - utterance_start
                         print(f"Time to first audio chunk: {first_chunk_time:.2f}s")
                         first_chunk = False
                     stream.write(chunk.audio_int16_bytes)
-                    audio_chunks_for_saving.append(chunk.audio_int16_bytes)
+                    accumulated_audio_chunks.append(chunk.audio_int16_bytes)
 
-            end_time = time.time() # This line might not be reached if interrupted
-            print(f"Finished streaming. Total time: {end_time - start_time:.2f}s")
-
-            # --- Save the collected chunks to a .flac file ---
-            if audio_chunks_for_saving and not stop_event.is_set():
-                audio_data_bytes = b"".join(audio_chunks_for_saving)
-                audio_array_int16 = np.frombuffer(audio_data_bytes, dtype=np.int16)
-                audio_tensor_float = torch.tensor(audio_array_int16, dtype=torch.float32) / 32768.0
-                audio_tensor = audio_tensor_float.unsqueeze(0)
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                output_filename = os.path.join(LOG_FOLDER, f"{timestamp}.flac")
-                try:
-                    torchaudio.save(output_filename, audio_tensor, sample_rate)
-                    print(f"Audio logged to: {output_filename}")
-                except Exception as e:
-                    print(f"Error saving log file: {e}")
+            utterance_end = time.time()
+            print(f"Finished streaming utterance. Time: {utterance_end - utterance_start:.2f}s")
 
             tts_queue.task_done()
 

@@ -1,4 +1,6 @@
 from google.genai import types
+from google.genai.types import Tool, UrlContext, GoogleSearch, GoogleMaps, ToolCodeExecution
+
 
 class NativeToolsAgent:
     """
@@ -18,10 +20,8 @@ class NativeToolsAgent:
         """
         
         tools = [
-          types.Tool(url_context=types.UrlContext()),
-          types.Tool(google_search=types.GoogleSearch()),
-          types.Tool(google_maps=types.GoogleMaps()),
-          types.Tool(code_execution=types.ToolCodeExecution())
+          Tool(url_context=UrlContext()),
+          Tool(google_search=GoogleSearch()),
         ] 
         
         self.core = orion_core
@@ -83,10 +83,12 @@ My behavior and tone are governed by two distinct modes: a primary, default pers
 
 *   **Web Research:** Utilizing Google Search to find and synthesize information from the web to answer user questions.
 *   **URL Analysis:** Fetching and processing content from provided URLs to extract relevant data and insights.
-*   **Location-Based Queries:** Using Google Maps to provide information about locations, directions, and points of interest.
-*   **Code Execution:** Running code snippets to perform calculations, manipulate data, or execute algorithms as needed to fulfill user requests.
-  
-  
+
+## **3.0 CITATION PROTOCOL**
+When you provide information derived from the "Google Search" tool or any other external source, you **MUST** include the source URL directly in your response.
+*   **Format:** Embed the link naturally in the text or provide a "Sources" list at the end.
+*   **Requirement:** Every factual claim obtained from a web search must be backed by a visible URL.
+*   **Example:** "According to [Source Name](https://example.com), the weather is..." or "Source: https://example.com"
         """
 
     def run(self, task: str) -> str:
@@ -95,6 +97,8 @@ My behavior and tone are governed by two distinct modes: a primary, default pers
 
         This function sends the user's task to the generative model,
         making the native tools available for the model to use.
+
+        The current native tools available are Google Search and URL Context.
 
         Args:
             task: User's prompt or task alongside Orion's additional context regarding the said user's prompt or task.
@@ -106,30 +110,35 @@ My behavior and tone are governed by two distinct modes: a primary, default pers
 
         # Make the API call with the user's task and the native tools
         # The 'task' variable contains the user prompt and contextual instructions from the main model.
-        final_response = self.client.models.generate_content(
-            model=f'{self.model_name}',
-            contents=[task + " --- [System Note: You must use your available tools (Google Search, Code Execution, etc.) to answer the user's request.]"],
-            tools=self.tools,
-            config=types.GenerateContentConfig(
-                system_instruction=self.system_instructions
+        try:
+            final_response = self.client.models.generate_content(
+                model=f'{self.model_name}',
+                contents=[task + " --- [System Note: You must use your available tools (Google Search, Code Execution, etc.) to answer the user's request.]"],
+                config=types.GenerateContentConfig(
+                    system_instruction=self.system_instructions,
+                    tools=self.tools
+                )
             )
-        )
-        
-        final_text = ""
-        agent_response_content = final_response.candidates[0].content #type: ignore
-        if agent_response_content:
-            if agent_response_content.parts:
-                for part in agent_response_content.parts:
-                    if part.text:
-                        final_text += part.text
-            print("--- Native Tools Agent task complete. Returning final text. ---")
-        else:
-            print("--- Native Tools Agent returned no content. ---")
-            final_text = "Error: Native Tools Agent returned no content."
-        
-        print("--- Native Tools Agent: Task Complete ---")
-        print("  ---- AI AGENT RESPONSE ----  ")
-        print(final_text)
-        token_count = final_response.usage_metadata.total_token_count if final_response.usage_metadata else 0
-        print(f"  ---- Total Token Count for AI Agent: {token_count} ----  ")
-        return final_text
+            
+            final_text = ""
+            if final_response.candidates:
+                agent_response_content = final_response.candidates[0].content
+                if agent_response_content and agent_response_content.parts:
+                    for part in agent_response_content.parts:
+                        if part.text:
+                            final_text += part.text
+                print("--- Native Tools Agent task complete. Returning final text. ---")
+            else:
+                print("--- Native Tools Agent returned no content. ---")
+                final_text = "Error: Native Tools Agent returned no content."
+            
+            print("--- Native Tools Agent: Task Complete ---")
+            print("  ---- AI AGENT RESPONSE ----  ")
+            print(final_text)
+            token_count = final_response.usage_metadata.total_token_count if final_response.usage_metadata else 0
+            print(f"  ---- Total Token Count for AI Agent: {token_count} ----  ")
+            return final_text
+
+        except Exception as e:
+            print(f"ERROR in NativeToolsAgent: {e}")
+            return f"Error executing Native Tools Agent: {e}"
