@@ -55,7 +55,8 @@ PASSIVE_TIMER = 30
 # Video pipeline configuration
 VIDEO_DEBUG = os.getenv("VIDEO_DEBUG", "false").lower() == "true"  # Enable debug logging
 VIDEO_CAPTURE_INTERVAL = 1.0  # Seconds between frame captures
-DEFAULT_MODE = "screen"
+DEFAULT_VIDEO = "screen"
+DEFAULT_AUDIO = True
 MODEL = "models/gemini-live-2.5-flash-preview"
 
 client = genai.Client(api_key= os.getenv("GOOGLE_API_KEY"), http_options={"api_version": "v1beta"})
@@ -220,8 +221,9 @@ class LiveSessionState:
 
 
 class AudioLoop:
-    def __init__(self, video_mode=DEFAULT_MODE):
+    def __init__(self, video_mode=DEFAULT_VIDEO, audio_mode=DEFAULT_AUDIO):
         self.video_mode = video_mode
+        self.audio_mode = audio_mode
 
         self.audio_out_queue = None
         self.video_out_queue = None
@@ -313,12 +315,21 @@ class AudioLoop:
         else:
             system_log.info("No resumption handle available. Next run will start fresh session.", category="SESSION")
         
+        # Check for pending messages in queue
+        queue_size = self.user_input_queue.qsize()
+        if queue_size > 0:
+            system_log.info(f"Shutdown with {queue_size} unsent message(s) in queue", category="INPUT")
+            # Optional: Clear queue on shutdown to prevent stale messages on next run
+            # Uncomment if you want to clear queue:
+            while not self.user_input_queue.empty():
+                try:
+                    self.user_input_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            system_log.info("Cleared user input queue on shutdown", category="INPUT")
+
         # Ensure session is cleared to prevent any lingering references
-        # This is critical to prevent segmentation faults from using closed session objects
-        self.session = None
-        
-        # Any additional cleanup can go here
-        # (e.g., closing audio streams, saving exchange buffers, etc.)
+        self.session = None 
 
     def _is_connection_healthy(self) -> bool:
         """
@@ -464,9 +475,12 @@ class AudioLoop:
                     raise asyncio.CancelledError("User requested exit")
                 
                 if not self._is_connection_healthy():
-                    await asyncio.sleep(1)
                     # Put back in queue to retry
                     await self.user_input_queue.put(text)
+                    queue_size = self.user_input_queue.qsize()
+                    if queue_size > 10:  # Warn if queue is filling up
+                        system_log.info(f"User input queue accumulating ({queue_size}/20 messages). Connection unhealthy.", category="INPUT")
+                    await asyncio.sleep(1)
                     continue
 
                 await self.session.send_realtime_input(text=text)
@@ -574,17 +588,21 @@ class AudioLoop:
     async def passive_observer_task(self):
         """Passive observer that triggers AI commentary when user is quiet."""
         while True:
-            await asyncio.sleep(1.0)
+            # Check if AI is speaking first (cheap check)
             if orion_tts.IS_SPEAKING:
                 self.last_interaction_time = time.time()
+                await asyncio.sleep(1.0)
                 continue
             
-            # Check connection health before attempting to send
+            # Check connection health before proceeding
             if not self._is_connection_healthy():
                 # Connection is dead, wait longer before checking again
-                await asyncio.sleep(5.0)
+                if VIDEO_DEBUG:
+                    system_log.info("Connection not healthy, passive observer waiting...", category="PASSIVE")
+                await asyncio.sleep(10.0)  # Wait 10 seconds when dead (not 1+5)
                 continue
-                
+            
+            # Check if passive timer has expired
             if time.time() - self.last_interaction_time > PASSIVE_TIMER:
                 system_log.info("Triggering Passive Observation", category="PASSIVE")
                 try:
@@ -599,16 +617,28 @@ class AudioLoop:
                     else:
                         system_log.info(f"Error sending passive prompt (will retry): {e}", category="PASSIVE")
                 self.last_interaction_time = time.time()
+            
+            # Normal operation: check every second
+            await asyncio.sleep(1.0)
     
     async def get_screen(self):
         """
         Captures screen frames using MSS and puts them in the queue.
         """
-        with mss.mss() as sct:
+        sct = None
+        try:
+            sct = mss.mss()
             # Get the primary monitor
             monitor = sct.monitors[1]
             
             while True:
+                # Check connection health before capturing
+                if not self._is_connection_healthy():
+                    if VIDEO_DEBUG:
+                        system_log.info("Connection not healthy, pausing screen capture...", category="VIDEO")
+                    await asyncio.sleep(5.0)  # Wait longer when connection is dead
+                    continue
+                
                 start_time = time.time()
                 
                 # Capture screen
@@ -645,6 +675,14 @@ class AudioLoop:
                 elapsed = time.time() - start_time
                 wait_time = max(0, VIDEO_CAPTURE_INTERVAL - elapsed)
                 await asyncio.sleep(wait_time)
+        except Exception as e:
+            system_log.info(f"Screen capture error: {e}", category="VIDEO")
+        finally:
+            # Ensure MSS context is closed even if task is cancelled
+            if sct is not None:
+                sct.close()
+                if VIDEO_DEBUG: 
+                    system_log.info("MSS context closed", category="VIDEO")
 
     async def get_frames(self):
         """
@@ -657,6 +695,12 @@ class AudioLoop:
             return
             
         while True:
+            if not self._is_connection_healthy():
+                if VIDEO_DEBUG:
+                    system_log.info("Connection not healthy, pausing camera capture...", category="VIDEO")
+                await asyncio.sleep(5.0)  # Wait longer when connection is dead
+                continue
+            
             start_time = time.time()
             
             ret, frame = cap.read()
@@ -754,13 +798,14 @@ class AudioLoop:
                 is_dead = self._handle_connection_error(e)
                 if is_dead:
                     # Connection is dead, skip this frame and wait
-                    if VIDEO_DEBUG:
-                        system_log.info(f"Connection dead, skipping frame. Will resume after reconnection.", category="VIDEO")
+                    system_log.info(f"Connection dead, skipping frame. Will resume after reconnection.", category="VIDEO")
                     await asyncio.sleep(1)  # Wait before trying next frame
                 else:
                     # Transient error, log and continue
-                    if not VIDEO_DEBUG:  # Only log if not in debug mode (to reduce spam)
-                        system_log.info(f"ERROR: Failed to send frame (will retry): {e}", category="VIDEO")
+                    system_log.info(f"Failed to send frame (will retry): {e}", category="VIDEO")
+                    if VIDEO_DEBUG:  # Add extra detail in debug mode
+                        import traceback
+                        system_log.info(f"Frame send error traceback: {traceback.format_exc()}", category="VIDEO")
                     await asyncio.sleep(0.1)  # Brief pause before retry
 
     async def send_realtime_audio(self):
@@ -776,14 +821,24 @@ class AudioLoop:
         Capture system audio from the default input device (Virtual Cable) using sounddevice.
         """
         # Use the default input device (which should be CABLE Output)
-        try:
-            device_info = sd.query_devices(kind='input')
-            system_log.info(f"Opening audio stream on device: {device_info['name']}", category="AUDIO")
-        except Exception as e:
-            system_log.info(f"Error querying audio devices: {e}", category="AUDIO")
-            await asyncio.sleep(5)
-            return
-
+        retry_count = 0
+        while retry_count < 5:
+            try:
+                device_info = sd.query_devices(kind='input')
+                system_log.info(f"Opening audio stream on device: {device_info['name']}", category="AUDIO")
+                break  # ← EXIT loop on success!
+            except Exception as e:
+                retry_count += 1
+                wait_time = min(2 ** retry_count, 10)  # Exponential backoff
+                system_log.info(f"Error querying audio devices (attempt {retry_count}/5): {e}", category="AUDIO")
+            
+                if retry_count >= 5:
+                    system_log.info(f"Failed to initialize audio after 5 attempts. Audio disabled.", category="AUDIO")
+                    return
+                
+                system_log.info(f"Retrying in {wait_time} seconds...", category="AUDIO")
+                await asyncio.sleep(wait_time)
+        
         # Create a queue for audio blocks
         q = asyncio.Queue()
         
@@ -922,30 +977,33 @@ class AudioLoop:
         send_text_task = tg.create_task(self.send_text())
 
         # Enable audio pipeline
-        if True:
-            self.audio_out_queue = asyncio.Queue(maxsize=5)
+        if self.audio_mode:
+            self.audio_out_queue = asyncio.Queue(maxsize=60)
             tg.create_task(self.send_realtime_audio())
             tg.create_task(self.listen_audio())
         
         if self.video_mode == "screen":
-            # Use size 1 since we're implementing latest-frame-only strategy
-            # This prevents any accumulation of old frames
+            # Use size 1 for "latest-frame-only" strategy
+            # This ensures we always send the most recent frame, not stale frames
+            # Tradeoff: Capture will block briefly if sender is slow, but this is
+            # intentional - we want to drop old frames rather than accumulate lag
             self.video_out_queue = asyncio.Queue(maxsize=1)
             tg.create_task(self.send_realtime_image())
             tg.create_task(self.get_screen())
             tg.create_task(self.video_stats_task())
             
             if VIDEO_DEBUG:
-                system_log.info("Video pipeline initialized with latest-frame-only strategy", category="VIDEO")
+                system_log.info("Video pipeline initialized with latest-frame-only strategy (queue=1)", category="VIDEO")
+
         elif self.video_mode == "camera":
-            # Use size 1 since we're implementing latest-frame-only strategy
+            # Same strategy for camera - always send latest frame
             self.video_out_queue = asyncio.Queue(maxsize=1)
             tg.create_task(self.send_realtime_image())
             tg.create_task(self.get_frames())
             tg.create_task(self.video_stats_task())
             
             if VIDEO_DEBUG:
-                system_log.info("Camera pipeline initialized with latest-frame-only strategy", category="VIDEO")
+                system_log.info("Camera pipeline initialized with latest-frame-only strategy (queue=1)", category="VIDEO")
 
         tg.create_task(self.receive_audio())
         tg.create_task(self.passive_observer_task())
@@ -998,6 +1056,11 @@ class AudioLoop:
                         
                         # Mark connection as alive
                         self._mark_connection_alive()
+
+                        # Log queue status on reconnection
+                        queue_size = self.user_input_queue.qsize()
+                        if queue_size > 0:
+                            system_log.info(f"Reconnected with {queue_size} pending user message(s) in queue", category="INPUT")
                         
                         # Start persistent input thread if not running
                         loop = asyncio.get_running_loop()
@@ -1031,26 +1094,23 @@ class AudioLoop:
                             self._pause_session_timer()
                             # CRITICAL: Clear session reference BEFORE exiting context to prevent segfault
                             # This ensures no tasks try to use the closed session object
-                            self.session = None
                             raise  # Re-raise to exit connection context
                         except Exception as e:
                             if not self.goaway_received and not self.shutdown_requested:
                                 system_log.info(f"Session error: {e}", category="SESSION")
                             # Mark connection as dead on session error
                             self._mark_connection_dead(f"Session error: {e}")
-                            # CRITICAL: Clear session reference to prevent use of invalid session
-                            self.session = None
+                            # Pause session timer during error/reconnection
+                            self._pause_session_timer()
                             # Break to reconnect if needed (unless shutdown requested)
                             if self.shutdown_requested:
                                 break
                             break
                         finally:
-                            # Ensure session is cleared when exiting connection context
-                            # This prevents segmentation faults from using closed session objects
-                            if self.session is not None and (self.goaway_received or not self.connection_alive):
-                                # Only clear if connection is dead or GoAway was received
-                                # Normal exits will let the context manager handle cleanup
-                                system_log.info("Clearing session reference in finally block", category="SESSION")
+                            # Always clear session reference when exiting connection context
+                            # This prevents tasks from using closed/invalid session objects
+                            if self.session is not None:
+                                system_log.info("Clearing session reference", category="SESSION")
                                 self.session = None
 
                 except asyncio.CancelledError:
@@ -1122,7 +1182,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         type=str,
-        default=DEFAULT_MODE,
+        default=DEFAULT_VIDEO,
         help="pixels to stream from",
         choices=["camera", "screen", "none"],
     )
