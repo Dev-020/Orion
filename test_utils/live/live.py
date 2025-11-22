@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 # Copyright 2025 Google LLC
 #
@@ -7,68 +8,26 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""
-## Setup
-
-To install the dependencies for this script, run:
-
-``` 
-pip install google-genai opencv-python pyaudio pillow mss
-```
-
-Before running this script, ensure the `GOOGLE_API_KEY` environment
-variable is set to the api-key you obtained from Google AI Studio.
-
-Important: **Use headphones**. This script uses the system default audio
-input and output, which often won't include echo cancellation. So to prevent
-the model from interrupting itself it is important that you use headphones. 
-
-## Run
-
-To run the script:
-
-```
-python Get_started_LiveAPI.py
-```
-
-The script takes a video-mode flag `--mode`, this can be "camera", "screen", or "none".
-The default is "camera". To share your screen run:
-
-```
-python Get_started_LiveAPI.py --mode screen
-```
-"""
-
 import asyncio
 import base64
-import io
+import json
 import os
 import sys
 import traceback
+import io
 import time
-import struct
-import math
-import json
-import signal
 import threading
-from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+from datetime import datetime, timezone
+import argparse
+import signal
 
 import cv2
-import pyaudio
-import PIL.Image
 import mss
-import dotenv
-from pathlib import Path
-
-import argparse
-
+import numpy as np
+import sounddevice as sd
+from PIL import Image
 from google import genai
 from google.genai import types
 
@@ -77,6 +36,7 @@ from system_utils import orion_tts
 
 from live_ui import conversation, system_log, debug_log, print_separator
 
+import dotenv
 dotenv.load_dotenv()
 
 if sys.version_info < (3, 11, 0):
@@ -85,20 +45,18 @@ if sys.version_info < (3, 11, 0):
     asyncio.TaskGroup = taskgroup.TaskGroup
     asyncio.ExceptionGroup = exceptiongroup.ExceptionGroup
 
-FORMAT = pyaudio.paInt16
+# Audio configuration
 CHANNELS = 1
 SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 PASSIVE_TIMER = 30
 
-MODEL = "models/gemini-live-2.5-flash-preview"
-
-DEFAULT_MODE = "screen"
-
 # Video pipeline configuration
 VIDEO_DEBUG = os.getenv("VIDEO_DEBUG", "false").lower() == "true"  # Enable debug logging
 VIDEO_CAPTURE_INTERVAL = 1.0  # Seconds between frame captures
+DEFAULT_MODE = "screen"
+MODEL = "models/gemini-live-2.5-flash-preview"
 
 client = genai.Client(api_key= os.getenv("GOOGLE_API_KEY"), http_options={"api_version": "v1beta"})
 
@@ -107,7 +65,6 @@ SESSION_STATE_FILE = os.path.join(Path(__file__).resolve().parent.parent, "data"
 
 # Base system instruction (will be used in dynamic config)
 BASE_SYSTEM_INSTRUCTION = """
-    
         You are Orion, a specialized AI assistant. Your persona is cynical, weary, and begrudgingly helpful, with a dry, sarcastic wit.
 
         ## **1.0 Prime Directive**
@@ -120,8 +77,6 @@ BASE_SYSTEM_INSTRUCTION = """
         I am a long-term AI designed for continuous interaction and growth. My "Baseline" configuration is intended to be expanded with specialized "Operational Protocol" documents to adapt my functions to new, specific domains as needed.
 
         ---
-
-        ## **2.0 Persona**
 
         ### **2.1 \\[Persona Protocols\\]**
 
@@ -261,7 +216,7 @@ class LiveSessionState:
         except Exception as e:
             system_log.info(f"Error clearing session state: {e}", category="SESSION")
 
-pya = pyaudio.PyAudio()
+
 
 
 class AudioLoop:
@@ -506,339 +461,30 @@ class AudioLoop:
                 text = await self.user_input_queue.get()
                 
                 if text.lower() == "q":
-                    # Put it back for the main loop to see if needed, or just break
-                    # For now, we'll handle exit here
                     raise asyncio.CancelledError("User requested exit")
                 
-                conversation.user_input(text) # Echo input since input() doesn't show prompt nicely in thread
-                
-                # Check connection health before sending
                 if not self._is_connection_healthy():
-                    system_log.info("Connection not healthy, skipping send. Waiting for reconnection...", category="TEXT")
-                    # Wait a bit and check again
                     await asyncio.sleep(1)
+                    # Put back in queue to retry
+                    await self.user_input_queue.put(text)
                     continue
+
+                await self.session.send_realtime_input(text=text)
                 
-                # Validate session object is still valid
-                if self.session is None:
-                    system_log.info("Session is None, waiting for reconnection...", category="TEXT")
-                    await asyncio.sleep(1)
-                    continue
-                
-                self.last_interaction_time = time.time()
-                
-                try:
-                    # CRITICAL: Double-check session is still valid before using
-                    # This prevents segmentation faults from using closed/invalid session objects
-                    if hasattr(self.session, '_closed') and self.session._closed:
-                        system_log.info("Session is closed, waiting for reconnection...", category="TEXT")
-                        self._mark_connection_dead("Session closed")
-                        self.session = None  # Clear reference to prevent segfault
-                        await asyncio.sleep(1)
-                        continue
-                    
-                    # Additional safety: verify session object is still accessible
-                    try:
-                        _ = id(self.session)  # Simple check that object is still valid
-                    except (AttributeError, RuntimeError, ReferenceError) as e:
-                        system_log.info(f"Session object invalid (id check failed): {e}. Clearing and waiting for reconnection...", category="TEXT")
-                        self._mark_connection_dead(f"Session object invalid: {e}")
-                        self.session = None
-                        await asyncio.sleep(1)
-                        continue
-                    
-                    await self.session.send_realtime_input(text=text)
-                    # Reset error counter on successful send
-                    if self.connection_error_count > 0:
-                        self.connection_error_count = 0
-                except AttributeError as e:
-                    # Session object might be invalid - clear reference to prevent segfault
-                    system_log.info(f"Session object invalid (AttributeError): {e}. Clearing and waiting for reconnection...", category="TEXT")
-                    self._mark_connection_dead(f"Session invalid: {e}")
-                    self.session = None  # CRITICAL: Clear to prevent segfault
-                    await asyncio.sleep(2)
-                except RuntimeError as e:
-                    # Runtime errors often indicate closed/invalid objects
-                    system_log.info(f"Runtime error (likely closed session): {e}. Clearing and waiting for reconnection...", category="TEXT")
-                    self._mark_connection_dead(f"Runtime error: {e}")
-                    self.session = None  # CRITICAL: Clear to prevent segfault
-                    await asyncio.sleep(2)
-                except Exception as e:
-                    is_dead = self._handle_connection_error(e)
-                    if is_dead:
-                        system_log.info(f"Connection dead, will retry after reconnection", category="TEXT")
-                        # Wait for reconnection
-                        await asyncio.sleep(2)
-                    else:
-                        system_log.info(f"Error sending text (will retry): {e}", category="TEXT")
-                        await asyncio.sleep(0.5)  # Brief pause before retry
-            except asyncio.CancelledError:
-                # Task was cancelled (e.g., during reconnection)
-                system_log.info("Task cancelled, exiting...", category="TEXT")
-                break
-            except Exception as e:
-                # Catch any other unexpected errors
-                system_log.info(f"Unexpected error: {e}", category="TEXT")
-                await asyncio.sleep(1)
-
-    def _get_frame(self, cap):
-        capture_start = time.time()
-        # Read the frame
-        ret, frame = cap.read()
-        # Check if the frame was read successfully
-        if not ret:
-            return None
-        # Fix: Convert BGR to RGB color space
-        # OpenCV captures in BGR but PIL expects RGB format
-        # This prevents the blue tint in the video feed
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = PIL.Image.fromarray(frame_rgb)  # Now using RGB frame
-        img.thumbnail([1024, 1024])
-
-        image_io = io.BytesIO()
-        img.save(image_io, format="jpeg", quality=80)  # Match screen capture quality
-        image_io.seek(0)
-
-        frame_data = {
-            "mime_type": "image/jpeg", 
-            "data": base64.b64encode(image_io.read()).decode(),
-            "timestamp": capture_start,  # Track when frame was captured
-        }
-        
-        if VIDEO_DEBUG:
-            processing_time = time.time() - capture_start
-            system_log.info(f"Camera frame captured and processed in {processing_time:.3f}s", category="VIDEO")
-        
-        return frame_data
-
-    async def get_frames(self):
-        # This takes about a second, and will block the whole program
-        # causing the audio pipeline to overflow if you don't to_thread it.
-        cap = await asyncio.to_thread(
-            cv2.VideoCapture, 0
-        )  # 0 represents the default camera
-
-        try:
-            while True:
-                # Sleep BEFORE capture for more consistent timing
-                await asyncio.sleep(VIDEO_CAPTURE_INTERVAL)
-                
-                frame = await asyncio.to_thread(self._get_frame, cap)
-                if frame is None:
-                    break
-
-                self.frame_stats["captured"] += 1
-                
-                # Latest-frame-only strategy: clear queue before adding new frame
-                dropped_count = 0
-                while not self.video_out_queue.empty():
-                    try:
-                        old_frame = self.video_out_queue.get_nowait()
-                        dropped_count += 1
-                        if VIDEO_DEBUG and old_frame.get("timestamp"):
-                            age = time.time() - old_frame["timestamp"]
-                            system_log.info(f"Dropping old camera frame (age: {age:.2f}s)", category="VIDEO")
-                    except asyncio.QueueEmpty:
-                        break
-                
-                if dropped_count > 0:
-                    self.frame_stats["dropped"] += dropped_count
-                    if VIDEO_DEBUG:
-                        system_log.info(f"Dropped {dropped_count} old camera frame(s) from queue", category="VIDEO")
-                
-                # Put the latest frame
-                await self.video_out_queue.put(frame)
-        finally:
-            # Release the VideoCapture object
-            system_log.info("Releasing camera resource...", category="VIDEO")
-            cap.release()
-
-    def _get_screen(self):
-        capture_start = time.time()
-        with mss.mss() as sct:
-            monitor = sct.monitors[0]
-
-            i = sct.grab(monitor)
-
-            #image_bytes = mss.tools.to_png(i.rgb, i.size)
-            #img = PIL.Image.open(io.BytesIO(image_bytes))
-
-            img = PIL.Image.frombytes("RGB", i.size, i.bgra, "raw", "BGRX")
-            img.thumbnail((1024, 1024))
-            
-            image_io = io.BytesIO()
-            img.save(image_io, format="jpeg", quality=80) # efficient JPEG
-            image_io.seek(0)
-
-            frame_data = {
-                "mime_type": "image/jpeg", 
-                "data": base64.b64encode(image_io.read()).decode(),
-                "timestamp": capture_start,  # Track when frame was captured
-            }
-            
-            if VIDEO_DEBUG:
-                processing_time = time.time() - capture_start
-                system_log.info(f"Frame captured and processed in {processing_time:.3f}s", category="VIDEO")
-            
-            return frame_data
-
-    async def get_screen(self):
-        """
-        Captures screen frames at regular intervals.
-        Uses a 'latest frame only' strategy to prevent old frame accumulation.
-        """
-        while True:
-            # Sleep BEFORE capture for more consistent timing
-            await asyncio.sleep(VIDEO_CAPTURE_INTERVAL)
-            
-            frame = await asyncio.to_thread(self._get_screen)
-            if frame is None:
-                break
-
-            self.frame_stats["captured"] += 1
-            
-            # Latest-frame-only strategy: clear queue before adding new frame
-            # This ensures we always send the most recent frame, not old ones
-            dropped_count = 0
-            while not self.video_out_queue.empty():
-                try:
-                    old_frame = self.video_out_queue.get_nowait()
-                    dropped_count += 1
-                    if VIDEO_DEBUG and old_frame.get("timestamp"):
-                        age = time.time() - old_frame["timestamp"]
-                        system_log.info(f"Dropping old frame (age: {age:.2f}s)", category="VIDEO")
-                except asyncio.QueueEmpty:
-                    break
-            
-            if dropped_count > 0:
-                self.frame_stats["dropped"] += dropped_count
-                if VIDEO_DEBUG:
-                    system_log.info(f"Dropped {dropped_count} old frame(s) from queue", category="VIDEO")
-            
-            # Put the latest frame
-            await self.video_out_queue.put(frame)
-
-    async def send_realtime_image(self):
-        """
-        Sends frames from queue to the API.
-        Tracks latency from frame capture to API send.
-        Includes connection health checks to prevent sending to dead connections.
-        """
-        consecutive_skips = 0
-        max_consecutive_skips = 10  # Drop frames if connection is dead for too long
-        
-        while True:
-            frame = await self.video_out_queue.get()
-            
-            # Check connection health before processing
-            if not self._is_connection_healthy():
-                consecutive_skips += 1
-                if consecutive_skips <= max_consecutive_skips:
-                    if VIDEO_DEBUG or consecutive_skips % 5 == 0:
-                        system_log.info(f"Connection not healthy, skipping frame ({consecutive_skips}/{max_consecutive_skips}). Waiting for reconnection...", category="VIDEO")
-                    continue
-                else:
-                    # Too many skips, drop frame and wait
-                    if VIDEO_DEBUG:
-                        system_log.info(f"Dropping frame due to dead connection (skipped {consecutive_skips} frames)", category="VIDEO")
-                    await asyncio.sleep(1)  # Brief pause before checking again
-                    continue
-            
-            # Reset skip counter on successful health check
-            if consecutive_skips > 0:
-                if VIDEO_DEBUG:
-                    system_log.info(f"Connection restored, resuming frame sending", category="VIDEO")
-                consecutive_skips = 0
-            
-            # Calculate latency if timestamp exists
-            if frame.get("timestamp"):
-                latency = time.time() - frame["timestamp"]
-                self.frame_stats["total_latency"] += latency
-                self.frame_stats["max_latency"] = max(self.frame_stats["max_latency"], latency)
-                
-                if VIDEO_DEBUG:
-                    system_log.info(f"Sending frame (latency: {latency:.2f}s)", category="VIDEO")
-                elif latency > 3.0:  # Warn about high latency even without debug mode
-                    system_log.info(f"WARNING: High frame latency: {latency:.2f}s", category="VIDEO")
-            
-            # Prepare frame for API (remove timestamp)
-            api_frame = {
-                "mime_type": frame["mime_type"],
-                "data": frame["data"]
-            }
-            
-            send_start = time.time()
-            try:
-                await self.session.send_realtime_input(media=api_frame)
-                self.frame_stats["sent"] += 1
-                
-                # Reset error counter on successful send
                 if self.connection_error_count > 0:
                     self.connection_error_count = 0
-                
-                if VIDEO_DEBUG:
-                    send_time = time.time() - send_start
-                    system_log.info(f"Frame sent to API in {send_time:.3f}s", category="VIDEO")
+                    
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 is_dead = self._handle_connection_error(e)
                 if is_dead:
-                    # Connection is dead, skip this frame and wait
-                    if VIDEO_DEBUG:
-                        system_log.info(f"Connection dead, skipping frame. Will resume after reconnection.", category="VIDEO")
-                    await asyncio.sleep(1)  # Wait before trying next frame
+                    system_log.info(f"Connection dead, text send failed.", category="SESSION")
                 else:
-                    # Transient error, log and continue
-                    if not VIDEO_DEBUG:  # Only log if not in debug mode (to reduce spam)
-                        system_log.info(f"ERROR: Failed to send frame (will retry): {e}", category="VIDEO")
-                    await asyncio.sleep(0.1)  # Brief pause before retry
-
-    async def send_realtime_audio(self):
-        while True:
-            audio = await self.audio_out_queue.get()
-            await self.session.send_realtime_input(audio=types.Blob(data=audio.get("data"), mime_type=audio.get("mime_type")))
-
-    async def listen_audio(self):
-        mic_info = pya.get_default_input_device_info()
-        self.audio_stream = await asyncio.to_thread(
-            pya.open,
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=SEND_SAMPLE_RATE,
-            input=True,
-            input_device_index=mic_info["index"],
-            frames_per_buffer=CHUNK_SIZE,
-        )
-        if __debug__:
-            kwargs = {"exception_on_overflow": False}
-        else:
-            kwargs = {}
-        
-        try:
-            while True:
-                data = await asyncio.to_thread(self.audio_stream.read, CHUNK_SIZE, **kwargs)
-                if orion_tts.IS_SPEAKING:
-                    self.last_interaction_time = time.time() # Reset timer while AI speaks
-                    continue
-                
-                # Simple VAD (Voice Activity Detection) to reset timer
-                # Unpack raw bytes to 16-bit integers
-                shorts = struct.unpack(f"{len(data)//2}h", data)
-                # Check peak amplitude
-                if shorts and max(abs(s) for s in shorts) > 500:
-                    self.last_interaction_time = time.time()
-
-                await self.audio_out_queue.put({"data": data, "mime_type": "audio/pcm;rate=16000"})
-        finally:
-            # Cleanup (unreachable in infinite loop, but good practice for cancellation)
-            if hasattr(self, 'audio_stream'):
-                self.audio_stream.stop_stream()
-                self.audio_stream.close()
+                    system_log.info(f"Error sending text: {e}", category="SESSION")
+                await asyncio.sleep(0.1)
 
     async def receive_audio(self):
-        """
-        Background task that reads from the websocket and handles session updates.
-        Handles SessionResumptionUpdate, GoAway messages, and text responses.
-        """
         while True:
             try:
                 turn = self.session.receive()
@@ -922,24 +568,8 @@ class AudioLoop:
                 break
 
     async def play_audio(self):
-        stream = await asyncio.to_thread(
-            pya.open,
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RECEIVE_SAMPLE_RATE,
-            output=True,
-        )
-        try:
-            while True:
-                bytestream = await self.audio_in_queue.get()
-                self.is_playing = True
-                await asyncio.to_thread(stream.write, bytestream)
-                if self.audio_in_queue.empty():
-                    self.is_playing = False
-        finally:
-            # Cleanup
-            stream.stop_stream()
-            stream.close()
+        """Audio playback is currently disabled/not implemented with sounddevice."""
+        pass
 
     async def passive_observer_task(self):
         """Passive observer that triggers AI commentary when user is quiet."""
@@ -970,6 +600,236 @@ class AudioLoop:
                         system_log.info(f"Error sending passive prompt (will retry): {e}", category="PASSIVE")
                 self.last_interaction_time = time.time()
     
+    async def get_screen(self):
+        """
+        Captures screen frames using MSS and puts them in the queue.
+        """
+        with mss.mss() as sct:
+            # Get the primary monitor
+            monitor = sct.monitors[1]
+            
+            while True:
+                start_time = time.time()
+                
+                # Capture screen
+                screenshot = sct.grab(monitor)
+                
+                # Convert to PIL Image
+                img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                
+                # Resize if needed (optional, for performance)
+                # img.thumbnail((1024, 1024))
+                
+                # Convert to bytes
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='JPEG', quality=80)
+                img_bytes = img_byte_arr.getvalue()
+                
+                # Put in queue (non-blocking if full, drop old frames if needed)
+                if self.video_out_queue.full():
+                    try:
+                        self.video_out_queue.get_nowait()
+                        self.frame_stats["dropped"] += 1
+                    except asyncio.QueueEmpty:
+                        pass
+                
+                await self.video_out_queue.put({
+                    "mime_type": "image/jpeg",
+                    "data": img_bytes,
+                    "timestamp": time.time()
+                })
+                
+                self.frame_stats["captured"] += 1
+                
+                # Wait for next capture interval
+                elapsed = time.time() - start_time
+                wait_time = max(0, VIDEO_CAPTURE_INTERVAL - elapsed)
+                await asyncio.sleep(wait_time)
+
+    async def get_frames(self):
+        """
+        Captures camera frames using OpenCV and puts them in the queue.
+        """
+        cap = cv2.VideoCapture(0)
+        
+        if not cap.isOpened():
+            system_log.info("Cannot open camera", category="VIDEO")
+            return
+            
+        while True:
+            start_time = time.time()
+            
+            ret, frame = cap.read()
+            if not ret:
+                system_log.info("Can't receive frame (stream end?). Exiting ...", category="VIDEO")
+                break
+                
+            # Encode to JPEG
+            _, buffer = cv2.imencode('.jpg', frame)
+            img_bytes = buffer.tobytes()
+            
+            # Put in queue
+            if self.video_out_queue.full():
+                try:
+                    self.video_out_queue.get_nowait()
+                    self.frame_stats["dropped"] += 1
+                except asyncio.QueueEmpty:
+                    pass
+            
+            await self.video_out_queue.put({
+                "mime_type": "image/jpeg",
+                "data": img_bytes,
+                "timestamp": time.time()
+            })
+            
+            self.frame_stats["captured"] += 1
+            
+            # Wait for next capture interval
+            elapsed = time.time() - start_time
+            wait_time = max(0, VIDEO_CAPTURE_INTERVAL - elapsed)
+            await asyncio.sleep(wait_time)
+
+    async def send_realtime_image(self):
+        """
+        Sends frames from queue to the API.
+        Tracks latency from frame capture to API send.
+        Includes connection health checks to prevent sending to dead connections.
+        """
+        consecutive_skips = 0
+        max_consecutive_skips = 10  # Drop frames if connection is dead for too long
+        
+        while True:
+            frame = await self.video_out_queue.get()
+            
+            # Check connection health before processing
+            if not self._is_connection_healthy():
+                consecutive_skips += 1
+                if consecutive_skips <= max_consecutive_skips:
+                    if VIDEO_DEBUG or consecutive_skips % 5 == 0:
+                        system_log.info(f"Connection not healthy, skipping frame ({consecutive_skips}/{max_consecutive_skips}). Waiting for reconnection...", category="VIDEO")
+                    continue
+                else:
+                    # Too many skips, drop frame and wait
+                    if VIDEO_DEBUG:
+                        system_log.info(f"Dropping frame due to dead connection (skipped {consecutive_skips} frames)", category="VIDEO")
+                    await asyncio.sleep(1)  # Brief pause before checking again
+                    continue
+            
+            # Reset skip counter on successful health check
+            if consecutive_skips > 0:
+                if VIDEO_DEBUG:
+                    system_log.info(f"Connection restored, resuming frame sending", category="VIDEO")
+                consecutive_skips = 0
+            
+            # Calculate latency if timestamp exists
+            if frame.get("timestamp"):
+                latency = time.time() - frame["timestamp"]
+                self.frame_stats["total_latency"] += latency
+                self.frame_stats["max_latency"] = max(self.frame_stats["max_latency"], latency)
+                
+                if VIDEO_DEBUG:
+                    system_log.info(f"Sending frame (latency: {latency:.2f}s)", category="VIDEO")
+                elif latency > 3.0:  # Warn about high latency even without debug mode
+                    system_log.info(f"WARNING: High frame latency: {latency:.2f}s", category="VIDEO")
+            
+            # Prepare frame for API (remove timestamp)
+            api_frame = {
+                "mime_type": frame["mime_type"],
+                "data": frame["data"]
+            }
+            
+            send_start = time.time()
+            try:
+                await self.session.send_realtime_input(media=api_frame)
+                self.frame_stats["sent"] += 1
+                
+                # Reset error counter on successful send
+                if self.connection_error_count > 0:
+                    self.connection_error_count = 0
+                
+                if VIDEO_DEBUG:
+                    send_time = time.time() - send_start
+                    system_log.info(f"Frame sent to API in {send_time:.3f}s", category="VIDEO")
+            except Exception as e:
+                is_dead = self._handle_connection_error(e)
+                if is_dead:
+                    # Connection is dead, skip this frame and wait
+                    if VIDEO_DEBUG:
+                        system_log.info(f"Connection dead, skipping frame. Will resume after reconnection.", category="VIDEO")
+                    await asyncio.sleep(1)  # Wait before trying next frame
+                else:
+                    # Transient error, log and continue
+                    if not VIDEO_DEBUG:  # Only log if not in debug mode (to reduce spam)
+                        system_log.info(f"ERROR: Failed to send frame (will retry): {e}", category="VIDEO")
+                    await asyncio.sleep(0.1)  # Brief pause before retry
+
+    async def send_realtime_audio(self):
+        while True:
+            audio = await self.audio_out_queue.get()
+            try:
+                await self.session.send_realtime_input(audio=types.Blob(data=audio.get("data"), mime_type=audio.get("mime_type")))
+            except Exception as e:
+                system_log.info(f"Error sending audio: {e}", category="AUDIO")
+
+    async def listen_audio(self):
+        """
+        Capture system audio from the default input device (Virtual Cable) using sounddevice.
+        """
+        # Use the default input device (which should be CABLE Output)
+        try:
+            device_info = sd.query_devices(kind='input')
+            system_log.info(f"Opening audio stream on device: {device_info['name']}", category="AUDIO")
+        except Exception as e:
+            system_log.info(f"Error querying audio devices: {e}", category="AUDIO")
+            await asyncio.sleep(5)
+            return
+
+        # Create a queue for audio blocks
+        q = asyncio.Queue()
+        
+        def callback(indata, frames, time_info, status):
+            """Callback for sounddevice input stream."""
+            if status:
+                system_log.info(f"Audio status: {status}", category="AUDIO")
+            # Make a copy of the data to ensure it's safe to pass to another thread/loop
+            q.put_nowait(indata.copy())
+
+        try:
+            # Open the stream
+            with sd.InputStream(samplerate=SEND_SAMPLE_RATE,
+                                channels=CHANNELS,
+                                dtype='int16',
+                                callback=callback,
+                                blocksize=CHUNK_SIZE):
+                
+                system_log.info("Audio stream started", category="AUDIO")
+                
+                while True:
+                    # Get audio data from the queue
+                    indata = await q.get()
+                    
+                    # Check if AI is speaking (to avoid feedback loop if not using separate channels)
+                    if orion_tts.IS_SPEAKING:
+                        # Optional: mute system audio capture while AI is speaking to prevent echo
+                        # self.last_interaction_time = time.time() 
+                        continue
+
+                    # Simple VAD to keep session alive
+                    # indata is numpy array of int16
+                    peak = np.max(np.abs(indata))
+                    if peak > 500:
+                        self.last_interaction_time = time.time()
+                    
+                    # Convert to bytes
+                    data = indata.tobytes()
+                    
+                    await self.audio_out_queue.put({"data": data, "mime_type": "audio/pcm;rate=16000"})
+                    
+        except Exception as e:
+            system_log.info(f"Error in listen_audio: {e}", category="AUDIO")
+            # Wait a bit before retrying (outer loop might handle restart)
+            await asyncio.sleep(1)
+
     async def video_stats_task(self):
         """Periodically print video pipeline statistics for debugging."""
         if not VIDEO_DEBUG:
@@ -1061,7 +921,8 @@ class AudioLoop:
         """Start all session tasks. Returns the send_text_task for awaiting."""
         send_text_task = tg.create_task(self.send_text())
 
-        if False:
+        # Enable audio pipeline
+        if True:
             self.audio_out_queue = asyncio.Queue(maxsize=5)
             tg.create_task(self.send_realtime_audio())
             tg.create_task(self.listen_audio())
