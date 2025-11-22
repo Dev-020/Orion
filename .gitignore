@@ -31,3 +31,4 @@ misc_scripts/TTS/cloned_output.wav
 *.pyc
 /debug_frames
 data/live_session_state.json
+test_utils/live/live_session_state.json

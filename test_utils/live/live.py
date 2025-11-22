@@ -72,8 +72,10 @@ import argparse
 from google import genai
 from google.genai import types
 
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from system_utils import orion_tts
+
+from live_ui import conversation, system_log, debug_log, print_separator
 
 dotenv.load_dotenv()
 
@@ -201,30 +203,30 @@ class LiveSessionState:
                             
                             if time_diff > 7200:  # 2 hours = 7200 seconds
                                 hours_old = time_diff / 3600
-                                print(f"[SESSION] Resumption handle expired ({hours_old:.1f} hours old, >2 hour limit). Starting new session.")
+                                system_log.info(f"Resumption handle expired ({hours_old:.1f} hours old, >2 hour limit). Starting new session.", category="SESSION")
                                 self.clear_state()
                                 return None
                             else:
                                 # Handle is still valid
                                 hours_remaining = (7200 - time_diff) / 3600
                                 if self.resumption_handle:
-                                    print(f"[SESSION] Loaded resumption handle: {self.resumption_handle[:30]}... (valid for {hours_remaining:.1f} more hours)")
+                                    system_log.info(f"Loaded resumption handle: {self.resumption_handle[:30]}... (valid for {hours_remaining:.1f} more hours)", category="SESSION")
                                     return self.resumption_handle
                         except (ValueError, TypeError) as e:
-                            print(f"[SESSION] Error parsing timestamp '{self.last_update}': {e}. Starting new session.")
+                            system_log.info(f"Error parsing timestamp '{self.last_update}': {e}. Starting new session.", category="SESSION")
                             self.clear_state()
                             return None
                     else:
                         # No timestamp, assume expired
-                        print("[SESSION] No timestamp in session state. Starting new session.")
+                        system_log.info("No timestamp in session state. Starting new session.", category="SESSION")
                         self.clear_state()
                         return None
         except json.JSONDecodeError as e:
-            print(f"[SESSION] Error parsing session state file (corrupted?): {e}. Starting new session.")
+            system_log.info(f"Error parsing session state file (corrupted?): {e}. Starting new session.", category="SESSION")
             self.clear_state()
             return None
         except Exception as e:
-            print(f"[SESSION] Error loading session state: {e}. Starting new session.")
+            system_log.info(f"Error loading session state: {e}. Starting new session.", category="SESSION")
             return None
         
         return None
@@ -243,9 +245,9 @@ class LiveSessionState:
             if session_id:
                 self.session_id = session_id
             self.last_update = state["last_update"]
-            print(f"[SESSION] Saved resumption handle: {resumption_handle[:30]}...")
+            system_log.info(f"Saved resumption handle: {resumption_handle[:30]}...", category="SESSION")
         except Exception as e:
-            print(f"[SESSION] Error saving session state: {e}")
+            system_log.info(f"Error saving session state: {e}", category="SESSION")
     
     def clear_state(self):
         """Clear saved state (after successful resumption or expiration)."""
@@ -255,9 +257,9 @@ class LiveSessionState:
             self.resumption_handle = None
             self.session_id = None
             self.last_update = None
-            print("[SESSION] Cleared session state")
+            system_log.info("Cleared session state", category="SESSION")
         except Exception as e:
-            print(f"[SESSION] Error clearing session state: {e}")
+            system_log.info(f"Error clearing session state: {e}", category="SESSION")
 
 pya = pyaudio.PyAudio()
 
@@ -338,7 +340,7 @@ class AudioLoop:
     
     async def _graceful_shutdown(self):
         """Perform graceful shutdown, saving session state if available."""
-        print("[SESSION] Performing graceful shutdown...")
+        system_log.info("Performing graceful shutdown...", category="SESSION")
         
         # Finalize session duration
         if self.session_start_time is not None:
@@ -347,14 +349,14 @@ class AudioLoop:
         # Display final session statistics
         total_duration = self._get_session_duration_seconds()
         if total_duration > 0:
-            print(f"[SESSION] Total session duration: {self._format_session_duration()}")
+            system_log.info(f"Total session duration: {self._format_session_duration()}", category="SESSION")
         
         # If we have a current resumption handle, it's already saved
         # But we should verify the state is current
         if self.session_state.resumption_handle:
-            print(f"[SESSION] Session state preserved. Resumption handle available for next run.")
+            system_log.info(f"Session state preserved. Resumption handle available for next run.", category="SESSION")
         else:
-            print("[SESSION] No resumption handle available. Next run will start fresh session.")
+            system_log.info("No resumption handle available. Next run will start fresh session.", category="SESSION")
         
         # Ensure session is cleared to prevent any lingering references
         # This is critical to prevent segmentation faults from using closed session objects
@@ -381,14 +383,14 @@ class AudioLoop:
     def _mark_connection_dead(self, reason: str = "Unknown"):
         """Mark connection as dead and log the reason."""
         if self.connection_alive:  # Only log if it was previously alive
-            print(f"[CONNECTION] Marking connection as dead: {reason}")
+            system_log.info(f"Marking connection as dead: {reason}", category="CONNECTION")
         self.connection_alive = False
         self.connection_error_count = 0  # Reset counter
     
     def _mark_connection_alive(self):
         """Mark connection as alive and reset error counter."""
         if not self.connection_alive:
-            print("[CONNECTION] Connection marked as alive")
+            system_log.info("Connection marked as alive", category="CONNECTION")
         self.connection_alive = True
         self.connection_error_count = 0
     
@@ -426,7 +428,7 @@ class AudioLoop:
         # For transient errors, just log and continue
         if self.connection_error_count < self.max_connection_errors:
             if VIDEO_DEBUG:
-                print(f"[CONNECTION] Transient error ({self.connection_error_count}/{self.max_connection_errors}): {error_type}: {error}")
+                system_log.info(f"Transient error ({self.connection_error_count}/{self.max_connection_errors}): {error_type}: {error}", category="CONNECTION")
         
         return False
     
@@ -457,7 +459,7 @@ class AudioLoop:
         """Start or resume session timer."""
         if self.session_start_time is None:
             self.session_start_time = time.time()
-            print(f"[SESSION] Session timer started")
+            system_log.info(f"Session timer started", category="SESSION")
         else:
             # Session resumed - don't reset, just continue timing
             pass
@@ -469,14 +471,14 @@ class AudioLoop:
             elapsed = time.time() - self.session_start_time
             self.total_session_duration += elapsed
             self.session_start_time = None
-            print(f"[SESSION] Session timer paused. Total duration so far: {self._format_session_duration()}")
+            system_log.info(f"Session timer paused. Total duration so far: {self._format_session_duration()}", category="SESSION")
 
     def _input_loop(self, loop):
         """
         Background thread to read user input without blocking the async loop.
         Survives session reconnections.
         """
-        print("[INPUT] Input thread started")
+        system_log.info("Input thread started", category="INPUT")
         while True:
             try:
                 # This blocks the thread, not the async loop
@@ -486,13 +488,13 @@ class AudioLoop:
                 if loop.is_running():
                     loop.call_soon_threadsafe(self.user_input_queue.put_nowait, text)
                 else:
-                    print("[INPUT] Loop not running, exiting input thread")
+                    system_log.info("Loop not running, exiting input thread", category="INPUT")
                     break
             except EOFError:
-                print("[INPUT] EOF received, exiting input thread")
+                system_log.info("EOF received, exiting input thread", category="INPUT")
                 break
             except Exception as e:
-                print(f"[INPUT] Error in input thread: {e}")
+                system_log.info(f"Error in input thread: {e}", category="INPUT")
                 # Brief pause to avoid tight loop on error
                 time.sleep(0.1)
 
@@ -508,18 +510,18 @@ class AudioLoop:
                     # For now, we'll handle exit here
                     raise asyncio.CancelledError("User requested exit")
                 
-                print(f"message > {text}") # Echo input since input() doesn't show prompt nicely in thread
+                conversation.user_input(text) # Echo input since input() doesn't show prompt nicely in thread
                 
                 # Check connection health before sending
                 if not self._is_connection_healthy():
-                    print("[TEXT] Connection not healthy, skipping send. Waiting for reconnection...")
+                    system_log.info("Connection not healthy, skipping send. Waiting for reconnection...", category="TEXT")
                     # Wait a bit and check again
                     await asyncio.sleep(1)
                     continue
                 
                 # Validate session object is still valid
                 if self.session is None:
-                    print("[TEXT] Session is None, waiting for reconnection...")
+                    system_log.info("Session is None, waiting for reconnection...", category="TEXT")
                     await asyncio.sleep(1)
                     continue
                 
@@ -529,7 +531,7 @@ class AudioLoop:
                     # CRITICAL: Double-check session is still valid before using
                     # This prevents segmentation faults from using closed/invalid session objects
                     if hasattr(self.session, '_closed') and self.session._closed:
-                        print("[TEXT] Session is closed, waiting for reconnection...")
+                        system_log.info("Session is closed, waiting for reconnection...", category="TEXT")
                         self._mark_connection_dead("Session closed")
                         self.session = None  # Clear reference to prevent segfault
                         await asyncio.sleep(1)
@@ -539,7 +541,7 @@ class AudioLoop:
                     try:
                         _ = id(self.session)  # Simple check that object is still valid
                     except (AttributeError, RuntimeError, ReferenceError) as e:
-                        print(f"[TEXT] Session object invalid (id check failed): {e}. Clearing and waiting for reconnection...")
+                        system_log.info(f"Session object invalid (id check failed): {e}. Clearing and waiting for reconnection...", category="TEXT")
                         self._mark_connection_dead(f"Session object invalid: {e}")
                         self.session = None
                         await asyncio.sleep(1)
@@ -551,32 +553,32 @@ class AudioLoop:
                         self.connection_error_count = 0
                 except AttributeError as e:
                     # Session object might be invalid - clear reference to prevent segfault
-                    print(f"[TEXT] Session object invalid (AttributeError): {e}. Clearing and waiting for reconnection...")
+                    system_log.info(f"Session object invalid (AttributeError): {e}. Clearing and waiting for reconnection...", category="TEXT")
                     self._mark_connection_dead(f"Session invalid: {e}")
                     self.session = None  # CRITICAL: Clear to prevent segfault
                     await asyncio.sleep(2)
                 except RuntimeError as e:
                     # Runtime errors often indicate closed/invalid objects
-                    print(f"[TEXT] Runtime error (likely closed session): {e}. Clearing and waiting for reconnection...")
+                    system_log.info(f"Runtime error (likely closed session): {e}. Clearing and waiting for reconnection...", category="TEXT")
                     self._mark_connection_dead(f"Runtime error: {e}")
                     self.session = None  # CRITICAL: Clear to prevent segfault
                     await asyncio.sleep(2)
                 except Exception as e:
                     is_dead = self._handle_connection_error(e)
                     if is_dead:
-                        print(f"[TEXT] Connection dead, will retry after reconnection")
+                        system_log.info(f"Connection dead, will retry after reconnection", category="TEXT")
                         # Wait for reconnection
                         await asyncio.sleep(2)
                     else:
-                        print(f"[TEXT] Error sending text (will retry): {e}")
+                        system_log.info(f"Error sending text (will retry): {e}", category="TEXT")
                         await asyncio.sleep(0.5)  # Brief pause before retry
             except asyncio.CancelledError:
                 # Task was cancelled (e.g., during reconnection)
-                print("[TEXT] Task cancelled, exiting...")
+                system_log.info("Task cancelled, exiting...", category="TEXT")
                 break
             except Exception as e:
                 # Catch any other unexpected errors
-                print(f"[TEXT] Unexpected error: {e}")
+                system_log.info(f"Unexpected error: {e}", category="TEXT")
                 await asyncio.sleep(1)
 
     def _get_frame(self, cap):
@@ -605,7 +607,7 @@ class AudioLoop:
         
         if VIDEO_DEBUG:
             processing_time = time.time() - capture_start
-            print(f"[VIDEO] Camera frame captured and processed in {processing_time:.3f}s")
+            system_log.info(f"Camera frame captured and processed in {processing_time:.3f}s", category="VIDEO")
         
         return frame_data
 
@@ -635,20 +637,20 @@ class AudioLoop:
                         dropped_count += 1
                         if VIDEO_DEBUG and old_frame.get("timestamp"):
                             age = time.time() - old_frame["timestamp"]
-                            print(f"[VIDEO] Dropping old camera frame (age: {age:.2f}s)")
+                            system_log.info(f"Dropping old camera frame (age: {age:.2f}s)", category="VIDEO")
                     except asyncio.QueueEmpty:
                         break
                 
                 if dropped_count > 0:
                     self.frame_stats["dropped"] += dropped_count
                     if VIDEO_DEBUG:
-                        print(f"[VIDEO] Dropped {dropped_count} old camera frame(s) from queue")
+                        system_log.info(f"Dropped {dropped_count} old camera frame(s) from queue", category="VIDEO")
                 
                 # Put the latest frame
                 await self.video_out_queue.put(frame)
         finally:
             # Release the VideoCapture object
-            print("[VIDEO] Releasing camera resource...")
+            system_log.info("Releasing camera resource...", category="VIDEO")
             cap.release()
 
     def _get_screen(self):
@@ -676,7 +678,7 @@ class AudioLoop:
             
             if VIDEO_DEBUG:
                 processing_time = time.time() - capture_start
-                print(f"[VIDEO] Frame captured and processed in {processing_time:.3f}s")
+                system_log.info(f"Frame captured and processed in {processing_time:.3f}s", category="VIDEO")
             
             return frame_data
 
@@ -704,14 +706,14 @@ class AudioLoop:
                     dropped_count += 1
                     if VIDEO_DEBUG and old_frame.get("timestamp"):
                         age = time.time() - old_frame["timestamp"]
-                        print(f"[VIDEO] Dropping old frame (age: {age:.2f}s)")
+                        system_log.info(f"Dropping old frame (age: {age:.2f}s)", category="VIDEO")
                 except asyncio.QueueEmpty:
                     break
             
             if dropped_count > 0:
                 self.frame_stats["dropped"] += dropped_count
                 if VIDEO_DEBUG:
-                    print(f"[VIDEO] Dropped {dropped_count} old frame(s) from queue")
+                    system_log.info(f"Dropped {dropped_count} old frame(s) from queue", category="VIDEO")
             
             # Put the latest frame
             await self.video_out_queue.put(frame)
@@ -733,19 +735,19 @@ class AudioLoop:
                 consecutive_skips += 1
                 if consecutive_skips <= max_consecutive_skips:
                     if VIDEO_DEBUG or consecutive_skips % 5 == 0:
-                        print(f"[VIDEO] Connection not healthy, skipping frame ({consecutive_skips}/{max_consecutive_skips}). Waiting for reconnection...")
+                        system_log.info(f"Connection not healthy, skipping frame ({consecutive_skips}/{max_consecutive_skips}). Waiting for reconnection...", category="VIDEO")
                     continue
                 else:
                     # Too many skips, drop frame and wait
                     if VIDEO_DEBUG:
-                        print(f"[VIDEO] Dropping frame due to dead connection (skipped {consecutive_skips} frames)")
+                        system_log.info(f"Dropping frame due to dead connection (skipped {consecutive_skips} frames)", category="VIDEO")
                     await asyncio.sleep(1)  # Brief pause before checking again
                     continue
             
             # Reset skip counter on successful health check
             if consecutive_skips > 0:
                 if VIDEO_DEBUG:
-                    print(f"[VIDEO] Connection restored, resuming frame sending")
+                    system_log.info(f"Connection restored, resuming frame sending", category="VIDEO")
                 consecutive_skips = 0
             
             # Calculate latency if timestamp exists
@@ -755,9 +757,9 @@ class AudioLoop:
                 self.frame_stats["max_latency"] = max(self.frame_stats["max_latency"], latency)
                 
                 if VIDEO_DEBUG:
-                    print(f"[VIDEO] Sending frame (latency: {latency:.2f}s)")
+                    system_log.info(f"Sending frame (latency: {latency:.2f}s)", category="VIDEO")
                 elif latency > 3.0:  # Warn about high latency even without debug mode
-                    print(f"[VIDEO WARNING] High frame latency: {latency:.2f}s")
+                    system_log.info(f"WARNING: High frame latency: {latency:.2f}s", category="VIDEO")
             
             # Prepare frame for API (remove timestamp)
             api_frame = {
@@ -776,18 +778,18 @@ class AudioLoop:
                 
                 if VIDEO_DEBUG:
                     send_time = time.time() - send_start
-                    print(f"[VIDEO] Frame sent to API in {send_time:.3f}s")
+                    system_log.info(f"Frame sent to API in {send_time:.3f}s", category="VIDEO")
             except Exception as e:
                 is_dead = self._handle_connection_error(e)
                 if is_dead:
                     # Connection is dead, skip this frame and wait
                     if VIDEO_DEBUG:
-                        print(f"[VIDEO] Connection dead, skipping frame. Will resume after reconnection.")
+                        system_log.info(f"Connection dead, skipping frame. Will resume after reconnection.", category="VIDEO")
                     await asyncio.sleep(1)  # Wait before trying next frame
                 else:
                     # Transient error, log and continue
                     if not VIDEO_DEBUG:  # Only log if not in debug mode (to reduce spam)
-                        print(f"[VIDEO ERROR] Failed to send frame (will retry): {e}")
+                        system_log.info(f"ERROR: Failed to send frame (will retry): {e}", category="VIDEO")
                     await asyncio.sleep(0.1)  # Brief pause before retry
 
     async def send_realtime_audio(self):
@@ -842,7 +844,7 @@ class AudioLoop:
                 turn = self.session.receive()
                 async for response in turn:
                     if VIDEO_DEBUG:
-                        print(f"\n[DEBUG] Response type: {type(response)}")
+                        system_log.info(f"Response type: {type(response)}", category="VIDEO")
                     
                     # Handle SessionResumptionUpdate messages
                     if hasattr(response, 'session_resumption_update') and response.session_resumption_update:
@@ -851,18 +853,18 @@ class AudioLoop:
                         handle = getattr(update, 'new_handle', None) or getattr(update, 'handle', None)
                         
                         if handle:
-                            print(f"\n[SESSION] Received resumption token: {handle[:30]}...")
+                            system_log.info(f"Received resumption token: {handle[:30]}...", category="SESSION")
                             try:
                                 self.session_state.save_state(
                                     resumption_handle=handle,
                                     session_id=self.session_id
                                 )
-                                print(f"[SESSION] Resumption token saved successfully")
+                                system_log.info(f"Resumption token saved successfully", category="SESSION")
                             except Exception as e:
-                                print(f"[SESSION] ERROR: Failed to save resumption token: {e}")
+                                system_log.info(f"ERROR: Failed to save resumption token: {e}", category="SESSION")
                         else:
                             if VIDEO_DEBUG:
-                                print(f"[SESSION] SessionResumptionUpdate received but no handle found: {update}")
+                                system_log.info(f"SessionResumptionUpdate received but no handle found: {update}", category="SESSION")
                     
                     # Handle GoAway message (connection termination warning)
                     if hasattr(response, 'go_away') and response.go_away:
@@ -881,10 +883,10 @@ class AudioLoop:
                             else:
                                 time_left = int(time_left_raw) if time_left_raw else 0
                         except (ValueError, TypeError) as e:
-                            print(f"[SESSION] Warning: Could not parse time_left '{time_left_raw}' ({type(time_left_raw).__name__}), defaulting to 0. Error: {e}")
+                            system_log.info(f"Warning: Could not parse time_left '{time_left_raw}' ({type(time_left_raw).__name__}), defaulting to 0. Error: {e}", category="SESSION")
                             time_left = 0
                         
-                        print(f"\n[SESSION] GoAway received. Time left: {time_left} seconds")
+                        system_log.info(f"\n[SESSION] GoAway received. Time left: {time_left} seconds", category="SESSION")
                         self.goaway_received = True
                         # Mark connection as dead (will be reconnected)
                         self._mark_connection_dead("GoAway message received")
@@ -897,25 +899,25 @@ class AudioLoop:
                     if hasattr(response, 'context_window_compression_update') and response.context_window_compression_update:
                         if VIDEO_DEBUG:
                             update = response.context_window_compression_update
-                            print(f"[SESSION] Context compression update: {update}")
+                            system_log.info(f"Context compression update: {update}", category="SESSION")
                     
                     # Handle text responses
                     if text := response.text:
                         orion_tts.process_stream_chunk(text)
-                        print(text, end="", flush=True)
+                        conversation.stream_ai(text)
                 
                 orion_tts.flush_stream()
-                print("\n")
+                conversation.flush_ai()
                 
             except self.GoAwayReconnection:
                 # Re-raise to propagate to TaskGroup and exit connection context
                 raise
             except Exception as e:
                 if not self.goaway_received:  # Don't log errors if we're expecting disconnection
-                    print(f"[SESSION] Error in receive_audio: {e}")
+                    system_log.info(f"Error in receive_audio: {e}", category="SESSION")
                 # If connection is dead, raise to trigger reconnection
                 if not self.connection_alive:
-                    print(f"[SESSION] Connection dead in receive_audio, triggering reconnection...")
+                    system_log.info(f"Connection dead in receive_audio, triggering reconnection...", category="SESSION")
                     raise self.GoAwayReconnection("Connection dead, reconnecting...")
                 break
 
@@ -954,7 +956,7 @@ class AudioLoop:
                 continue
                 
             if time.time() - self.last_interaction_time > PASSIVE_TIMER:
-                print("\n[System: Triggering Passive Observation]\n")
+                system_log.info("Triggering Passive Observation", category="PASSIVE")
                 try:
                     await self.session.send_realtime_input(text="[SYSTEM: The user has been quiet for a while. Briefly comment on what you see on the screen right now.]")
                     # Reset error counter on successful send
@@ -963,9 +965,9 @@ class AudioLoop:
                 except Exception as e:
                     is_dead = self._handle_connection_error(e)
                     if is_dead:
-                        print(f"[PASSIVE] Connection dead, skipping passive prompt. Will retry after reconnection.")
+                        system_log.info(f"Connection dead, skipping passive prompt. Will retry after reconnection.", category="PASSIVE")
                     else:
-                        print(f"[PASSIVE] Error sending passive prompt (will retry): {e}")
+                        system_log.info(f"Error sending passive prompt (will retry): {e}", category="PASSIVE")
                 self.last_interaction_time = time.time()
     
     async def video_stats_task(self):
@@ -978,12 +980,12 @@ class AudioLoop:
             if self.frame_stats["sent"] > 0:
                 avg_latency = self.frame_stats["total_latency"] / self.frame_stats["sent"]
                 session_duration = self._format_session_duration()
-                print(f"\n[VIDEO STATS] Captured: {self.frame_stats['captured']}, "
+                system_log.info(f"Captured: {self.frame_stats['captured']}, "
                       f"Sent: {self.frame_stats['sent']}, "
                       f"Dropped: {self.frame_stats['dropped']}, "
                       f"Avg Latency: {avg_latency:.2f}s, "
                       f"Max Latency: {self.frame_stats['max_latency']:.2f}s, "
-                      f"Session Duration: {session_duration}\n")
+                      f"Session Duration: {session_duration}", category="VIDEO")
     
     def _build_config(self, resumption_handle: Optional[str] = None):
         """Build session config with resumption support."""
@@ -998,10 +1000,10 @@ class AudioLoop:
             config["session_resumption"] = types.SessionResumptionConfig(
                 handle=resumption_handle
             )
-            print(f"[SESSION] Configuring session with resumption handle")
+            system_log.info(f"Configuring session with resumption handle", category="SESSION")
         else:
             config["session_resumption"] = types.SessionResumptionConfig()
-            print(f"[SESSION] Configuring new session (no resumption)")
+            system_log.info(f"Configuring new session (no resumption)", category="SESSION")
         
         return config
 
@@ -1020,11 +1022,11 @@ class AudioLoop:
         try:
             time_left = int(time_left) if time_left else 0
         except (ValueError, TypeError):
-            print(f"[SESSION] Warning: Invalid time_left value '{time_left}', defaulting to 0")
+            system_log.info(f"Warning: Invalid time_left value '{time_left}', defaulting to 0", category="SESSION")
             time_left = 0
         
         self.reconnection_pending = True
-        print(f"[SESSION] Preparing for reconnection in {time_left} seconds...")
+        system_log.info(f"Preparing for reconnection in {time_left} seconds...", category="SESSION")
         
         # Save any pending exchange data (if we implement exchange buffering later)
         # For now, we just prepare for reconnection
@@ -1034,26 +1036,26 @@ class AudioLoop:
         if time_left > 10:
             # Plenty of time - wait until we have 5 seconds left
             wait_time = max(1, time_left - 5)
-            print(f"[SESSION] Waiting {wait_time} seconds before reconnection (will reconnect with ~5s buffer)...")
+            system_log.info(f"Waiting {wait_time} seconds before reconnection (will reconnect with ~5s buffer)...", category="SESSION")
             await asyncio.sleep(wait_time)
         elif time_left > 3:
             # Some time left - wait until we have 2 seconds left
             wait_time = max(1, time_left - 2)
-            print(f"[SESSION] Waiting {wait_time} seconds before reconnection (will reconnect with ~2s buffer)...")
+            system_log.info(f"Waiting {wait_time} seconds before reconnection (will reconnect with ~2s buffer)...", category="SESSION")
             await asyncio.sleep(wait_time)
         elif time_left > 0:
             # Very little time left - wait most of it
             wait_time = max(0.5, time_left - 0.5)
-            print(f"[SESSION] Waiting {wait_time} seconds before reconnection...")
+            system_log.info(f"Waiting {wait_time} seconds before reconnection...", category="SESSION")
             await asyncio.sleep(wait_time)
         else:
             # No time left or invalid, reconnect immediately
-            print("[SESSION] No time left, reconnecting immediately...")
+            system_log.info("No time left, reconnecting immediately...", category="SESSION")
             await asyncio.sleep(0.5)  # Brief pause
         
         # Mark that we're ready to reconnect
         # The receive_audio loop should have already broken, allowing connection to close
-        print("[SESSION] GoAway wait complete, connection should close and reconnect...")
+        system_log.info("GoAway wait complete, connection should close and reconnect...", category="SESSION")
     
     def _start_session_tasks(self, tg):
         """Start all session tasks. Returns the send_text_task for awaiting."""
@@ -1073,7 +1075,7 @@ class AudioLoop:
             tg.create_task(self.video_stats_task())
             
             if VIDEO_DEBUG:
-                print("[VIDEO] Video pipeline initialized with latest-frame-only strategy")
+                system_log.info("Video pipeline initialized with latest-frame-only strategy", category="VIDEO")
         elif self.video_mode == "camera":
             # Use size 1 since we're implementing latest-frame-only strategy
             self.video_out_queue = asyncio.Queue(maxsize=1)
@@ -1082,7 +1084,7 @@ class AudioLoop:
             tg.create_task(self.video_stats_task())
             
             if VIDEO_DEBUG:
-                print("[VIDEO] Camera pipeline initialized with latest-frame-only strategy")
+                system_log.info("Camera pipeline initialized with latest-frame-only strategy", category="VIDEO")
 
         tg.create_task(self.receive_audio())
         tg.create_task(self.passive_observer_task())
@@ -1097,7 +1099,7 @@ class AudioLoop:
             await asyncio.sleep(60.0)  # Display every 60 seconds
             if self.session_start_time is not None or self.total_session_duration > 0:
                 duration = self._format_session_duration()
-                print(f"[SESSION] Session duration: {duration}")
+                system_log.info(f"Session duration: {duration}", category="SESSION")
 
     async def run(self):
         """
@@ -1105,7 +1107,7 @@ class AudioLoop:
         Handles session resumption and reconnection on disconnection.
         Performs graceful shutdown on user termination (Ctrl+C, etc.).
         """
-        print("[SESSION] Starting Live API session...")
+        system_log.info("Starting Live API session...", category="SESSION")
         
         try:
             while self.reconnect_count < self.max_reconnect_attempts and not self.shutdown_requested:
@@ -1121,9 +1123,9 @@ class AudioLoop:
                     self.reconnection_pending = False
                     
                     if previous_handle:
-                        print(f"[SESSION] Attempting to resume previous session...")
+                        system_log.info(f"Attempting to resume previous session...", category="SESSION")
                     else:
-                        print(f"[SESSION] Starting new session (ID: {self.session_id})")
+                        system_log.info(f"Starting new session (ID: {self.session_id})", category="SESSION")
                     
                     # Connect to Live API
                     async with (
@@ -1141,12 +1143,12 @@ class AudioLoop:
                         if self.input_thread is None or not self.input_thread.is_alive():
                             self.input_thread = threading.Thread(target=self._input_loop, args=(loop,), daemon=True)
                             self.input_thread.start()
-                            print("[SESSION] Persistent input thread started")
+                            system_log.info("Persistent input thread started", category="SESSION")
                         
                         # Start/resume session timer
                         self._start_session_timer()
                         
-                        print(f"[SESSION] Connected successfully (Session duration: {self._format_session_duration()})")
+                        system_log.info(f"Connected successfully (Session duration: {self._format_session_duration()})", category="SESSION")
                         
                         # Start all session tasks
                         send_text_task = self._start_session_tasks(tg)
@@ -1154,16 +1156,16 @@ class AudioLoop:
                         # Wait for user exit or disconnection
                         try:
                             await send_text_task
-                            print("[SESSION] User requested exit (via 'q' command)")
+                            system_log.info("User requested exit (via 'q' command)", category="SESSION")
                             raise asyncio.CancelledError("User requested exit")
                         except asyncio.CancelledError:
                             # Check if shutdown was requested (signal handler)
                             if self.shutdown_requested:
-                                print("[SESSION] Shutdown requested by user")
+                                system_log.info("Shutdown requested by user", category="SESSION")
                             raise  # Re-raise to exit cleanly
                         except self.GoAwayReconnection:
                             # GoAway received - this is expected, let it propagate to exit connection context
-                            print("[SESSION] GoAway reconnection triggered, exiting connection context...")
+                            system_log.info("GoAway reconnection triggered, exiting connection context...", category="SESSION")
                             # Pause session timer during reconnection
                             self._pause_session_timer()
                             # CRITICAL: Clear session reference BEFORE exiting context to prevent segfault
@@ -1172,7 +1174,7 @@ class AudioLoop:
                             raise  # Re-raise to exit connection context
                         except Exception as e:
                             if not self.goaway_received and not self.shutdown_requested:
-                                print(f"[SESSION] Session error: {e}")
+                                system_log.info(f"Session error: {e}", category="SESSION")
                             # Mark connection as dead on session error
                             self._mark_connection_dead(f"Session error: {e}")
                             # CRITICAL: Clear session reference to prevent use of invalid session
@@ -1187,32 +1189,32 @@ class AudioLoop:
                             if self.session is not None and (self.goaway_received or not self.connection_alive):
                                 # Only clear if connection is dead or GoAway was received
                                 # Normal exits will let the context manager handle cleanup
-                                print("[SESSION] Clearing session reference in finally block")
+                                system_log.info("Clearing session reference in finally block", category="SESSION")
                                 self.session = None
 
                 except asyncio.CancelledError:
                     # User requested exit - clean shutdown
                     if self.shutdown_requested:
-                        print("[SESSION] Session cancelled by user (signal)")
+                        system_log.info("Session cancelled by user (signal)", category="SESSION")
                     else:
-                        print("[SESSION] Session cancelled by user")
+                        system_log.info("Session cancelled by user", category="SESSION")
                     break
                     
                 except KeyboardInterrupt:
                     # Handle Ctrl+C explicitly
-                    print("\n[SESSION] Keyboard interrupt received")
+                    system_log.info("Keyboard interrupt received", category="SESSION")
                     self.shutdown_requested = True
                     break
                     
                 except self.GoAwayReconnection:
                     # GoAway-triggered reconnection - this is expected, don't increment error count
-                    print(f"[SESSION] GoAway reconnection exception caught, will reconnect... (Session duration before reconnect: {self._format_session_duration()})")
+                    system_log.info(f"GoAway reconnection exception caught, will reconnect... (Session duration before reconnect: {self._format_session_duration()})", category="SESSION")
                     # Pause timer during reconnection
                     self._pause_session_timer()
                     # Don't increment reconnect_count for expected GoAway reconnections
                 except ExceptionGroup as EG:
                     if not self.shutdown_requested:
-                        print(f"[SESSION] Exception group caught: {EG}")
+                        system_log.info(f"Exception group caught: {EG}", category="SESSION")
                         traceback.print_exception(EG)
                         self.reconnect_count += 1
                     else:
@@ -1220,7 +1222,7 @@ class AudioLoop:
                     
                 except Exception as e:
                     if not self.shutdown_requested:
-                        print(f"[SESSION] Connection error: {e}")
+                        system_log.info(f"Connection error: {e}", category="SESSION")
                         self.reconnect_count += 1
                     else:
                         break
@@ -1234,24 +1236,24 @@ class AudioLoop:
                     # GoAway was received - reconnect with a brief pause
                     # Give time for _handle_goaway to complete
                     wait_time = 2  # Brief pause to ensure GoAway handling completes
-                    print(f"[SESSION] Reconnecting after GoAway... (attempt {self.reconnect_count + 1}/{self.max_reconnect_attempts})")
+                    system_log.info(f"Reconnecting after GoAway... (attempt {self.reconnect_count + 1}/{self.max_reconnect_attempts})", category="SESSION")
                     await asyncio.sleep(wait_time)
                     self.goaway_received = False  # Reset for next iteration
                     self.reconnection_pending = False  # Reset reconnection flag
                 elif self.reconnect_count < self.max_reconnect_attempts:
                     # Normal reconnection with exponential backoff
                     wait_time = min(2 ** self.reconnect_count, 10)  # Exponential backoff, max 10s
-                    print(f"[SESSION] Reconnecting in {wait_time} seconds... (attempt {self.reconnect_count + 1}/{self.max_reconnect_attempts})")
+                    system_log.info(f"Reconnecting in {wait_time} seconds... (attempt {self.reconnect_count + 1}/{self.max_reconnect_attempts})", category="SESSION")
                     await asyncio.sleep(wait_time)
                 else:
-                    print(f"[SESSION] Max reconnection attempts ({self.max_reconnect_attempts}) reached. Exiting.")
+                    system_log.info(f"Max reconnection attempts ({self.max_reconnect_attempts}) reached. Exiting.", category="SESSION")
                     break
         
         finally:
             # Always perform graceful shutdown
             await self._graceful_shutdown()
         
-        print("[SESSION] Session ended")
+        system_log.info("Session ended", category="SESSION")
 
 
 if __name__ == "__main__":
