@@ -15,14 +15,16 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from main_utils import config
 
 # --- 1. CONFIGURATION ---
-MODEL_PATH = Path(config.PROJECT_ROOT) / "data" / "piper_models" / "firefly" / "en_US-firefly-medium.onnx"
-CONFIG_PATH = Path(config.PROJECT_ROOT) / "data" / "piper_models" / "firefly" / "en_US-firefly-medium.onnx.json"
+MODEL_PATH = Path(config.PROJECT_ROOT) / "data" / "piper_models" / "firefly" / "en_US-fireflyv2-medium.onnx"
+CONFIG_PATH = Path(config.PROJECT_ROOT) / "data" / "piper_models" / "firefly" / "en_US-fireflyv2-medium.onnx.json"
 LOG_FOLDER = f"{Path(config.PROJECT_ROOT)}/databases/{config.PERSONA}/audio_logs"  # <-- NEW: Folder to save all generated audio
 # --- NEW: TTS Queue and Thread Management ---
 tts_queue = queue.Queue()
 tts_thread = None
 stop_event = threading.Event()
 interrupt_event = threading.Event() # NEW: For stopping current speech
+IS_SPEAKING = False # NEW: Flag to indicate if TTS is currently speaking
+
 # --- 2. VALIDATE FILES & CREATE LOG FOLDER ---
 if not os.path.exists(MODEL_PATH) or not os.path.exists(CONFIG_PATH):
     print(f"Error: Model files not found.")
@@ -119,6 +121,7 @@ def _process_tts_queue():
     """
     accumulated_audio_chunks = []  # Accumulates audio across multiple utterances
     stream_start_time = None  # Track when streaming started
+    global IS_SPEAKING
     
     while not stop_event.is_set():
         try:
@@ -129,7 +132,8 @@ def _process_tts_queue():
             # Check for end-of-stream sentinel
             if text_to_speak is None:
                 # Save all accumulated audio to a single file
-                if accumulated_audio_chunks:
+
+                if accumulated_audio_chunks and config.SAVE:
                     print("\n>>> Saving consolidated audio file <<<")
                     audio_data_bytes = b"".join(accumulated_audio_chunks)
                     audio_array_int16 = np.frombuffer(audio_data_bytes, dtype=np.int16)
@@ -145,9 +149,9 @@ def _process_tts_queue():
                     except Exception as e:
                         print(f"Error saving log file: {e}")
                     
-                    # Reset accumulator for next stream
-                    accumulated_audio_chunks = []
-                    stream_start_time = None
+                # Reset accumulator for next stream
+                accumulated_audio_chunks = []
+                stream_start_time = None
                 
                 tts_queue.task_done()
                 continue
@@ -155,14 +159,16 @@ def _process_tts_queue():
             # Process text utterance
             interrupt_event.clear() # Clear interrupt flag for new utterance
 
-            print(f"\n>>> Orion is Speaking <<<")
-            print("Generating and streaming speech (on CPU)...")
+            if False:
+                print(f"\n>>> Orion is Speaking <<<")
+                print("Generating and streaming speech (on CPU)...")
             
             # Track start time for first utterance in stream
             if stream_start_time is None:
                 stream_start_time = time.time()
             
             utterance_start = time.time()
+            IS_SPEAKING = True
 
             with sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype='int16') as stream:
                 first_chunk = True
@@ -175,15 +181,17 @@ def _process_tts_queue():
                     if stop_event.is_set():
                         print("TTS stop event received, halting playback.")
                         break
-                    if first_chunk:
+                    if first_chunk and False:
                         first_chunk_time = time.time() - utterance_start
                         print(f"Time to first audio chunk: {first_chunk_time:.2f}s")
                         first_chunk = False
                     stream.write(chunk.audio_int16_bytes)
                     accumulated_audio_chunks.append(chunk.audio_int16_bytes)
 
+            IS_SPEAKING = False
             utterance_end = time.time()
-            print(f"Finished streaming utterance. Time: {utterance_end - utterance_start:.2f}s")
+            if False:
+                print(f"Finished streaming utterance. Time: {utterance_end - utterance_start:.2f}s")
 
             tts_queue.task_done()
 
