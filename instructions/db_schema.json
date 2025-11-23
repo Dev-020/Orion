@@ -65,5 +65,16 @@
       "data",
       "timestamp"
     ]
+  },
+  "cache_metadata": {
+    "columns": [
+      "persona",
+      "model_name",
+      "cache_name",
+      "instruction_hash",
+      "created_at",
+      "last_updated",
+      "ttl_seconds"
+    ]
   }
 }

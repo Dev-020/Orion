@@ -106,9 +106,25 @@ class OrionCore:
         if voice_notification:
             self.current_instructions += f"\n\n---\n\n{voice_notification}"
 
+        # --- Initialize Context Caching ---
+        from system_utils.gemini_cache_manager import GeminiCacheManager
+        self.cache_manager = GeminiCacheManager(
+            client=self.client,
+            db_file=functions.config.DB_FILE,
+            model_name=self.model_name,
+            system_instructions=self.current_instructions,
+            persona=self.persona
+            # Tools NOT in cache - passed per-request based on mode
+        )
+        self.cached_content = self.cache_manager.get_or_create_cache()
+
         if not self._load_state_on_restart():
             self.sessions: dict[str, list] = {}
         
+        # NEW: Track function calling mode per session
+        self.session_modes: dict[str, str] = {}  # session_id -> "cache" | "function"
+        self.default_mode = "cache"  # Default to cost-optimized mode
+            
         print(f"--- Orion Core is online and ready. Managing {len(self.sessions)} session(s). ---")
         
     def _read_all_instructions(self) -> str:
@@ -177,6 +193,26 @@ class OrionCore:
             self.sessions[session_id] = history
         return self.sessions[session_id]
 
+    def get_session_mode(self, session_id: str) -> str:
+        """Get current mode for session. Returns 'cache' or 'function'."""
+        return self.session_modes.get(session_id, self.default_mode)
+
+    def set_session_mode(self, session_id: str, mode: str) -> str:
+        """
+        Set mode for session. 
+        Args:
+            mode: Either 'cache' or 'function'
+        Returns:
+            Confirmation message
+        """
+        if mode not in ["cache", "function"]:
+            return f"Error: Invalid mode '{mode}'. Must be 'cache' or 'function'."
+        
+        self.session_modes[session_id] = mode
+        mode_name = "Context Caching" if mode == "cache" else "Function Calling"
+        print(f"[Mode Switch] Session '{session_id}' set to: {mode_name}")
+        return f"Session mode set to: {mode_name}"
+
     def trigger_instruction_refresh(self, full_restart: bool = False):
         """Performs a full hot-swap. It reloads instructions AND reloads the tools
         from functions.py, then rebuilds all active chat sessions."""
@@ -206,7 +242,12 @@ class OrionCore:
             functions.manual_sync_instructions(self.discord_id)
         generate_manifests.main()
         self.current_instructions = self._read_all_instructions()
-        print(f"--- HOT-SWAP COMPLETE: {len(self.sessions)} session(s) migrated. ---")
+        
+        # --- Invalidate and recreate cache with new instructions ---
+        self.cache_manager.system_instructions = self.current_instructions
+        self.cached_content = self.cache_manager.invalidate_and_recreate()
+        
+        print(f"--- HOT-SWAP COMPLETE: {len(self.sessions)} session(s) migrated. Cache recreated. ---")
         return f'Refresh Complete. Tools and Instructions are all up to date.'
 
     def save_state_for_restart(self) -> bool:
@@ -361,6 +402,24 @@ class OrionCore:
             "user_prompt": user_prompt,
         }
         
+        # NEW: Inject mode notification
+        current_mode = self.get_session_mode(session_id)
+        if current_mode == "cache":
+            mode_msg = (
+                "[OPERATIONAL MODE: Context Caching] You are currently in cost-optimized mode. "
+                "Function calling is DISABLED. If the user requests tool usage (file operations, "
+                "database queries, system commands), inform them that function calling mode must "
+                "be enabled first."
+            )
+        else:
+            mode_msg = (
+                "[OPERATIONAL MODE: Function Calling] All 45 tools are available. "
+                "Automatic Function Calling is ENABLED. Context caching is disabled "
+                "in this mode for compatibility."
+            )
+        
+        data_envelope["system_notifications"].append(mode_msg)
+        
         # --- Vision Module Notification ---
         if config.VISION and self.vision_attachments:
             print(f"  - Attaching {self.vision_attachments['display_name']} queued vision captures...")
@@ -485,6 +544,41 @@ class OrionCore:
 
         return should_restart
 
+    def _get_generation_config(self, session_id: str, stream: bool = False):
+        """
+        Returns appropriate GenerateContentConfig based on session mode.
+        Cache mode: Uses cached content, NO tools
+        Function mode: Uses system instructions + tools, NO cache
+        """
+        mode = self.get_session_mode(session_id)
+        
+        # Shared config parameters
+        thinking_level = types.ThinkingLevel.LOW if stream else types.ThinkingLevel.HIGH
+        safety_settings = [
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
+            )
+        ]
+        
+        if mode == "cache":
+            # CACHE MODE: Use cached content, NO tools
+            print(f"[Gen Config] Using CACHE mode (tools disabled)")
+            return types.GenerateContentConfig(
+                cached_content=self.cached_content.name,
+                thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
+                safety_settings=safety_settings
+            )
+        else:
+            # FUNCTION MODE: Use tools, NO cache
+            print(f"[Gen Config] Using FUNCTION mode (tools enabled, no cache)")
+            return types.GenerateContentConfig(
+                system_instruction=self.current_instructions,
+                tools=self.tools,
+                thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
+                safety_settings=safety_settings
+            )
+
     def _generate_full_response(self, contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db):
         """
         Internal helper: Handles non-streaming generation.
@@ -496,19 +590,7 @@ class OrionCore:
             response = self.client.models.generate_content(
                 model=f'{self.model_name}',
                 contents=contents_to_send,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.current_instructions,
-                    tools=self.tools,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level=types.ThinkingLevel.HIGH
-                    ),
-                    safety_settings=[
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
-                        )
-                    ]
-                )
+                config=self._get_generation_config(session_id, stream=False)
             )
             
             self.current_turn_context = None # Clear context
@@ -531,6 +613,7 @@ class OrionCore:
             # Extract Text and Tokens
             response_content = response.candidates[0].content
             token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
+            print(response.usage_metadata.cached_content_token_count if response.usage_metadata else 0)
             final_text = ""
             if response_content:
                 for part in response_content.parts:
@@ -540,6 +623,9 @@ class OrionCore:
             # TTS Side Effect
             if config.VOICE and final_text:
                 orion_tts.speak(final_text)
+
+            # Update cache TTL (rolling heartbeat)
+            self.cache_manager.update_cache_ttl(self.cached_content.name)
 
             # Finalize
             should_restart = self._finalize_exchange(
@@ -564,40 +650,29 @@ class OrionCore:
         full_response_text = ""
         token_count = 0
 
-        if config.VERTEX:
-            model_name = self.model_name
-        else:
-            model_name = "gemini-2.5-pro"
+        #if config.VERTEX:
+        #    model_name = self.model_name
+        #else:
+        #    model_name = "gemini-2.5-pro"
 
         try:
             response_stream = self.client.models.generate_content_stream(
-                model=model_name,
+                model=self.model_name,
                 contents=contents_to_send,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.current_instructions,
-                    tools=self.tools,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level=types.ThinkingLevel.LOW
-                    ),
-                    safety_settings=[
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
-                        )
-                    ]
-                )
+                config=self._get_generation_config(session_id, stream=True)
             )
 
             last_chunk = None
             for chunk in response_stream:
                 # Print what we receive
                 last_chunk = chunk
+                #print(chunk)
                 if chunk.candidates:
                     for part in chunk.candidates[0].content.parts:
-                        if part.function_call:
-                            print(f"CHUNK: Function Call -> {part.function_call.name}")
+                        #if part.function_call:
+                            #print(f"CHUNK: Function Call -> {part.function_call.name}")
                         if part.text:
-                            print(f"CHUNK: Text -> {part.text.strip()}")
+                            #print(f"CHUNK: Text -> {part.text.strip()}")
                             if config.VOICE:
                                 orion_tts.process_stream_chunk(part.text)
                             
@@ -609,11 +684,15 @@ class OrionCore:
                 
                 if chunk.usage_metadata:
                     token_count = chunk.usage_metadata.total_token_count
-
+                    
+            print(last_chunk.usage_metadata.cached_content_token_count)
             if config.VOICE:
                 orion_tts.flush_stream()
                 
             self.current_turn_context = None
+
+            # Update cache TTL (rolling heartbeat)
+            self.cache_manager.update_cache_ttl(self.cached_content.name)
 
             # Reconstruct Model Content (Simplified for Stream)
             model_content_obj = types.Content(

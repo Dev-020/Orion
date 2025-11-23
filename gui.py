@@ -137,22 +137,49 @@ class OrionGUI:
     def create_prompt_tab(self, tab_frame):
         prompt_inner_frame = customtkinter.CTkFrame(tab_frame, fg_color="transparent")
         prompt_inner_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        prompt_inner_frame.grid_rowconfigure(0, weight=1)
+        prompt_inner_frame.grid_rowconfigure(1, weight=1)  # Changed from 0 to 1
         prompt_inner_frame.grid_columnconfigure(0, weight=1)
         prompt_inner_frame.grid_columnconfigure(1, weight=0)
+        
+        # NEW: Mode indicator and toggle (row 0)
+        mode_frame = customtkinter.CTkFrame(prompt_inner_frame, fg_color="transparent")
+        mode_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        
+        self.mode_label = customtkinter.CTkLabel(
+            mode_frame,
+            text="💰 Context Caching Mode (Tools Disabled)",
+            font=customtkinter.CTkFont(size=12, weight="bold"),
+            text_color="#4CAF50",  # Green for cache mode
+            anchor="w"
+        )
+        self.mode_label.pack(side="left", fill="x", expand=True)
+        
+        self.mode_toggle_button = customtkinter.CTkButton(
+            mode_frame,
+            text="Switch to 🛠️ Tools",
+            command=self._on_toggle_mode,
+            width=140,
+            height=28,
+            fg_color="#505050",
+            hover_color="#606060"
+        )
+        self.mode_toggle_button.pack(side="right")
+        
+        # Existing prompt box (now row 1)
         self.prompt_box = customtkinter.CTkTextbox(
             prompt_inner_frame,
             wrap="word",
             font=customtkinter.CTkFont(size=13)
         )
-        self.prompt_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.prompt_box.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        
         self.send_button = customtkinter.CTkButton(
             prompt_inner_frame, 
             text="Send", 
             command=self.on_send_pressed,
             width=60,
         )
-        self.send_button.grid(row=0, column=1, sticky="ns")
+        self.send_button.grid(row=1, column=1, sticky="ns")
     
     def create_files_tab(self, tab_frame):
         self.staging_frame = customtkinter.CTkScrollableFrame(
@@ -350,6 +377,33 @@ class OrionGUI:
         user_options = [f"{name} ({uid})" for uid, name in self.user_list.items()]
         self.user_menu.configure(values=user_options)
 
+    def _on_toggle_mode(self):
+        """Toggles between cache and function calling modes for current session."""
+        current_mode = self.core.get_session_mode(self.current_session_id)
+        new_mode = "function" if current_mode == "cache" else "cache"
+    
+        result = self.core.set_session_mode(self.current_session_id, new_mode)
+        print(f"--- GUI: {result} ---")
+    
+        self._update_mode_display()
+
+    def _update_mode_display(self):
+        """Updates the mode label and toggle button based on current mode."""
+        current_mode = self.core.get_session_mode(self.current_session_id)
+        
+        if current_mode == "cache":
+            self.mode_label.configure(
+                text="💰 Context Caching Mode (Tools Disabled)",
+                text_color="#4CAF50"  # Green
+            )
+            self.mode_toggle_button.configure(text="Switch to 🛠️ Tools")
+        else:
+            self.mode_label.configure(
+                text="🛠️ Function Calling Mode (All Tools Available)",
+                text_color="#FF9800"  # Orange
+            )
+            self.mode_toggle_button.configure(text="Switch to 💰 Cache")
+
     def _on_add_user(self):
         """Adds a new user to the user list and updates the UI."""
         name = self.new_user_name_entry.get().strip()
@@ -409,6 +463,7 @@ class OrionGUI:
         print(f"--- GUI: Switching to session: {selected_session_id} ---")
         self.current_session_id = selected_session_id
         self._rebuild_chat_display()
+        self._update_mode_display()  # <-- ADD THIS LINE
 
     def _on_refresh_sessions_list(self):
         """Fetches all session IDs from the core and updates the dropdown."""
