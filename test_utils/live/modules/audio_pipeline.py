@@ -1,0 +1,119 @@
+import asyncio
+import time
+import numpy as np
+import sounddevice as sd
+from pathlib import Path
+from google.genai import types
+
+# Import system_log and debug monitor
+try:
+    from test_utils.live.live_ui import system_log
+    from test_utils.live.debug_monitor import get_monitor
+except ImportError:
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
+    from test_utils.live.live_ui import system_log
+    from test_utils.live.debug_monitor import get_monitor
+
+# Import orion_tts
+try:
+    from system_utils import orion_tts
+except ImportError:
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
+    from system_utils import orion_tts
+
+# Audio configuration
+CHANNELS = 1
+SEND_SAMPLE_RATE = 16000
+CHUNK_SIZE = 1024
+
+class AudioPipeline:
+    def __init__(self, connection_manager):
+        self.connection_manager = connection_manager
+        self.audio_out_queue = asyncio.Queue(maxsize=60)
+        self.debug_monitor = get_monitor()
+        self.last_interaction_time = time.time()
+
+    async def send_realtime_audio(self):
+        while True:
+            audio = await self.audio_out_queue.get()
+            try:
+                await self.connection_manager.session.send_realtime_input(audio=types.Blob(data=audio.get("data"), mime_type=audio.get("mime_type")))
+                
+                # Feed to debug monitor
+                if self.debug_monitor:
+                    self.debug_monitor.update_audio_level(audio.get("data"))
+            except Exception as e:
+                if self.debug_monitor:
+                    self.debug_monitor.report_audio_drop()
+                system_log.info(f"Error sending audio: {e}", category="AUDIO")
+
+    async def listen_audio(self):
+        """
+        Capture system audio from the default input device (Virtual Cable) using sounddevice.
+        """
+        # Use the default input device (which should be CABLE Output)
+        retry_count = 0
+        while retry_count < 5:
+            try:
+                device_info = sd.query_devices(kind='input')
+                system_log.info(f"Opening audio stream on device: {device_info['name']}", category="AUDIO")
+                break  # EXIT loop on success!
+            except Exception as e:
+                retry_count += 1
+                wait_time = min(2 ** retry_count, 10)  # Exponential backoff
+                system_log.info(f"Error querying audio devices (attempt {retry_count}/5): {e}", category="AUDIO")
+            
+                if retry_count >= 5:
+                    system_log.info(f"Failed to initialize audio after 5 attempts. Audio disabled.", category="AUDIO")
+                    return
+                
+                system_log.info(f"Retrying in {wait_time} seconds...", category="AUDIO")
+                await asyncio.sleep(wait_time)
+        
+        # Create a queue for audio blocks
+        q = asyncio.Queue()
+        
+        def callback(indata, frames, time_info, status):
+            """Callback for sounddevice input stream."""
+            if status:
+                system_log.info(f"Audio status: {status}", category="AUDIO")
+            # Make a copy of the data to ensure it's safe to pass to another thread/loop
+            q.put_nowait(indata.copy())
+
+        try:
+            # Open the stream
+            with sd.InputStream(samplerate=SEND_SAMPLE_RATE,
+                                channels=CHANNELS,
+                                dtype='int16',
+                                callback=callback,
+                                blocksize=CHUNK_SIZE):
+                
+                system_log.info("Audio stream started", category="AUDIO")
+                
+                while True:
+                    # Get audio data from the queue
+                    indata = await q.get()
+                    
+                    # Check if AI is speaking (to avoid feedback loop if not using separate channels)
+                    if orion_tts.IS_SPEAKING:
+                        # Optional: mute system audio capture while AI is speaking to prevent echo
+                        # self.last_interaction_time = time.time() 
+                        continue
+
+                    # Simple VAD to keep session alive
+                    # indata is numpy array of int16
+                    peak = np.max(np.abs(indata))
+                    if peak > 500:
+                        self.last_interaction_time = time.time()
+                    
+                    # Convert to bytes
+                    data = indata.tobytes()
+                    
+                    await self.audio_out_queue.put({"data": data, "mime_type": "audio/pcm;rate=16000"})
+                    
+        except Exception as e:
+            system_log.info(f"Error in listen_audio: {e}", category="AUDIO")
+            # Wait a bit before retrying (outer loop might handle restart)
+            await asyncio.sleep(1)
