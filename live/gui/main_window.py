@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from live.gui.signals import OrionSignals
 from live.gui.widgets.chat_panel import ChatPanel
 from live.gui.widgets.video_display import VideoDisplay
 from live.gui.widgets.control_panel import ControlPanel
@@ -11,6 +12,8 @@ from live.gui.widgets.control_panel import ControlPanel
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.signals = OrionSignals()
+
         self.setWindowTitle("Orion Live Interface")
         self.resize(1280, 720)
         
@@ -50,3 +53,8 @@ class MainWindow(QMainWindow):
         
         # Set Splitter Ratio (30% Chat, 70% Video)
         splitter.setSizes([384, 896])
+        
+        # Connect signals to slots (after widgets are created)
+        self.signals.video_frame_ready.connect(self.video_display.update_frame)
+        self.signals.chat_message_received.connect(self.chat_panel.add_message)
+        self.signals.connection_status_changed.connect(self.control_panel.update_status)

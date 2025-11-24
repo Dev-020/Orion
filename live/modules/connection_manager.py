@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from live_ui import system_log
+from live.live_ui import system_log
 
 # Check if debug mode is enabled
 VIDEO_DEBUG = os.getenv("VIDEO_DEBUG", "false").lower() == "true"

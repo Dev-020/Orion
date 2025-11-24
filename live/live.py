@@ -32,17 +32,20 @@ from google.genai import types
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
+
+# With this:
 from system_utils import orion_tts
-from live_ui import conversation, system_log, debug_log, print_separator
-from window_selection_ui import select_window_for_capture
+    
+from live.live_ui import conversation, system_log, debug_log, print_separator
+from live.window_selection_ui import select_window_for_capture
 
 # Import new modules
-from modules.session_manager import LiveSessionState
-from modules.connection_manager import ConnectionManager, GoAwayReconnection
-from modules.video_pipeline import VideoPipeline
-from modules.audio_pipeline import AudioPipeline
-from modules.input_pipeline import InputPipeline
-from modules.response_pipeline import ResponsePipeline
+from live.modules.session_manager import LiveSessionState
+from live.modules.connection_manager import ConnectionManager, GoAwayReconnection
+from live.modules.video_pipeline import VideoPipeline
+from live.modules.audio_pipeline import AudioPipeline
+from live.modules.input_pipeline import InputPipeline
+from live.modules.response_pipeline import ResponsePipeline
 
 # Configuration
 DEFAULT_VIDEO = "window"
@@ -114,17 +117,18 @@ BASE_SYSTEM_INSTRUCTION = """
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": "v1beta"})
 
 class LiveSessionOrchestrator:
-    def __init__(self, video_mode=DEFAULT_VIDEO, audio_mode=DEFAULT_AUDIO):
+    def __init__(self, video_mode=DEFAULT_VIDEO, audio_mode=DEFAULT_AUDIO, signals=None):
         self.video_mode = video_mode
         self.audio_mode = audio_mode
+        self.signals = signals  # GUI signals (optional, None for CLI mode)
         
         # Initialize modules
         self.session_state = LiveSessionState()
         self.connection_manager = ConnectionManager()
-        self.video_pipeline = VideoPipeline(self.connection_manager, mode=video_mode)
+        self.video_pipeline = VideoPipeline(self.connection_manager, mode=video_mode, signals=signals)
         self.audio_pipeline = AudioPipeline(self.connection_manager)
         self.input_pipeline = InputPipeline(self.connection_manager)
-        self.response_pipeline = ResponsePipeline(self.connection_manager, self.session_state)
+        self.response_pipeline = ResponsePipeline(self.connection_manager, self.session_state, signals=signals)
         
         # Link video pipeline to response pipeline for momentum checks
         self.response_pipeline.video_pipeline = self.video_pipeline
@@ -284,7 +288,7 @@ class LiveSessionOrchestrator:
         
         # Start debug monitor if enabled
         if self.video_pipeline.debug_monitor:
-            from debug_monitor import start_monitor
+            from live.debug_monitor import start_monitor
             start_monitor()
             system_log.info("Debug monitor started", category="SESSION")
 

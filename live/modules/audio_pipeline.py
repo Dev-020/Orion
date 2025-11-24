@@ -14,9 +14,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from live_ui import system_log
-from debug_monitor import get_monitor
-from system_utils import orion_tts
+from live.live_ui import system_log
+from live.debug_monitor import get_monitor
+try:
+    from system_utils import orion_tts
+except ImportError:
+    print(f"Warning: {ImportError}")
+    orion_tts = None
 
 # Audio configuration
 CHANNELS = 1

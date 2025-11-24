@@ -20,6 +20,12 @@ class ControlPanel(QFrame):
         # Header
         self.layout.addWidget(QLabel("CONTROLS", objectName="HeaderLabel"))
         
+        # Status Label
+        self.status_label = QLabel()
+        self.status_label.setText("● Disconnected")
+        self.status_label.setStyleSheet("color: #888888;")
+        self.layout.addWidget(self.status_label)
+        
         # Window Selection
         win_layout = QHBoxLayout()
         self.window_combo = QComboBox()
@@ -88,3 +94,12 @@ class ControlPanel(QFrame):
     def _on_mute_toggled(self, checked):
         self.mute_btn.setText("Unmute Mic" if checked else "Mute Mic")
         self.mute_toggled.emit(checked)
+
+    def update_status(self, connected: bool, status_message: str):
+        """Update connection status display"""
+        if connected:
+            self.status_label.setText(f"● {status_message}")
+            self.status_label.setStyleSheet("color: #4CAF50;")  # Green
+        else:
+            self.status_label.setText(f"● {status_message}")
+            self.status_label.setStyleSheet("color: #F44336;")  # Red

@@ -65,3 +65,7 @@ class ChatPanel(QWidget):
         # Auto-scroll to bottom
         scrollbar = self.history.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def add_message(self, sender: str, message: str):
+        """Add a message to the chat display"""
+        self.append_message(sender, message)

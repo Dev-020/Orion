@@ -18,9 +18,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from live_ui import system_log
-from debug_monitor import get_monitor
-from modules.window_selector import WindowSelector
+from live.live_ui import system_log
+from live.debug_monitor import get_monitor
+from live.modules.window_selector import WindowSelector
 from google.genai import types
 
 # Check if debug mode is enabled
@@ -29,7 +29,7 @@ VIDEO_DEBUG = False
 VIDEO_CAPTURE_INTERVAL = 1.0  # Seconds between frame captures
 
 class VideoPipeline:
-    def __init__(self, connection_manager, mode="screen"):
+    def __init__(self, connection_manager, mode="screen", signals=None):
         self.connection_manager = connection_manager
         self.mode = mode
         self.video_out_queue = asyncio.Queue(maxsize=1)
@@ -41,6 +41,7 @@ class VideoPipeline:
             "max_latency": 0.0,
         }
         self.debug_monitor = get_monitor()
+        self.signals = signals
         
         # Visual Momentum State
         self.last_frame_gray = None
@@ -324,6 +325,10 @@ class VideoPipeline:
                 if self.debug_monitor:
                     self.debug_monitor.update_video_frame(frame["data"], frame["mime_type"])
                     self.debug_monitor.report_video_tokens(258)
+                
+                # Emit signal for GUI (if connected)
+                if self.signals:
+                    self.signals.video_frame_ready.emit(frame["data"])  
                 
                 # Reset error counter on successful send
                 if self.connection_manager.connection_error_count > 0:

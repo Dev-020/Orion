@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from main_utils import config
-from live_ui import system_log
+from live.live_ui import system_log
 
 # Session state file path
 SESSION_STATE_FILE = os.path.join(config.PROJECT_ROOT, "data", "live_session_state.json")

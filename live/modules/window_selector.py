@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 try:
-    from live_ui import system_log
+    from live.live_ui import system_log
 except ImportError:
     class DummyLog:
         @staticmethod

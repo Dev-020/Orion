@@ -12,9 +12,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from live_ui import system_log, conversation
-from modules.connection_manager import GoAwayReconnection
-from system_utils import orion_tts
+from live.live_ui import system_log, conversation
+from live.modules.connection_manager import GoAwayReconnection
+try:
+    from system_utils import orion_tts
+except ImportError:
+    print(f"Warning: {ImportError}")
+    orion_tts = None
 
 # Check if debug mode is enabled
 import os
@@ -22,11 +26,13 @@ VIDEO_DEBUG = False
 PASSIVE_TIMER = 30
 
 class ResponsePipeline:
-    def __init__(self, connection_manager, session_manager):
+    def __init__(self, connection_manager, session_manager, signals=None):
         self.connection_manager = connection_manager
         self.session_manager = session_manager
+        self.signals = signals  # GUI signals (optional, None for CLI mode)
         self.last_interaction_time = time.time()
         self.session_id = None # Will be set by live.py or session manager
+        self.signals = signals
 
     async def handle_responses(self):
         while True:
@@ -94,10 +100,16 @@ class ResponsePipeline:
                     # Handle text responses
                     #print(response)
                     if text := response.text:
-                        orion_tts.process_stream_chunk(text)
+                        if orion_tts:
+                            orion_tts.process_stream_chunk(text)
                         conversation.stream_ai(text)
+
+                        # Emit signal for GUI (if connected)
+                        if self.signals:
+                            self.signals.chat_message_received.emit("AI", text)
                 
-                orion_tts.flush_stream()
+                if orion_tts:
+                    orion_tts.flush_stream()
                 conversation.flush_ai()
                 
             except GoAwayReconnection:
