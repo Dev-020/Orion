@@ -48,7 +48,42 @@ except Exception as e:
     print(f"Error loading model: {e}")
     exit()
 
-# --- 4. NEW: Text Normalization Function ---
+# --- 4. AUDIO DEVICE DETECTION ---
+# Automatically detect and use physical headphones (not VB-Cable) for TTS output
+TTS_OUTPUT_DEVICE = 23
+TTS_OUTPUT_DEVICE_NAME = "VoiceMeeter Input"  # Partial match for Logitech headphones
+
+def _get_physical_audio_device():
+    """
+    Find the physical audio device (not VB-Cable) for TTS output.
+    Returns: (device_id, device_name) tuple or (None, None) if not found
+    """
+    try:
+        devices = sd.query_devices()
+        
+        for i, device in enumerate(devices):
+            device_name = device['name']
+            # Look for Logitech headphones with output capability
+            if TTS_OUTPUT_DEVICE_NAME in device_name and device['max_output_channels'] > 0:
+                # Skip VB-Cable devices
+                if "VB-Audio" not in device_name and "CABLE" not in device_name:
+                    print(f"[TTS] Using output device: {device_name} (ID: {i})")
+                    return i, device_name
+        
+        # Fallback to default if not found
+        default_device = sd.query_devices(kind='output')
+        print(f"[TTS] WARNING: Physical device '{TTS_OUTPUT_DEVICE_NAME}' not found")
+        print(f"[TTS] Using default output device: {default_device['name']}")
+        return None, default_device['name']
+        
+    except Exception as e:
+        print(f"[TTS] Error detecting audio device: {e}")
+        return None, None
+
+# Detect the physical audio device at startup
+#TTS_OUTPUT_DEVICE, detected_device_name = _get_physical_audio_device()
+
+# --- 5. NEW: Text Normalization Function ---
 def _normalize_text_for_speech(text: str) -> str:
     """
     Cleans and normalizes text to make it more suitable for TTS.
@@ -170,7 +205,13 @@ def _process_tts_queue():
             utterance_start = time.time()
             IS_SPEAKING = True
 
-            with sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype='int16') as stream:
+            # Use physical device (Logitech) instead of default (VB-Cable)
+            with sd.RawOutputStream(
+                samplerate=sample_rate, 
+                channels=1, 
+                dtype='int16',
+                device=TTS_OUTPUT_DEVICE  # None = default, or specific device ID
+            ) as stream:
                 first_chunk = True
                 for chunk in voice.synthesize(text_to_speak):
                     # Check for interrupt during synthesis

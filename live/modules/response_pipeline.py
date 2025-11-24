@@ -3,24 +3,18 @@ import time
 from pathlib import Path
 
 # Import system_log, conversation, and orion_tts
-try:
-    from test_utils.live.live_ui import system_log, conversation
-    from test_utils.live.modules.connection_manager import GoAwayReconnection
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
-    from test_utils.live.live_ui import system_log, conversation
-    # We might need to adjust import for GoAwayReconnection if running differently
-    # But since we are in modules, relative import should work if package
-    # For now, assume absolute path works if sys.path is set
-    from test_utils.live.modules.connection_manager import GoAwayReconnection
+# Import system_log, conversation, and orion_tts
+import sys
+from pathlib import Path
 
-try:
-    from system_utils import orion_tts
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
-    from system_utils import orion_tts
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from live_ui import system_log, conversation
+from modules.connection_manager import GoAwayReconnection
+from system_utils import orion_tts
 
 # Check if debug mode is enabled
 import os
@@ -98,6 +92,7 @@ class ResponsePipeline:
                             system_log.info(f"Context compression update: {update}", category="SESSION")
                     
                     # Handle text responses
+                    #print(response)
                     if text := response.text:
                         orion_tts.process_stream_chunk(text)
                         conversation.stream_ai(text)
@@ -118,7 +113,10 @@ class ResponsePipeline:
                 break
 
     async def passive_observer_task(self):
-        """Passive observer that triggers AI commentary when user is quiet."""
+        """
+        Passive observer that triggers AI commentary when user is quiet.
+        Uses Visual Momentum to trigger faster responses during high-action scenes.
+        """
         while True:
             # Check if AI is speaking first (cheap check)
             if orion_tts.IS_SPEAKING:
@@ -128,17 +126,36 @@ class ResponsePipeline:
             
             # Check connection health before proceeding
             if not self.connection_manager.is_healthy():
-                # Connection is dead, wait longer before checking again
                 if VIDEO_DEBUG:
                     system_log.info("Connection not healthy, passive observer waiting...", category="PASSIVE")
-                await asyncio.sleep(10.0)  # Wait 10 seconds when dead (not 1+5)
+                await asyncio.sleep(10.0)
                 continue
             
-            # Check if passive timer has expired
-            if time.time() - self.last_interaction_time > PASSIVE_TIMER:
-                system_log.info("Triggering Passive Observation", category="PASSIVE")
+            # Determine dynamic timeout based on Visual Momentum
+            current_timeout = PASSIVE_TIMER
+            momentum = 0.0
+            
+            if hasattr(self, 'video_pipeline') and self.video_pipeline:
+                momentum = self.video_pipeline.get_momentum()
+                # If momentum is high (e.g., > 20), reduce timeout significantly
+                if momentum > 20.0:
+                    current_timeout = 8.0  # React quickly to action
+                    if VIDEO_DEBUG:
+                        system_log.info(f"High Momentum ({momentum:.1f}) detected! Reduced timeout to {current_timeout}s", category="PASSIVE")
+            
+            # Check if timer has expired
+            time_since_interaction = time.time() - self.last_interaction_time
+            
+            if time_since_interaction > current_timeout:
+                system_log.info(f"Triggering Passive Observation (Timeout: {current_timeout}s, Momentum: {momentum:.1f})", category="PASSIVE")
                 try:
-                    await self.connection_manager.session.send_realtime_input(text="[SYSTEM: The user has been quiet for a while. Briefly comment on what you see on the screen right now.]")
+                    # Contextual prompt based on momentum
+                    prompt = "[SYSTEM: The user has been quiet. Briefly comment on what you see.]"
+                    if momentum > 20.0:
+                        prompt = "[SYSTEM: The user is silent but the screen is moving fast (High Action). Comment about the action happening NOW.]"
+                    
+                    await self.connection_manager.session.send_realtime_input(text=prompt)
+                    
                     # Reset error counter on successful send
                     if self.connection_manager.connection_error_count > 0:
                         self.connection_manager.connection_error_count = 0

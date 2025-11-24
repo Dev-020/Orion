@@ -4,12 +4,15 @@ import time
 from pathlib import Path
 
 # Import system_log
-try:
-    from test_utils.live.live_ui import system_log
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
-    from test_utils.live.live_ui import system_log
+import sys
+from pathlib import Path
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from live_ui import system_log
 
 class InputPipeline:
     def __init__(self, connection_manager):

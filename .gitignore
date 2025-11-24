@@ -33,3 +33,4 @@ misc_scripts/TTS/cloned_output.wav
 data/live_session_state.json
 test_utils/live/live_session_state.json
 test_utils/data/live_session_state.json
+/live/_artifact_files

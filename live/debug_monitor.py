@@ -31,6 +31,11 @@ class DebugMonitor:
         self.last_audio_time = time.time()
         self.audio_rate = 0.0  # Chunks per second
         
+        # Token Usage Tracking (Estimated)
+        self.token_counts = {"audio": 0, "video": 0}
+        self.token_rates = {"audio": 0.0, "video": 0.0}
+        self.last_token_update = time.time()
+        
         # Display window
         self.window_name = "AI Debug Monitor"
         self.running = False
@@ -104,6 +109,32 @@ class DebugMonitor:
         with self.lock:
             self.audio_drops += 1
 
+    def report_video_tokens(self, count):
+        """Report estimated video tokens"""
+        with self.lock:
+            self.token_counts["video"] += count
+            self._update_token_rates()
+
+    def report_audio_tokens(self, count):
+        """Report estimated audio tokens"""
+        with self.lock:
+            self.token_counts["audio"] += count
+            self._update_token_rates()
+
+    def _update_token_rates(self):
+        """Update token usage rates"""
+        current_time = time.time()
+        elapsed = current_time - self.last_token_update
+        
+        if elapsed >= 1.0:
+            self.token_rates["video"] = self.token_counts["video"] / elapsed
+            self.token_rates["audio"] = self.token_counts["audio"] / elapsed
+            
+            # Reset counts
+            self.token_counts["video"] = 0
+            self.token_counts["audio"] = 0
+            self.last_token_update = current_time
+
     def _display_loop(self):
         """Main display loop (runs in separate thread)"""
         while self.running:
@@ -153,11 +184,35 @@ class DebugMonitor:
         if self.show_video:
             self._draw_video_stats(display)
         
+        # Add token stats overlay (Top Right)
+        self._draw_token_stats(display)
+        
         # Add audio visualization
         if self.show_audio:
             self._draw_audio_visualization(display)
         
         return display
+    
+    def _draw_token_stats(self, frame):
+        """Draw estimated token usage stats"""
+        h, w = frame.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        
+        # Calculate total
+        total_rate = self.token_rates["video"] + self.token_rates["audio"]
+        
+        # Position: Top Right
+        start_x = w - 220
+        start_y = 10
+        
+        # Background
+        cv2.rectangle(frame, (start_x, start_y), (w - 10, start_y + 90), (0, 0, 0), -1)
+        
+        # Text
+        cv2.putText(frame, "TOKEN USAGE (est.)", (start_x + 10, start_y + 25), font, 0.5, (0, 255, 255), 1)
+        cv2.putText(frame, f"Total: {int(total_rate)} tok/s", (start_x + 10, start_y + 45), font, 0.5, (255, 255, 255), 1)
+        cv2.putText(frame, f"Video: {int(self.token_rates['video'])} tok/s", (start_x + 10, start_y + 65), font, 0.5, (200, 200, 200), 1)
+        cv2.putText(frame, f"Audio: {int(self.token_rates['audio'])} tok/s", (start_x + 10, start_y + 85), font, 0.5, (200, 200, 200), 1)
     
     def _draw_video_stats(self, frame):
         """Draw video statistics on frame"""

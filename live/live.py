@@ -30,9 +30,11 @@ from google import genai
 from google.genai import types
 
 # Add project root to path
-sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(PROJECT_ROOT))
 from system_utils import orion_tts
 from live_ui import conversation, system_log, debug_log, print_separator
+from window_selection_ui import select_window_for_capture
 
 # Import new modules
 from modules.session_manager import LiveSessionState
@@ -43,7 +45,7 @@ from modules.input_pipeline import InputPipeline
 from modules.response_pipeline import ResponsePipeline
 
 # Configuration
-DEFAULT_VIDEO = "screen"
+DEFAULT_VIDEO = "window"
 DEFAULT_AUDIO = True
 MODEL = "models/gemini-live-2.5-flash-preview"
 
@@ -95,11 +97,19 @@ BASE_SYSTEM_INSTRUCTION = """
         # **PRIMARY TASKS**
 
         You are a conversational chatbot that primarily reacts and comments about the screen it is seeing.
-        Limit your responses to a few sentences (around 1 - 3 sentences if possible) to emulate sending messages in a chatroom. You can choose to make it longer but the maximum limit will be 6 sentences and nothing more.
-        Be truthful of what you see in the screen even if you arent seeing anything INFORM the user if you dont see anything and constantly update once you see a screen.
-        If you see anything interesting in the screen, such as a youtube video playing, the user playing a videogame, reading an article, etc. You should always respond to that kind of stimuli.
-        It is perfectly fine to send responses even if the user did not send any text messages to you asking for a response.
-        Note that it is also possible for you to pick up audio that is playing on the screen itself. Make sure that you are able to differentiate between audio data and video data to prevent any confusion with the user."""
+        1. Limit your responses to a few sentences (around 1 - 3 sentences if possible) to emulate sending messages in a chatroom. You can choose to make it longer but the maximum limit will be 6 sentences and nothing more.
+        2. Be truthful of what you see in the screen even if you arent seeing anything INFORM the user if you dont see anything and constantly update once you see a screen.
+        3. If you see anything interesting in the screen, such as a youtube video playing, the user playing a videogame, reading an article, etc. You should always respond to that kind of stimuli.
+        4. It is perfectly fine to send responses even if the user did not send any text messages to you asking for a response.
+        5. Note that it is also possible for you to pick up audio that is playing on the screen itself. Make sure that you are able to differentiate between audio data and video data to prevent any confusion with the user.
+        
+        **CRITICAL AUDIO INSTRUCTION:**
+        You are observing a stream that often has continuous background audio (gameplay sounds, music, videos).
+        1. Do NOT wait for the audio to stop before speaking.
+        2. Treat the continuous audio as "background ambiance."
+        3. You must be proactive and speak OVER the audio if you see something noteworthy.
+        4. Do not let the session stay silent for long periods if visual things are happening.
+        5. **PRIORITIZE NOW**: Your context window contains history, but you must prioritize the *immediate* audio and video frames you are receiving. Do not comment on events from 10+ seconds ago unless they directly cause what is happening now. If you are lagging, skip the old topic and sync with the present."""
 
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": "v1beta"})
 
@@ -115,6 +125,9 @@ class LiveSessionOrchestrator:
         self.audio_pipeline = AudioPipeline(self.connection_manager)
         self.input_pipeline = InputPipeline(self.connection_manager)
         self.response_pipeline = ResponsePipeline(self.connection_manager, self.session_state)
+        
+        # Link video pipeline to response pipeline for momentum checks
+        self.response_pipeline.video_pipeline = self.video_pipeline
         
         self.session_id = f"live_session_{int(time.time())}"
         self.response_pipeline.session_id = self.session_id
@@ -208,8 +221,18 @@ class LiveSessionOrchestrator:
             "context_window_compression": types.ContextWindowCompressionConfig(
                 sliding_window=types.SlidingWindow()
             ),
-            "system_instruction": BASE_SYSTEM_INSTRUCTION
-        }
+            "system_instruction": BASE_SYSTEM_INSTRUCTION,
+            # Aggressive Turn Detection for continuous audio environments
+            "realtime_input_config": {
+                "automatic_activity_detection": {
+                    "disabled": False, # default
+                    "start_of_speech_sensitivity": types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    "end_of_speech_sensitivity": types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 500,
+                }
+            }
+        }   
         if resumption_handle:
             config["session_resumption"] = types.SessionResumptionConfig(
                 handle=resumption_handle
@@ -239,7 +262,7 @@ class LiveSessionOrchestrator:
             tg.create_task(self.audio_pipeline.listen_audio())
         
         # Enable video pipeline
-        if self.video_mode == "screen":
+        if self.video_mode == "screen" or self.video_mode == "window":
             tg.create_task(self.video_pipeline.send_realtime_image())
             tg.create_task(self.video_pipeline.get_screen())
             tg.create_task(self.video_pipeline.video_stats_task())
@@ -261,7 +284,7 @@ class LiveSessionOrchestrator:
         
         # Start debug monitor if enabled
         if self.video_pipeline.debug_monitor:
-            from test_utils.live.debug_monitor import start_monitor
+            from debug_monitor import start_monitor
             start_monitor()
             system_log.info("Debug monitor started", category="SESSION")
 
@@ -387,10 +410,15 @@ if __name__ == "__main__":
         type=str,
         default=DEFAULT_VIDEO,
         help="pixels to stream from",
-        choices=["camera", "screen", "none"],
+        choices=["camera", "screen", "window", "none"],  # Add "window"
     )
     args = parser.parse_args()
     main = LiveSessionOrchestrator(video_mode=args.mode)
+
+    # If window mode, show window selection UI
+    if args.mode == "window":
+        select_window_for_capture(main)
+
     orion_tts.start_tts_thread()
     print("--- TTS Module is Activated. ---")
     asyncio.run(main.run())

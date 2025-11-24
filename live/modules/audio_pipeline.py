@@ -6,27 +6,23 @@ from pathlib import Path
 from google.genai import types
 
 # Import system_log and debug monitor
-try:
-    from test_utils.live.live_ui import system_log
-    from test_utils.live.debug_monitor import get_monitor
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
-    from test_utils.live.live_ui import system_log
-    from test_utils.live.debug_monitor import get_monitor
+import sys
+from pathlib import Path
 
-# Import orion_tts
-try:
-    from system_utils import orion_tts
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
-    from system_utils import orion_tts
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from live_ui import system_log
+from debug_monitor import get_monitor
+from system_utils import orion_tts
 
 # Audio configuration
 CHANNELS = 1
 SEND_SAMPLE_RATE = 16000
 CHUNK_SIZE = 1024
+AI_INPUT_DEVICE = 6  # or whatever ID has "Aux" or "Output" in VoiceMeeter devices
 
 class AudioPipeline:
     def __init__(self, connection_manager):
@@ -44,6 +40,13 @@ class AudioPipeline:
                 # Feed to debug monitor
                 if self.debug_monitor:
                     self.debug_monitor.update_audio_level(audio.get("data"))
+                    
+                    # Calculate estimated tokens (32 tokens/sec)
+                    # len(data) is bytes (int16 = 2 bytes). 
+                    # Duration = (len / 2) / 16000. Tokens = Duration * 32.
+                    # Simplifies to len(data) / 1000
+                    chunk_tokens = len(audio.get("data")) / 1000.0
+                    self.debug_monitor.report_audio_tokens(chunk_tokens)
             except Exception as e:
                 if self.debug_monitor:
                     self.debug_monitor.report_audio_drop()
@@ -57,7 +60,7 @@ class AudioPipeline:
         retry_count = 0
         while retry_count < 5:
             try:
-                device_info = sd.query_devices(kind='input')
+                device_info = sd.query_devices(device=AI_INPUT_DEVICE)
                 system_log.info(f"Opening audio stream on device: {device_info['name']}", category="AUDIO")
                 break  # EXIT loop on success!
             except Exception as e:
@@ -88,7 +91,8 @@ class AudioPipeline:
                                 channels=CHANNELS,
                                 dtype='int16',
                                 callback=callback,
-                                blocksize=CHUNK_SIZE):
+                                blocksize=CHUNK_SIZE,
+                                device=AI_INPUT_DEVICE):
                 
                 system_log.info("Audio stream started", category="AUDIO")
                 
@@ -100,7 +104,8 @@ class AudioPipeline:
                     if orion_tts.IS_SPEAKING:
                         # Optional: mute system audio capture while AI is speaking to prevent echo
                         # self.last_interaction_time = time.time() 
-                        continue
+                        #continue
+                        pass
 
                     # Simple VAD to keep session alive
                     # indata is numpy array of int16

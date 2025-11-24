@@ -2,12 +2,15 @@ import os
 from pathlib import Path
 
 # Import system_log from live_ui
-try:
-    from test_utils.live.live_ui import system_log
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
-    from test_utils.live.live_ui import system_log
+import sys
+from pathlib import Path
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from live_ui import system_log
 
 # Check if debug mode is enabled
 VIDEO_DEBUG = os.getenv("VIDEO_DEBUG", "false").lower() == "true"

@@ -6,32 +6,19 @@ from typing import Optional
 from pathlib import Path
 
 # Import system_log from live_ui (assuming Orion root is in sys.path)
-try:
-    from test_utils.live.live_ui import system_log
-except ImportError:
-    # Fallback if running directly or path issues
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
-    from test_utils.live.live_ui import system_log
+import sys
+from pathlib import Path
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from main_utils import config
+from live_ui import system_log
 
 # Session state file path
-# Adjusted to be relative to this module: ../../data/live_session_state.json
-# Original was: parent.parent / "data" / ... from live.py
-# live.py is in test_utils/live
-# this file is in test_utils/live/modules
-# so parent.parent.parent is test_utils
-# We want Orion/data
-# live.py: Path(__file__).resolve().parent.parent (Orion/test_utils) -> wait.
-# live.py is in Orion/test_utils/live. parent is test_utils/live. parent.parent is test_utils.
-# Original: os.path.join(Path(__file__).resolve().parent.parent, "data", "live_session_state.json")
-# If live.py is in test_utils/live, parent is test_utils. parent.parent is Orion.
-# So data is in Orion/data.
-# From modules/session_manager.py:
-# parent = modules
-# parent.parent = live
-# parent.parent.parent = test_utils
-# parent.parent.parent.parent = Orion
-SESSION_STATE_FILE = os.path.join(Path(__file__).resolve().parent.parent.parent.parent, "data", "live_session_state.json")
+SESSION_STATE_FILE = os.path.join(config.PROJECT_ROOT, "data", "live_session_state.json")
 
 class LiveSessionState:
     """Manages Live API session state for resumption."""
