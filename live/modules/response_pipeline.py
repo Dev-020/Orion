@@ -14,11 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from live.live_ui import system_log, conversation
 from live.modules.connection_manager import GoAwayReconnection
-try:
-    from system_utils import orion_tts
-except ImportError:
-    print(f"Warning: {ImportError}")
-    orion_tts = None
+from system_utils import orion_tts
 
 # Check if debug mode is enabled
 import os
@@ -32,7 +28,6 @@ class ResponsePipeline:
         self.signals = signals  # GUI signals (optional, None for CLI mode)
         self.last_interaction_time = time.time()
         self.session_id = None # Will be set by live.py or session manager
-        self.signals = signals
 
     async def handle_responses(self):
         while True:

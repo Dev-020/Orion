@@ -37,8 +37,8 @@ def main():
     # Create orchestrator with GUI signals
     print("Creating orchestrator...")
     orchestrator = LiveSessionOrchestrator(
-        video_mode="screen",
-        audio_mode=False,
+        video_mode="window",
+        audio_mode=True,
         signals=window.signals
     )
     print("Orchestrator created successfully")
