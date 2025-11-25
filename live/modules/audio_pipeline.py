@@ -29,11 +29,17 @@ CHUNK_SIZE = 1024
 AI_INPUT_DEVICE = 6  # or whatever ID has "Aux" or "Output" in VoiceMeeter devices
 
 class AudioPipeline:
-    def __init__(self, connection_manager):
+    def __init__(self, connection_manager, signals=None):
         self.connection_manager = connection_manager
         self.audio_out_queue = asyncio.Queue(maxsize=60)
         self.debug_monitor = get_monitor()
         self.last_interaction_time = time.time()
+        self.signals = signals
+        
+        # Stats
+        self.audio_count = 0
+        self.audio_drops = 0
+        self.last_stats_time = time.time()
 
     async def send_realtime_audio(self):
         while True:
@@ -41,6 +47,22 @@ class AudioPipeline:
             try:
                 await self.connection_manager.session.send_realtime_input(audio=types.Blob(data=audio.get("data"), mime_type=audio.get("mime_type")))
                 
+                # Track stats
+                self.audio_count += 1
+                
+                current_time = time.time()
+                if current_time - self.last_stats_time >= 1.0:
+                    rate = self.audio_count / (current_time - self.last_stats_time)
+                    self.audio_count = 0
+                    self.last_stats_time = current_time
+                    
+                    if self.signals:
+                        self.signals.stats_updated.emit({
+                            "audio_rate": rate,
+                            "audio_drops": self.audio_drops,
+                            "type": "audio"
+                        })
+
                 # Feed to debug monitor
                 if self.debug_monitor:
                     self.debug_monitor.update_audio_level(audio.get("data"))
@@ -52,6 +74,7 @@ class AudioPipeline:
                     chunk_tokens = len(audio.get("data")) / 1000.0
                     self.debug_monitor.report_audio_tokens(chunk_tokens)
             except Exception as e:
+                self.audio_drops += 1
                 if self.debug_monitor:
                     self.debug_monitor.report_audio_drop()
                 system_log.info(f"Error sending audio: {e}", category="AUDIO")

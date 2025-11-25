@@ -28,6 +28,11 @@ class ResponsePipeline:
         self.signals = signals  # GUI signals (optional, None for CLI mode)
         self.last_interaction_time = time.time()
         self.session_id = None # Will be set by live.py or session manager
+        
+        # Token counters
+        self.total_tokens = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
 
     async def handle_responses(self):
         while True:
@@ -102,6 +107,31 @@ class ResponsePipeline:
                         # Emit signal for GUI (if connected)
                         if self.signals:
                             self.signals.chat_message_received.emit("AI", text)
+                    
+                    # [NEW] Handle Token Usage Metadata
+                    # Check for usage_metadata (snake_case in Python SDK)
+                    usage = getattr(response, 'usage_metadata', None)
+                    if usage:
+                        # Extract counts
+                        inc_input = getattr(usage, 'prompt_token_count', 0) or 0
+                        inc_output = getattr(usage, 'candidates_token_count', 0) or 0
+                        inc_total = getattr(usage, 'total_token_count', 0) or 0
+                        
+                        self.input_tokens += inc_input
+                        self.output_tokens += inc_output
+                        self.total_tokens += inc_total
+                        
+                        if VIDEO_DEBUG:
+                            system_log.info(f"Tokens: +{inc_total} (Total: {self.total_tokens})", category="TOKENS")
+                        
+                        # Emit stats signal
+                        if self.signals:
+                            self.signals.stats_updated.emit({
+                                "tokens_total": self.total_tokens,
+                                "tokens_in": self.input_tokens,
+                                "tokens_out": self.output_tokens,
+                                "type": "tokens"
+                            })
                 
                 if orion_tts:
                     orion_tts.flush_stream()

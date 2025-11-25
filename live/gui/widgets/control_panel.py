@@ -11,6 +11,7 @@ class ControlPanel(QFrame):
     mute_toggled = pyqtSignal(bool)
     stop_session = pyqtSignal()
     refresh_windows = pyqtSignal()
+    stats_toggled = pyqtSignal(bool)
 
     def __init__(self):
         super().__init__()
@@ -52,8 +53,14 @@ class ControlPanel(QFrame):
         self.mute_btn.setCheckable(True)
         self.mute_btn.toggled.connect(self._on_mute_toggled)
         
+        # Stats Checkbox
+        self.stats_check = QCheckBox("Stats")
+        self.stats_check.setChecked(True)
+        self.stats_check.toggled.connect(self.stats_toggled.emit)
+        
         toggles_layout.addWidget(self.screen_check)
         toggles_layout.addWidget(self.mute_btn)
+        toggles_layout.addWidget(self.stats_check)
         self.layout.addLayout(toggles_layout)
         
         # Stop Button

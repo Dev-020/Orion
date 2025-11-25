@@ -43,6 +43,11 @@ class VideoPipeline:
         self.debug_monitor = get_monitor()
         self.signals = signals
         
+        # Stats
+        self.frame_count = 0
+        self.last_stats_time = time.time()
+        self.fps = 0.0
+        
         # Visual Momentum State
         self.last_frame_gray = None
         self.momentum_score = 0.0
@@ -183,6 +188,21 @@ class VideoPipeline:
                 })
                 
                 self.frame_stats["captured"] += 1
+                
+                # Calculate FPS
+                self.frame_count += 1
+                current_time = time.time()
+                if current_time - self.last_stats_time >= 1.0:
+                    self.fps = self.frame_count / (current_time - self.last_stats_time)
+                    self.frame_count = 0
+                    self.last_stats_time = current_time
+                    
+                    # Emit stats if signals exist
+                    if self.signals:
+                        self.signals.stats_updated.emit({
+                            "fps": self.fps,
+                            "type": "video"
+                        })
                 
                 # Feed to debug monitor
                 if self.debug_monitor:

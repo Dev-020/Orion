@@ -74,7 +74,7 @@ def main():
     # 1. Send Message
     # Connect the chat panel's signal to the orchestrator's submit method
     window.chat_panel.message_sent.connect(orchestrator.submit_user_message)
-    
+        
     # 2. Window Selection (Request)
     # CORRECTED: Signal name is 'refresh_windows'
     window.control_panel.refresh_windows.connect(orchestrator.request_window_list)
@@ -97,6 +97,13 @@ def main():
     # [NEW] Connect the dropdown selection signal to the orchestrator
     window.control_panel.window_changed.connect(orchestrator.select_window_by_hwnd)
     
+    # 6. Token Usage (Display)
+    window.signals.token_usage_updated.connect(window.video_display.update_token_display)
+    
+    # 7. Stats
+    window.signals.stats_updated.connect(window.video_display.update_stats)
+    window.control_panel.stats_toggled.connect(window.video_display.toggle_stats)
+
     print("GUI signals connected")
     
     # Run backend in separate daemon thread

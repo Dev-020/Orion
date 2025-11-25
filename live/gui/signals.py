@@ -20,3 +20,10 @@ class OrionSignals(QObject):
     
     # Window Management
     window_list_updated = pyqtSignal(list) # list of window dicts
+
+    # [NEW] Token Usage
+    token_usage_updated = pyqtSignal(int, int, int) # total, input, output
+
+    # [NEW] Stats signal to carry all debug info
+    # dict keys: 'fps', 'audio_rate', 'audio_drops', 'tokens_total', 'tokens_in', 'tokens_out'
+    stats_updated = pyqtSignal(dict) 
