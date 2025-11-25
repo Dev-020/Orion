@@ -143,6 +143,13 @@ class AudioPipeline:
                     # Convert to bytes
                     data = indata.tobytes()
                     
+                    # [NEW] Calculate and emit audio peak for visualization
+                    if self.signals:
+                        # indata is int16 numpy array
+                        peak = np.max(np.abs(indata))
+                        normalized_peak = float(peak) / 32768.0
+                        self.signals.audio_level_updated.emit(normalized_peak)
+                    
                     await self.audio_out_queue.put({"data": data, "mime_type": "audio/pcm;rate=16000"})
                     
         except Exception as e:

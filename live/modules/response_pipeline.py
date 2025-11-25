@@ -111,6 +111,7 @@ class ResponsePipeline:
                     # [NEW] Handle Token Usage Metadata
                     # Check for usage_metadata (snake_case in Python SDK)
                     usage = getattr(response, 'usage_metadata', None)
+                    #print(usage)
                     if usage:
                         # Extract counts
                         inc_input = getattr(usage, 'prompt_token_count', 0) or 0

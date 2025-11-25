@@ -103,6 +103,7 @@ def main():
     # 7. Stats
     window.signals.stats_updated.connect(window.video_display.update_stats)
     window.control_panel.stats_toggled.connect(window.video_display.toggle_stats)
+    window.signals.audio_level_updated.connect(window.video_display.update_audio_level)
 
     print("GUI signals connected")
     

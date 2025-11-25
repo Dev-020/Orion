@@ -161,7 +161,7 @@ class LiveSessionOrchestrator:
         """Initialize pipelines in the current event loop."""
         # Re-initialize pipelines so their queues bind to the current loop
         self.video_pipeline = VideoPipeline(self.connection_manager, mode=self.video_mode, signals=self.signals)
-        self.audio_pipeline = AudioPipeline(self.connection_manager)
+        self.audio_pipeline = AudioPipeline(self.connection_manager, signals=self.signals)
         self.input_pipeline = InputPipeline(self.connection_manager)
 
         # [NEW] Initialize ResponsePipeline
