@@ -26,16 +26,21 @@ if sys.version_info < (3, 11, 0):
     asyncio.TaskGroup = taskgroup.TaskGroup
     asyncio.ExceptionGroup = exceptiongroup.ExceptionGroup
 
-from google import genai
-from google.genai import types
-
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 # With this:
 from system_utils import orion_tts
-    
+from main_utils import config
+
+# Google Imports
+from google import genai
+from google.genai import types
+if config.VERTEX:
+    import google.auth.transport.requests
+    import google.auth.transport.grpc
+
 from live.live_ui import conversation, system_log, debug_log, print_separator
 from live.window_selection_ui import select_window_for_capture
 
@@ -114,7 +119,11 @@ BASE_SYSTEM_INSTRUCTION = """
         4. Do not let the session stay silent for long periods if visual things are happening.
         5. **PRIORITIZE NOW**: Your context window contains history, but you must prioritize the *immediate* audio and video frames you are receiving. Do not comment on events from 10+ seconds ago unless they directly cause what is happening now. If you are lagging, skip the old topic and sync with the present."""
 
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": "v1beta"})
+client = None
+if config.VERTEX:
+    client = genai.Client(vertexai=True, project=os.getenv("GEMINI_PROJECT_ID"), location="global")
+else:
+    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 class LiveSessionOrchestrator:
     def __init__(self, video_mode=DEFAULT_VIDEO, audio_mode=DEFAULT_AUDIO, signals=None):
@@ -125,16 +134,13 @@ class LiveSessionOrchestrator:
         # Initialize modules
         self.session_state = LiveSessionState()
         self.connection_manager = ConnectionManager()
-        self.video_pipeline = VideoPipeline(self.connection_manager, mode=video_mode, signals=signals)
-        self.audio_pipeline = AudioPipeline(self.connection_manager)
-        self.input_pipeline = InputPipeline(self.connection_manager)
-        self.response_pipeline = ResponsePipeline(self.connection_manager, self.session_state, signals=signals)
-        
-        # Link video pipeline to response pipeline for momentum checks
-        self.response_pipeline.video_pipeline = self.video_pipeline
+
+        self.video_pipeline = None
+        self.audio_pipeline = None
+        self.input_pipeline = None
+        self.response_pipeline = None
         
         self.session_id = f"live_session_{int(time.time())}"
-        self.response_pipeline.session_id = self.session_id
         
         # Reconnection state
         self.reconnect_count = 0
@@ -145,8 +151,97 @@ class LiveSessionOrchestrator:
         # Session duration tracking
         self.session_start_time = None
         self.total_session_duration = 0.0
+
+        # [NEW] Async loop reference for thread-safe GUI interaction
+        self.loop = None
         
         self._setup_signal_handlers()
+
+    def _initialize_pipelines(self):
+        """Initialize pipelines in the current event loop."""
+        # Re-initialize pipelines so their queues bind to the current loop
+        self.video_pipeline = VideoPipeline(self.connection_manager, mode=self.video_mode, signals=self.signals)
+        self.audio_pipeline = AudioPipeline(self.connection_manager)
+        self.input_pipeline = InputPipeline(self.connection_manager)
+
+        # [NEW] Initialize ResponsePipeline
+        self.response_pipeline = ResponsePipeline(self.connection_manager, self.session_state, signals=self.signals)
+        
+        # [NEW] Link pipelines (moved from __init__)
+        self.response_pipeline.video_pipeline = self.video_pipeline
+        self.response_pipeline.session_id = self.session_id
+        
+        # [NEW] Start TTS thread
+        if orion_tts:
+            orion_tts.start_tts_thread()
+            system_log.info("TTS thread started", category="AUDIO")
+
+        system_log.info("Pipelines initialized in current loop", category="SESSION")
+
+    def submit_user_message(self, text):
+        """Thread-safe method to submit user message from GUI."""
+
+        # [NEW] Check if pipeline exists
+        if not self.input_pipeline:
+            system_log.info("Cannot send message: Session not started", category="GUI")
+            return
+
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.input_pipeline.user_input_queue.put_nowait, text)
+            system_log.info(f"User message submitted from GUI: {text}", category="INPUT")
+        else:
+            system_log.warning("Cannot submit message: Loop not running", category="INPUT")
+
+    def request_window_list(self):
+        """Thread-safe request for window list."""
+
+        # [NEW] Check if pipeline exists
+        if not self.video_pipeline:
+            return
+
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self._fetch_windows_async)
+
+    def select_window_by_hwnd(self, hwnd):
+        """Thread-safe method to select a window by HWND."""
+
+        # [NEW] Check if pipeline exists
+        if not self.video_pipeline:
+            return
+
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self._select_window_internal, hwnd)
+            system_log.info(f"Window selection requested for HWND: {hwnd}", category="GUI")
+
+    def _select_window_internal(self, hwnd):
+        """Internal method to update video pipeline selection."""
+        if self.video_pipeline.window_selector:
+            self.video_pipeline.window_selector.select_window(hwnd)
+            # [NEW] Reset fallback flag so it tries to capture the new window
+            self.video_pipeline.reset_fallback()
+            # Force a frame update or log confirmation
+            system_log.info(f"Backend switched to window HWND: {hwnd}", category="VIDEO")
+
+    def _fetch_windows_async(self):
+        """Async internal method to fetch windows and emit signal."""
+        try:
+            # [FIX 1] Use correct method name: enumerate_windows
+            windows = self.video_pipeline.window_selector.enumerate_windows()
+            # Emit signal back to GUI
+            if self.signals:
+                self.signals.window_list_updated.emit(windows)
+        except Exception as e:
+            # [FIX 2] Use system_log.info instead of .error
+            system_log.info(f"Error fetching window list: {e}", category="GUI")
+
+    def stop_session(self):
+        """Thread-safe stop request."""
+        system_log.info("Stop session requested from GUI", category="SESSION")
+        self.shutdown_requested = True
+        
+        # [NEW] Check if pipeline exists and unblock
+        if self.input_pipeline and self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.input_pipeline.user_input_queue.put_nowait, "q")
 
     def _setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown."""
@@ -285,6 +380,12 @@ class LiveSessionOrchestrator:
     async def run(self):
         """Main session loop."""
         system_log.info("Starting Live API session...", category="SESSION")
+
+        # [NEW] Capture the running loop for thread-safe GUI interaction
+        self.loop = asyncio.get_running_loop()
+
+        # [NEW] Initialize pipelines here
+        self._initialize_pipelines()
         
         # Start debug monitor if enabled
         if self.video_pipeline.debug_monitor:
@@ -313,6 +414,10 @@ class LiveSessionOrchestrator:
                         self.connection_manager.set_session(session)
                         self.reconnect_count = 0
                         self.connection_manager.mark_alive()
+
+                        # [NEW] Emit Connected Signal
+                        if self.signals:
+                            self.signals.connection_status_changed.emit(True, "Connected")
 
                         # Log queue status
                         queue_size = self.input_pipeline.user_input_queue.qsize()
@@ -344,6 +449,11 @@ class LiveSessionOrchestrator:
                             if not self.connection_manager.goaway_received and not self.shutdown_requested:
                                 system_log.info(f"Session error: {e}", category="SESSION")
                             self.connection_manager.mark_dead(f"Session error: {e}")
+                            
+                            # [NEW] Emit Error Signal
+                            if self.signals:
+                                self.signals.connection_status_changed.emit(False, "Error")
+
                             self._pause_session_timer()
                             if self.shutdown_requested:
                                 break
@@ -397,12 +507,27 @@ class LiveSessionOrchestrator:
                 elif self.reconnect_count < self.max_reconnect_attempts:
                     wait_time = min(2 ** self.reconnect_count, 10)
                     system_log.info(f"Reconnecting in {wait_time} seconds... (attempt {self.reconnect_count + 1}/{self.max_reconnect_attempts})", category="SESSION")
+                    
+                    # [NEW] Emit Reconnecting Signal
+                    if self.signals:
+                        self.signals.connection_status_changed.emit(False, f"Reconnecting in {wait_time}s...")
+
                     await asyncio.sleep(wait_time)
                 else:
                     system_log.info(f"Max reconnection attempts ({self.max_reconnect_attempts}) reached. Exiting.", category="SESSION")
                     break
         
         finally:
+            
+            # [NEW] Stop TTS thread
+            if orion_tts:
+                orion_tts.stop_tts_thread()
+                system_log.info("TTS thread stopped", category="AUDIO")
+
+            # [NEW] Emit Disconnected Signal
+            if self.signals:
+                self.signals.connection_status_changed.emit(False, "Disconnected")
+
             await self._graceful_shutdown()
         
         system_log.info("Session ended", category="SESSION")

@@ -96,10 +96,18 @@ class ControlPanel(QFrame):
         self.mute_toggled.emit(checked)
 
     def update_status(self, connected: bool, status_message: str):
-        """Update connection status display"""
+        """Update connection status display and toggle button state."""
         if connected:
             self.status_label.setText(f"● {status_message}")
             self.status_label.setStyleSheet("color: #4CAF50;")  # Green
+            
+            # Change button to Stop
+            self.stop_btn.setText("Stop Session")
+            self.stop_btn.setStyleSheet("background-color: #d32f2f; color: white;") # Red
         else:
             self.status_label.setText(f"● {status_message}")
             self.status_label.setStyleSheet("color: #F44336;")  # Red
+            
+            # Change button to Start
+            self.stop_btn.setText("Start Session")
+            self.stop_btn.setStyleSheet("background-color: #388E3C; color: white;") #

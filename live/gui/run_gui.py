@@ -28,6 +28,31 @@ def run_backend_thread(orchestrator):
 
 def main():
     """Main function"""
+
+    def toggle_session():
+        """Toggle between starting and stopping the session."""
+        nonlocal backend_thread
+        
+        # If running, stop it
+        if orchestrator.shutdown_requested is False:
+            print("Stopping session...")
+            orchestrator.stop_session()
+        else:
+            # If stopped, start a new one
+            print("Starting new session...")
+            
+            # Reset shutdown flag
+            orchestrator.shutdown_requested = False
+            
+            # Create new thread if the old one is dead
+            if backend_thread is None or not backend_thread.is_alive():
+                backend_thread = threading.Thread(
+                    target=run_backend_thread, 
+                    args=(orchestrator,), 
+                    daemon=True
+                )
+                backend_thread.start()
+    
     app = QApplication(sys.argv)
     
     # Create main window
@@ -42,6 +67,37 @@ def main():
         signals=window.signals
     )
     print("Orchestrator created successfully")
+
+    # [NEW] Connect GUI signals to Backend Orchestrator
+    print("Connecting GUI signals...")
+    
+    # 1. Send Message
+    # Connect the chat panel's signal to the orchestrator's submit method
+    window.chat_panel.message_sent.connect(orchestrator.submit_user_message)
+    
+    # 2. Window Selection (Request)
+    # CORRECTED: Signal name is 'refresh_windows'
+    window.control_panel.refresh_windows.connect(orchestrator.request_window_list)
+    
+    # 3. Window Selection (Response)
+    # [NEW] Connect the orchestrator's response signal to the control panel's update method
+    window.signals.window_list_updated.connect(window.control_panel.update_window_list)
+    
+    # 4. Session Toggle (Start/Stop)
+    # [NEW] Connect to toggle_session instead of stop_session
+    # Remove the old connection to window.close if you added it!
+    try:
+        window.control_panel.stop_session.disconnect()
+    except:
+        pass
+        
+    window.control_panel.stop_session.connect(toggle_session)
+
+    # 5. Window Selection (Action)
+    # [NEW] Connect the dropdown selection signal to the orchestrator
+    window.control_panel.window_changed.connect(orchestrator.select_window_by_hwnd)
+    
+    print("GUI signals connected")
     
     # Run backend in separate daemon thread
     backend_thread = threading.Thread(

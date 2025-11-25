@@ -39,6 +39,9 @@ class ChatPanel(QWidget):
         
         self.layout.addLayout(input_layout)
 
+        # [NEW] Track last sender for streaming
+        self.last_sender = None
+
     def send_message(self):
         text = self.input_field.text().strip()
         if text:
@@ -47,20 +50,41 @@ class ChatPanel(QWidget):
             self.input_field.clear()
 
     def append_message(self, sender: str, text: str):
-        """Append a message to the chat history."""
-        # Simple HTML formatting for colors
+        """Append a message to the chat history, streaming if same sender."""
+        
+        # Normalize sender name for display
+        display_sender = sender
+        if sender == "AI":
+            display_sender = "Orion"
+        
+        # Define colors and alignment
         if sender == "You":
             color = "#00D9FF" # Cyan
             align = "right"
-        elif sender == "Orion":
-            color = "#00B4D8" # Blue
+        elif sender == "Orion" or sender == "AI": # Handle both names
+            color = "#FF9800" # Bright Orange
             align = "left"
         else:
             color = "#888888" # Gray (System)
             align = "center"
+        # Check if we are continuing the previous message
+        # We check against the raw sender name ("AI") to maintain state correctly
+        if self.last_sender == sender:
+            # Move cursor to end
+            cursor = self.history.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.history.setTextCursor(cursor)
             
-        formatted = f'<div style="color: {color}; text-align: {align};"><b>{sender}:</b> {text}</div><br>'
-        self.history.append(formatted)
+            # Insert text
+            self.history.insertHtml(f'<span style="color: {color};">{text}</span>')
+        else:
+            # New message block
+            prefix = "<br>" if self.last_sender else ""
+            
+            # Use display_sender ("Orion") for the label
+            formatted = f'{prefix}<div style="color: {color}; text-align: {align};"><b>{display_sender}:</b> {text}</div>'
+            self.history.append(formatted)
+            self.last_sender = sender
         
         # Auto-scroll to bottom
         scrollbar = self.history.verticalScrollBar()

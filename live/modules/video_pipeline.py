@@ -26,7 +26,7 @@ from google.genai import types
 # Check if debug mode is enabled
 import os
 VIDEO_DEBUG = False
-VIDEO_CAPTURE_INTERVAL = 1.0  # Seconds between frame captures
+VIDEO_CAPTURE_INTERVAL = 4.0  # Seconds between frame captures
 
 class VideoPipeline:
     def __init__(self, connection_manager, mode="screen", signals=None):
@@ -420,4 +420,9 @@ class VideoPipeline:
                 system_log.info(f"Error selecting window by HWND: {e}", category="VIDEO")
                 return False
         return False
+
+    def reset_fallback(self):
+        """Reset the window capture fallback flag."""
+        self.window_capture_fallback = False
+        system_log.info("Window capture fallback reset", category="VIDEO")
 
