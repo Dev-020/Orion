@@ -18,8 +18,14 @@ class VideoDisplay(QLabel):
             "audio_rate": 0.0,
             "audio_drops": 0,
             "tokens_total": 0,
+            "context_size": 0,
             "tokens_in": 0,
-            "tokens_out": 0
+            "tokens_out": 0,
+            "tokens_in_text": 0,
+            "tokens_in_audio": 0,
+            "tokens_in_video": 0,
+            "tokens_out_text": 0,
+            "tokens_out_audio": 0
         }
         self.show_stats = True
         
@@ -50,6 +56,8 @@ class VideoDisplay(QLabel):
     def update_token_display(self, total, input_tokens, output_tokens):
         """Update the token usage data."""
         self.stats["tokens_total"] = total
+        # Legacy method, might not have context_size, default to 0 or total
+        self.stats["context_size"] = total 
         self.stats["tokens_in"] = input_tokens
         self.stats["tokens_out"] = output_tokens
         self.update() # Trigger repaint
@@ -127,27 +135,61 @@ class VideoDisplay(QLabel):
         painter.setFont(self.stats_font)
         painter.drawText(bg_rect.adjusted(10, 5, -5, -5), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, text)
 
-    def _draw_token_overlay(self, painter):
-        """Draw Token Usage."""
-        total = self.stats.get('tokens_total', 0)
-        text = f"Tokens: {total:,}"
+    def _calculate_cost(self):
+        """Calculate estimated session cost based on Gemini 2.5 Flash pricing."""
+        # Input (Text): $0.50 / 1M
+        # Input (Audio/Video): $3.00 / 1M
+        # Output (Text): $2.00 / 1M
+        # Output (Audio): $12.00 / 1M
         
-        # Calculate width based on text
+        cost_in_text = (self.stats.get('tokens_in_text', 0) / 1_000_000) * 0.50
+        cost_in_av = ((self.stats.get('tokens_in_audio', 0) + self.stats.get('tokens_in_video', 0)) / 1_000_000) * 3.00
+        cost_out_text = (self.stats.get('tokens_out_text', 0) / 1_000_000) * 2.00
+        cost_out_audio = (self.stats.get('tokens_out_audio', 0) / 1_000_000) * 12.00
+        
+        return cost_in_text + cost_in_av + cost_out_text + cost_out_audio
+
+    def _draw_token_overlay(self, painter):
+        """Draw Token Usage and Cost Breakdown."""
+        total = self.stats.get('tokens_total', 0)
+        context = self.stats.get('context_size', 0)
+        cost = self._calculate_cost()
+        
+        # Format text
+        # Line 1: Billed | Context | Cost
+        line1 = f"Billed: {total:,} | Context: {context:,} | Cost: ${cost:.4f}"
+        
+        # Line 2: Breakdown [A: 123 | V: 456 | T: 789]
+        t_in_audio = self.stats.get('tokens_in_audio', 0)
+        t_in_video = self.stats.get('tokens_in_video', 0)
+        t_in_text = self.stats.get('tokens_in_text', 0)
+        
+        line2 = f"[Audio: {t_in_audio:,} | Video: {t_in_video:,} | Text: {t_in_text:,}]"
+        
+        # Calculate dimensions
         fm = painter.fontMetrics()
-        w = fm.horizontalAdvance(text) + 20
+        w1 = fm.horizontalAdvance(line1)
+        w2 = fm.horizontalAdvance(line2)
+        w = max(w1, w2) + 20
+        h = 50 # 2 lines
         
         # Position: Top Right
         x = self.width() - w - 10
         y = 10
-        bg_rect = QRect(x, y, w, 30)
+        bg_rect = QRect(x, y, w, h)
         
         # Background
         painter.fillRect(bg_rect, QColor(0, 0, 0, 150))
         
-        # Text
+        # Draw Text
         painter.setPen(QColor(0, 255, 0)) # Green
         painter.setFont(self.token_font)
-        painter.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter, text)
+        
+        # Draw Line 1 (Centered)
+        painter.drawText(bg_rect.adjusted(0, 5, 0, -25), Qt.AlignmentFlag.AlignCenter, line1)
+        
+        # Draw Line 2 (Centered, smaller font maybe? keeping same for now)
+        painter.drawText(bg_rect.adjusted(0, 25, 0, -5), Qt.AlignmentFlag.AlignCenter, line2)
 
     def _draw_audio_waveform(self, painter):
         """Draw audio visualization at the bottom."""

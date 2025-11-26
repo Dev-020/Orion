@@ -33,6 +33,14 @@ class ResponsePipeline:
         self.total_tokens = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.current_context_size = 0 # Tokens in the most recent turn
+        
+        # Detailed Token Counters (Cumulative for Cost)
+        self.tokens_in_text = 0
+        self.tokens_in_audio = 0
+        self.tokens_in_video = 0 # Image/Video
+        self.tokens_out_text = 0
+        self.tokens_out_audio = 0
 
     async def handle_responses(self):
         while True:
@@ -121,6 +129,34 @@ class ResponsePipeline:
                         self.input_tokens += inc_input
                         self.output_tokens += inc_output
                         self.total_tokens += inc_total
+                        self.current_context_size = inc_total
+                        
+                        # Extract Input Breakdown
+                        details_in = getattr(usage, 'prompt_tokens_details', [])
+                        if details_in:
+                            for detail in details_in:
+                                modality = str(getattr(detail, 'modality', ''))
+                                count = getattr(detail, 'token_count', 0)
+                                if 'AUDIO' in modality:
+                                    self.tokens_in_audio += count
+                                elif 'IMAGE' in modality or 'VIDEO' in modality:
+                                    self.tokens_in_video += count
+                                elif 'TEXT' in modality:
+                                    self.tokens_in_text += count
+                                    
+                        # Extract Output Breakdown
+                        details_out = getattr(usage, 'candidates_tokens_details', []) or getattr(usage, 'response_tokens_details', [])
+                        if details_out:
+                            for detail in details_out:
+                                modality = str(getattr(detail, 'modality', ''))
+                                count = getattr(detail, 'token_count', 0)
+                                if 'AUDIO' in modality:
+                                    self.tokens_out_audio += count
+                                elif 'TEXT' in modality:
+                                    self.tokens_out_text += count
+                        else:
+                            # Fallback: if no details, assume all output is text (unless we add audio output later)
+                            self.tokens_out_text += inc_output
                         
                         if VIDEO_DEBUG:
                             system_log.info(f"Tokens: +{inc_total} (Total: {self.total_tokens})", category="TOKENS")
@@ -129,10 +165,20 @@ class ResponsePipeline:
                         if self.signals:
                             self.signals.stats_updated.emit({
                                 "tokens_total": self.total_tokens,
+                                "context_size": self.current_context_size,
                                 "tokens_in": self.input_tokens,
                                 "tokens_out": self.output_tokens,
+                                "tokens_in_text": self.tokens_in_text,
+                                "tokens_in_audio": self.tokens_in_audio,
+                                "tokens_in_video": self.tokens_in_video,
+                                "tokens_out_text": self.tokens_out_text,
+                                "tokens_out_audio": self.tokens_out_audio,
+                                "tokens_out_audio": self.tokens_out_audio,
                                 "type": "tokens"
                             })
+                            
+                            # [NEW] Signal end of turn
+                            self.signals.response_complete.emit()
                 
                 if orion_tts:
                     orion_tts.flush_stream()

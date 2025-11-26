@@ -58,3 +58,4 @@ class MainWindow(QMainWindow):
         self.signals.video_frame_ready.connect(self.video_display.update_frame)
         self.signals.chat_message_received.connect(self.chat_panel.add_message)
         self.signals.connection_status_changed.connect(self.control_panel.update_status)
+        self.signals.response_complete.connect(self.chat_panel.on_response_complete)

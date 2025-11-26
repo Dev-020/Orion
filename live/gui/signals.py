@@ -25,3 +25,6 @@ class OrionSignals(QObject):
     token_usage_updated = pyqtSignal(int, int, int) # total, input, output
     stats_updated = pyqtSignal(dict) # Generic stats dictionary
     audio_level_updated = pyqtSignal(float) # Normalized audio peak (0.0 - 1.0)
+    
+    # Flow Control
+    response_complete = pyqtSignal() # Emitted when a turn is finished
