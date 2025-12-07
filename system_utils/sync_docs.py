@@ -16,8 +16,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from main_utils import config
 
 # --- PATH CONFIGURATION ---
-INSTRUCTIONS_DIR = Path(config.OUTPUT_DIR)
-MANIFEST_FILE = Path(config.PROJECT_ROOT) / 'data' / f'docs_{config.PERSONA}.json'
+INSTRUCTIONS_DIR = config.OUTPUT_DIR # Already a Path
+MANIFEST_FILE = config.PROJECT_ROOT / 'data' / f'docs_{config.PERSONA}.json'
 
 def get_authenticated_service(service_name, version):
     """Gets a Google API service object with Application Default Credentials."""
@@ -75,7 +75,7 @@ def sync_instructions():
         for doc_info in manifest_data['instructions']:
             doc_id = doc_info['google_doc_id']
             local_filename = doc_info['name']
-            local_filepath = os.path.join(INSTRUCTIONS_DIR, local_filename)
+            local_filepath = INSTRUCTIONS_DIR / local_filename
             last_known_mod_time = doc_info['last_modified_time']
             
             print(f"Checking '{local_filename}'...")
@@ -83,7 +83,7 @@ def sync_instructions():
                 metadata = drive_service.files().get(fileId=doc_id, fields='modifiedTime').execute()
                 current_mod_time = metadata['modifiedTime']
                 
-                if current_mod_time != last_known_mod_time or not os.path.exists(local_filepath):
+                if current_mod_time != last_known_mod_time or not local_filepath.exists():
                     print(f"  -> Change detected! Downloading and cleaning Markdown...")
                     content = get_doc_as_markdown(drive_service, doc_id)
                     
@@ -100,7 +100,7 @@ def sync_instructions():
                     # Trigger vector database embedding
                     if local_filename == "Homebrew_Compendium.md" or local_filename == "Operational_Protocols.md":
                         print(f"  -> Starting vector embedding for '{local_filename}'...")
-                        run_embedding_sync(os.path.join(INSTRUCTIONS_DIR, local_filename))
+                        run_embedding_sync(str(INSTRUCTIONS_DIR / local_filename))
                 else:
                     print("  -> No changes. File is up to date.")
             

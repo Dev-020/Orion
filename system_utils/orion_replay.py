@@ -10,9 +10,17 @@ import sys
 
 # --- NEW IMPORTS for Graceful Shutdown ---
 # pywin32 is required: pip install pywin32
-import win32gui
-import win32con
-import win32process
+try:
+    import win32gui
+    import win32con
+    import win32process
+    WINDOWS_LIBS_AVAILABLE = True
+except ImportError:
+    WINDOWS_LIBS_AVAILABLE = False
+    # Define mocks or handle absence later
+    win32gui = None
+    win32con = None
+    win32process = None
 
 # --- NEW IMPORTS for Watchdog and File Handling ---
 import mimetypes
@@ -25,7 +33,11 @@ from main_utils import config
 dotenv.load_dotenv()
 
 # --- 1. CONFIGURE YOUR SETTINGS ---
-OBS_PATH = r"C:\Program Files\obs-studio\bin\64bit\obs64.exe"
+if os.name == 'nt':
+    OBS_PATH = r"C:\Program Files\obs-studio\bin\64bit\obs64.exe"
+else:
+    # Default Linux path, user might need to adjust or add to PATH
+    OBS_PATH = "obs"
 WEBSOCKET_PASSWORD = os.getenv("OBS_WEBSOCKET_PASSWORD", "no_password")
 PROFILE="Orion"
 SAVE_HOTKEY = "`"
@@ -34,7 +46,7 @@ REPLAY_TIMER = 30
 # --- !!! IMPORTANT: SET THIS !!! ---
 # Set this to the *exact* folder where OBS saves your replays.
 # Find it in OBS -> Settings -> Output -> Replay Buffer -> Output Path
-REPLAY_SAVE_PATH = f"{Path(config.PROJECT_ROOT)}\\databases\\{config.PERSONA}\\video_replays"
+REPLAY_SAVE_PATH = str(config.PROJECT_ROOT / "databases" / config.PERSONA / "video_replays")
 
 # --- 2. GLOBAL VARIABLES ---
 obs_client = None
@@ -125,6 +137,9 @@ def get_window_handle_for_pid(pid):
     This version does NOT check for visibility, so it can find
     windows that are minimized to the tray.
     """
+    if not WINDOWS_LIBS_AVAILABLE:
+        return None
+
     result_hwnd = None
     
     def callback(hwnd, _):
@@ -197,7 +212,9 @@ def shutdown_obs():
             print("Sending graceful close request to OBS...")
             
             # Find the main window handle for our OBS process
-            hwnd = get_window_handle_for_pid(obs_process.pid)
+            hwnd = None
+            if WINDOWS_LIBS_AVAILABLE:
+                hwnd = get_window_handle_for_pid(obs_process.pid)
             
             if hwnd:
                 # Send the WM_CLOSE message (like clicking the 'X')
@@ -208,8 +225,8 @@ def shutdown_obs():
                 print("OBS process closed gracefully.")
             
             else:
-                # Fallback if we couldn't find the window handle
-                print("Could not find OBS window handle. Falling back to terminate().")
+                # Fallback if we couldn't find the window handle or strictly Linux (no win32)
+                print("Could not find OBS window handle or running on Linux. Falling back to terminate().")
                 obs_process.terminate()
                 obs_process.wait(timeout=5)
                 print("OBS process terminated (fallback).")

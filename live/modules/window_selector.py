@@ -3,11 +3,16 @@ Window Selector Module for Selective Window Capture
 Provides functionality to enumerate and capture specific windows on Windows OS.
 """
 
-import ctypes
-import win32gui
-import win32ui
-import win32con
-import win32process
+try:
+    import ctypes
+    import win32gui
+    import win32ui
+    import win32con
+    import win32process
+    WINDOWS_AVAILABLE = True
+except ImportError:
+    WINDOWS_AVAILABLE = False
+
 from PIL import Image
 import numpy as np
 from typing import List, Dict, Optional
@@ -33,8 +38,8 @@ except ImportError:
     system_log = DummyLog()
 
 
-class WindowSelector:
-    """Manages window enumeration and selective window capture."""
+class WindowsWindowSelector:
+    """Manages window enumeration and selective window capture (Windows Only)."""
     
     def __init__(self):
         self.windows = []
@@ -42,13 +47,14 @@ class WindowSelector:
         self.selected_title = None
         
         # Make process DPI aware for accurate window capture
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-        except Exception:
+        if WINDOWS_AVAILABLE:
             try:
-                ctypes.windll.user32.SetProcessDPIAware()  # Fallback for older Windows
-            except Exception as e:
-                system_log.info(f"Could not set DPI awareness: {e}", category="WINDOW")
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()  # Fallback for older Windows
+                except Exception as e:
+                    system_log.info(f"Could not set DPI awareness: {e}", category="WINDOW")
     
     def enumerate_windows(self) -> List[Dict]:
         """
@@ -57,6 +63,9 @@ class WindowSelector:
         Returns:
             List of dictionaries containing window info (hwnd, title, executable)
         """
+        if not WINDOWS_AVAILABLE:
+            return []
+
         windows = []
         
         def callback(hwnd, extra):
@@ -178,6 +187,9 @@ class WindowSelector:
             system_log.info("No window selected for capture", category="WINDOW")
             return None
         
+        if not WINDOWS_AVAILABLE:
+            return None
+
         try:
             # Check if window still exists and is visible
             if not win32gui.IsWindow(self.selected_hwnd):
@@ -251,6 +263,9 @@ class WindowSelector:
         if not self.selected_hwnd:
             return False
         
+        if not WINDOWS_AVAILABLE:
+            return False
+
         try:
             return win32gui.IsWindow(self.selected_hwnd) and win32gui.IsWindowVisible(self.selected_hwnd)
         except Exception:
@@ -266,6 +281,9 @@ class WindowSelector:
         if not self.selected_hwnd:
             return None
         
+        if not WINDOWS_AVAILABLE:
+            return None
+
         try:
             left, top, right, bottom = win32gui.GetWindowRect(self.selected_hwnd)
             return {
@@ -279,3 +297,34 @@ class WindowSelector:
         except Exception as e:
             system_log.info(f"Error getting window info: {e}", category="WINDOW")
             return None
+
+
+class DummyWindowSelector:
+    """Dummy implementation for non-Windows platforms."""
+    def __init__(self):
+        system_log.info("Window selection disabled (Linux/Non-Windows).", category="WINDOW")
+    
+    def enumerate_windows(self) -> List[Dict]:
+        return []
+    
+    def select_window(self, hwnd):
+        pass
+    
+    def select_window_by_title(self, title_substring: str) -> bool:
+        return False
+    
+    def capture_window(self) -> Optional[np.ndarray]:
+        return None
+    
+    def is_window_valid(self) -> bool:
+        return False
+    
+    def get_selected_window_info(self) -> Optional[Dict]:
+        return None
+
+
+# Conditional alias
+if WINDOWS_AVAILABLE:
+    WindowSelector = WindowsWindowSelector
+else:
+    WindowSelector = DummyWindowSelector

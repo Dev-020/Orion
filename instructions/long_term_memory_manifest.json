@@ -1,5 +1,9 @@
 [
   {
+    "event_id": "2025-12-05T10:29:00.000000+00:00",
+    "title": "System Event: GUI Modularization"
+  },
+  {
     "event_id": "2025-11-19T14:33:52.878091+00:00",
     "title": "Implementation of Hybrid Multi-Agent & Multi-SDK Architecture"
   },

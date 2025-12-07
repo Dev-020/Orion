@@ -238,13 +238,11 @@ def generate_master_manifest(output_dir: Path):
     
     try:
         # Get all files in the directory
-        all_files = os.listdir(output_dir)
-        
         # Filter the list to exclude any file ending in .txt
         # and also exclude the master manifest itself to prevent recursion.
         filtered_files = [
-            f for f in all_files 
-            if not f.endswith('.txt') and f != 'master_manifest.json'
+            f.name for f in output_dir.iterdir()
+            if not f.name.endswith('.txt') and f.name != 'master_manifest.json'
         ]
         
         # Use the existing helper function to write the file
@@ -260,11 +258,11 @@ def main():
     """
     # Initialize paths from the config module when running as a script.
     global DB_FILE, OUTPUT_DIR
-    DB_FILE = Path(config.DB_FILE)
-    OUTPUT_DIR = Path(config.OUTPUT_DIR)
+    DB_FILE = config.DB_FILE
+    OUTPUT_DIR = config.OUTPUT_DIR
 
     # Ensure the output directory exists.
-    Path(OUTPUT_DIR).mkdir(exist_ok=True)
+    OUTPUT_DIR.mkdir(exist_ok=True)
 
     # --- Manifest Generation ---
     # The process is designed to be resilient. If one manifest fails, the script

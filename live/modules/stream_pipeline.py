@@ -65,6 +65,10 @@ class StreamPipeline:
         if self.running:
             return
 
+        if sys.platform != "win32":
+            system_log.info("Streaming enabled but current implementation (gdigrab) is Windows-only. Skipping stream start on Linux.", category="STREAM")
+            return
+
         # 1. Verify Audio Device
         devices = await self._get_audio_devices()
         if self.audio_device not in devices:

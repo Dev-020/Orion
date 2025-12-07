@@ -44,7 +44,7 @@ from . import config
 
 # --- CONSTANTS ---
 DAILY_SEARCH_QUOTA = 10000
-PROJECT_ROOT = Path(config.PROJECT_ROOT) # Go up two levels to get the project root
+PROJECT_ROOT = config.PROJECT_ROOT # Already a Path object
 
 # --- PERSONA INITIALIZATION ---
 def get_db_paths(persona: str) -> dict:
@@ -53,13 +53,13 @@ def get_db_paths(persona: str) -> dict:
     persona_dir = databases_dir / persona
     
     # Checks if the Persona Folder exist
-    if not os.path.isdir(persona_dir):
+    if not persona_dir.is_dir():
         print(f"  Error: '{persona}' directory not found at {persona_dir}.")
         return {}
     
     return {
-        "db_file": os.path.join(persona_dir, 'orion_database.sqlite'),
-        "chroma_db_path": os.path.join(persona_dir, "chroma_db_store"),
+        "db_file": str(persona_dir / 'orion_database.sqlite'),
+        "chroma_db_path": str(persona_dir / "chroma_db_store"),
         "collection_name": "orion_semantic_memory"
     }
 
@@ -690,7 +690,7 @@ def list_project_files(subdirectory: str = ".") -> str:
             dirs[:] = [d for d in dirs if d not in ['__pycache__', '.venv', '.git', '.vscode']]
             level = root.replace(str(start_path), '').count(os.sep)
             indent = ' ' * 4 * level
-            tree.append(f"{indent}{os.path.basename(root)}/")
+            tree.append(f"{indent}{Path(root).name}/")
             sub_indent = ' ' * 4 * (level + 1)
             for f in files:
                 tree.append(f"{sub_indent}{f}")
