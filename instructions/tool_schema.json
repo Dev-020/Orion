@@ -109,7 +109,7 @@
       },
       {
         "name": "params",
-        "type": "<class 'list'>",
+        "type": "typing.List[typing.Union[str, int, float, bool, NoneType]]",
         "required": true
       },
       {

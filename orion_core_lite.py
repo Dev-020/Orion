@@ -1,8 +1,9 @@
-# orion_core_lite.py (Gemma/Lite Edition - Refactored)
+# orion_core_lite.py (Gemma/Lite Edition - Architecturally Aligned)
 import os
 import json
 import sqlite3
 import pickle
+import sys
 from typing import Generator
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -21,35 +22,37 @@ from system_utils import orion_replay, orion_tts
 # Define instruction files
 INSTRUCTIONS_FILES = [
     'Primary_Directive_Lite.md' 
-    #'master_manifest.json'
 ]
 
 # --- Paths ---
 INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
 
 class OrionLiteCore:
+    
     def __init__(self, model_name: str = config.AI_MODEL, persona: str = "default"):
         """
         Initializes the Lite version of Orion Core.
-        Architecture mimics OrionCore (Pro) but optimized for Lite/Gemma models.
+        Architecture mimics OrionCore (Pro) line-for-line where applicable.
         """
-        print(f"--- [Lite Core] Initializing for model: {model_name} (Backend: {config.BACKEND}) ---")
+        if config.BACKEND == "api":
+            print(f"--- [Lite Core] Initializing for model: {model_name} (Backend: {config.BACKEND})     ---")
+        else:
+            print(f"--- [Lite Core] Initializing for model: {config.LOCAL_MODEL} (Backend: {config.BACKEND}) ---")
+        self.MAX_HISTORY_EXCHANGES = 30 
+        self.restart_pending = False
+        
+        # Core instance accessible to tools (even if tools aren't used, for consistency)
+        config.ORION_CORE_INSTANCE = self
+
+        self.current_turn_context = None
         self.model_name = model_name
         self.persona = config.PERSONA = persona
-        self.backend = config.BACKEND.lower() # "api" or "ollama"
-        self.local_model = config.LOCAL_MODEL
+        self.backend = getattr(config, 'BACKEND', 'api').lower()
+        self.local_model = getattr(config, 'LOCAL_MODEL', 'gemma3:1b')
         
         # Initialize Database access
         functions.initialize_persona(self.persona)
         
-        # Load Instructions
-        self.current_instructions = self._read_all_instructions()
-        if not self.current_instructions:
-            self.current_instructions = "You are Orion, a helpful AI assistant."
-
-        # Setup Client
-        self._setup_client()
-
         # Vision System (Optional)
         self.vision_attachments = {}
         if config.VISION:
@@ -63,13 +66,21 @@ class OrionLiteCore:
         if config.VOICE:
             orion_tts.start_tts_thread()
             print("--- [Lite Core] TTS Module Activated ---")
+            
+        # Refreshing Core Instructions (Simplified)
+        print("--- Syncing Core Instructions... ---")
+        self.current_instructions = self._read_all_instructions()
+        if not self.current_instructions:
+            self.current_instructions = "You are Orion, a helpful AI assistant."
+
+        # Setup Client
+        self._setup_client()
 
         # Session Management
         self.sessions = {}
         if not self._load_state_on_restart():
              self.sessions = {}
         
-        config.ORION_CORE_INSTANCE = self
         print(f"--- [Lite Core] Online. Managing {len(self.sessions)} session(s). ---")
 
     def _setup_client(self):
@@ -108,370 +119,436 @@ class OrionLiteCore:
 
     def _get_session(self, session_id: str) -> list:
         if session_id not in self.sessions:
+            print(f"--- Creating new session for ID: {session_id} ---")
             self.sessions[session_id] = []
         return self.sessions[session_id]
 
-    # --- Core Logic Split ---
-
-    def _prepare_prompt_data(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str) -> dict:
+    def flatten_history(self, session_id: str) -> list:
         """
-        Gathers context, history, and constructs the messages payload.
-        Returns a dict containing 'messages' and 'system_instruction'.
+        Takes a session ID, retrieves the custom ExchangeDict history, and flattens
+        it into the format required by the GenAI API (list[Content]).
+        For Ollama, we do a different flattening in _generate, or we assume this is just for API usage.
         """
-        use_vdb = True # Enabled for both API and Ollama now that tokens are optimized
-        max_history = 30 if self.backend == "ollama" else 10 # Increased from 4 -> 10 for API
+        chat_session = self.sessions.get(session_id, [])
+        contents_to_send = []
         
-        session_history = self._get_session(session_id)
+        # API requires alternation. We must ensure User -> Model -> User
+        # If we use the Pro logic directly, it works for Pro history structure.
+        # But Lite history structure is simpler? No, let's keep it consistent.
+        # [{"user_content":..., "model_content": ...}]? 
+        # Actually Pro history is list of dicts with keys "user_content", "model_content".
         
-        # 1. VDB Lookup
-        vdb_context = ""
-        if use_vdb:
-            try:
-                print(f"Checking Memory for session {session_id}...")
-                
-                # Query 1: Deep Memory (Conversation History) - Limit 3
-                results_deep = functions.execute_vdb_read(query_texts=[user_prompt], n_results=3, where={"source_table": "deep_memory"})
-                
-                # Query 2: Long Term Memory (Facts/Events) - Limit 2
-                results_ltm = functions.execute_vdb_read(query_texts=[user_prompt], n_results=2, where={"source_table": "long_term_memory"})
-                
-                combined_context = []
-                vdb_ids = []
+        for exchange in chat_session:
+            if exchange.get("user_content"):
+                contents_to_send.append(exchange["user_content"])
+            # Lite has no tools, so skip tool_calls check or keep for compatibility
+            if exchange.get("model_content"):
+                contents_to_send.append(exchange["model_content"])
+        return contents_to_send
 
-                # Helper to process results
-                def process_vdb_results(results, name):
-                    if results and "documents" in results and results["documents"]:
-                        # Add content to LLM Context
-                        combined_context.append(f"{name}: {results['documents']}")
-                        
-                        # Add IDs to Archival List
-                        # Structure: results['metadatas'] is list of list of dicts
-                        # We want source_table + source_id
-                        if "metadatas" in results and results["metadatas"]:
-                            for meta_list in results["metadatas"]:
-                                for meta in meta_list:
-                                    table = meta.get("source_table", "unknown")
-                                    sid = meta.get("source_id", "unknown")
-                                    vdb_ids.append(f"{table}_{sid}")
+    def _format_vdb_results_for_context(self, raw_json: str, source_name: str) -> str:
+        """
+        Parses VDB results. Identical logic to Pro.
+        """
+        try:
+            data = json.loads(raw_json)
+            if not data.get('documents') or not data['documents'][0]:
+                return ""
 
-                process_vdb_results(results_deep, "Deep Memory (Conversations)")
-                process_vdb_results(results_ltm, "Long Term Memory (Facts)")
-                     
-                if combined_context:
-                    vdb_context = "Memory Context:\n" + "\n".join(combined_context)
-                
-                vdb_ids_json = json.dumps(vdb_ids)
+            output_lines = [f"--- Context from {source_name} ---"]
+            for i, doc in enumerate(data['documents'][0]):
+                 # Simplified formatting
+                 output_lines.append(f"- {doc}")
+            return "\\n".join(output_lines)
+        except:
+            return ""
 
-            except Exception as e:
-                print(f"VDB Error: {e}")
-
-        # 2. System Instruction Content
-        final_system_instruction = self.current_instructions
-        if vdb_context:
-            final_system_instruction += f"\n\n{vdb_context}"
-
-        # ... (rest of function) ...
+    def _prepare_prompt_data(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str):
+        """
+        Internal helper: Prepares all data, context, and file attachments.
+        Returns the standard 5-tuple used in OrionCore.
+        """
+        print(f"----- Processing prompt for session {session_id} and user {user_name} -----")
+        chat_session = self._get_session(session_id)
+        timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
         
-        # 3. Build Logical Message Sequence
-        # ...
+        # --- Context Injection ---
+        excluded_ids = [ex["db_id"] for ex in chat_session if ex.get("db_id")]
+        
+        # 1. Memory Lookups (Simplified but structurally identical)
+        deep_memory_where = {"source_table": "deep_memory"} 
+        if excluded_ids:
+             deep_memory_where = {"$and": [{"source_table": "deep_memory"}, {"source_id": {"$nin": excluded_ids}}, {"session_id": session_id}]}
 
-        # 4. Final Processing
-        # ...
+        try:
+            deep_memory_results_raw = functions.execute_vdb_read(query_texts=[user_prompt], n_results=3, where=deep_memory_where)
+            long_term_results_raw = functions.execute_vdb_read(query_texts=[user_prompt], n_results=2, where={"source_table": "long_term_memory"})
+            
+            formatted_deep_mem = self._format_vdb_results_for_context(deep_memory_results_raw, "Deep Memory")
+            formatted_ltm = self._format_vdb_results_for_context(long_term_results_raw, "Long-Term Memory")
+            
+            formatted_vdb_context = f"{formatted_deep_mem}\\n{formatted_ltm}".strip()
+        except:
+            formatted_vdb_context = ""
+            deep_memory_results_raw = "{}"
+            long_term_results_raw = "{}"
 
-        return {
-            "messages": final_messages, 
-            "system_instruction": system_instruction_param,
-            "session_history_ref": session_history,
-            "vdb_string": vdb_context, # For prompt (handled internally)
-            "vdb_ids_json": vdb_ids_json # For DB Archival
+        # ID Extraction
+        context_ids_for_db = []
+        for raw_result in [deep_memory_results_raw, long_term_results_raw]:
+            if raw_result:
+                try:
+                    result_data = json.loads(raw_result)
+                    if result_data.get('ids') and result_data['ids'][0]:
+                        context_ids_for_db.extend(result_data['ids'][0])
+                except Exception:
+                    pass
+
+        vdb_response = f'[Relevant Context:\\n{formatted_vdb_context}]' if formatted_vdb_context else ""
+
+        # Format User Content
+        data_envelope = {
+            "auth": { "user_id": user_id, "user_name": user_name, "session_id": session_id },
+            "timestamp_utc": timestamp_utc_iso,
+            "system_notifications": [],
+            "user_prompt": user_prompt,
+            "vdb_context": vdb_response
         }
 
-        # 3. Build Logical Message Sequence
-        # We construct a clean list of dicts first, then format for backend.
-        logical_messages = []
+        # Vision Attachment (Simplified)
+        if config.VISION and self.vision_attachments:
+             data_envelope["system_notifications"].append(f"[Vision: Attached {self.vision_attachments['display_name']}]")
+             # logic to actually attach bytes would go here, identical to Pro
+             self.vision_attachments = {}
+
+        # Construct User Content Part
+        final_text_part = types.Part.from_text(text=json.dumps(data_envelope, indent=2))
         
-        # A. System Turn
-        # For API (Gemma), we use "user" role because "system" is not supported.
-        # For Ollama, we utilize "system" role.
-        sys_role = "system" if self.backend == "ollama" else "user"
-        logical_messages.append({"role": sys_role, "content": final_system_instruction})
-
-        # B. History (Truncated)
-        effective_history = session_history
-        if len(session_history) > max_history:
-             effective_history = session_history[-max_history:]
+        # Lite excludes file_check generally, but if we wanted to support it via API we could.
+        # For now, we assume Lite = No Files to be safe, or we blindly attach them if API.
+        final_part = [final_text_part]
         
-        for turn in effective_history:
-            # Normalize internal "model" to backend specific
-            # Ollama: "assistant", GenAI: "model"
-            # But here we stick to abstract "model" or "user" and map later? 
-            # Let's map to standard "user"/"model" now, correcting for specific backend quirks later.
-            r = "assistant" if (self.backend == "ollama" and turn["role"] == "model") else turn["role"]
-            logical_messages.append({"role": r, "content": turn["content"]})
-            
-        # C. Current User Prompt
-        logical_messages.append({"role": "user", "content": user_prompt})
+        user_content_for_db = types.UserContent(parts=[types.Part.from_text(text=json.dumps(data_envelope, indent=2))])
+        final_content = types.UserContent(parts=final_part) # This is the object for the API
 
-        # 4. Final Processing & Formatting
-        final_messages = []
+        # History
+        contents_to_send = self.flatten_history(session_id)
+        contents_to_send.append(final_content)
         
-        if self.backend == "ollama":
-            # Ollama handles the list as-is
-            final_messages = logical_messages
-            system_instruction_param = None
-            
-        else: # Google GenAI API
-            # GenAI enforces strict User-Model-User alternation.
-            # We must collapse consecutive "user" messages (like System + First User).
-            
-            collapsed_messages = []
-            if logical_messages:
-                current_turn = logical_messages[0]
-                
-                for i in range(1, len(logical_messages)):
-                    next_turn = logical_messages[i]
-                    if current_turn["role"] == "user" and next_turn["role"] == "user":
-                        # Merge content
-                        current_turn["content"] += f"\n\n---\n\n{next_turn['content']}"
-                    else:
-                        collapsed_messages.append(current_turn)
-                        current_turn = next_turn
-                
-                collapsed_messages.append(current_turn)
-            
-            # Convert to GenAI Content Objects
-            for turn in collapsed_messages:
-                final_messages.append(types.Content(role=turn["role"], parts=[types.Part.from_text(text=turn["content"])]))
+        attachments_for_db = [] # simplified
+        
+        return (contents_to_send, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db)
 
-            system_instruction_param = None # We embedded it
-
-        return {
-            "messages": final_messages, 
-            "system_instruction": system_instruction_param,
-            "session_history_ref": session_history,
-            "vdb_string": vdb_context,
-            "vdb_ids_json": vdb_ids_json
-        }
-
-    def _generate_stream_response(self, prompt_data: dict):
+    def _generate_stream_response(self, contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db):
         """
-        Handles the streaming generation call to the specific backend.
-        Yields chunks ({"type": "token", "content": ...}).
+        Internal helper: Handles streaming generation.
+        mimics signature of Pro, but branches for backend.
         """
-        messages = prompt_data["messages"]
-        system_instruction = prompt_data["system_instruction"]
+        print(f"----- Sending Prompt to Orion Lite ({config.BACKEND}) . . . -----")
         
-        full_text = ""
+        full_response_text = ""
         token_count = 0
         
         try:
             if self.backend == "api":
-                gen_config = types.GenerateContentConfig(
-                    system_instruction=system_instruction, # likely None now
-                    max_output_tokens=8192,
-                    temperature=0.7
+                # API Mode - Gemma does NOT support system_instruction in config.
+                # We must prepend it to the history as a User message.
+                
+                system_content = types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=f"System Context:\n{self.current_instructions}")]
                 )
-                stream_resp = self.client.models.generate_content_stream(
+                
+                # Prepend to the prompt list
+                final_contents = [system_content] + contents_to_send
+                
+                response_stream = self.client.models.generate_content_stream(
                     model=self.model_name,
-                    contents=messages,
-                    config=gen_config
+                    contents=final_contents,
+                    # Config: Standard, NO system_instruction param
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=8192,
+                        temperature=0.7
+                    )
                 )
-                for chunk in stream_resp:
-                     if chunk.candidates and chunk.candidates[0].content.parts:
-                          text = chunk.candidates[0].content.parts[0].text
-                          if text:
-                              yield {"type": "token", "content": text}
-                              full_text += text
-                              if config.VOICE: orion_tts.process_stream_chunk(text)
-                     if chunk.usage_metadata:
+                
+                for chunk in response_stream:
+                    if chunk.candidates and chunk.candidates[0].content.parts:
+                        text = chunk.candidates[0].content.parts[0].text
+                        if text:
+                            yield {"type": "token", "content": text}
+                            full_response_text += text
+                            if config.VOICE: orion_tts.process_stream_chunk(text)
+                    if chunk.usage_metadata:
                           token_count = chunk.usage_metadata.total_token_count
 
             elif self.backend == "ollama":
+                # Ollama Mode - Requires Conversion from `contents_to_send` (Google Types) to List[Dict]
+                ollama_messages = []
+                
+                # System Prompt
+                ollama_messages.append({"role": "system", "content": self.current_instructions})
+                
+                # History
+                # We iterate contents_to_send, which are types.Content objects
+                for content in contents_to_send:
+                    role = "user" if content.role == "user" else "assistant"
+                    text_parts = [p.text for p in content.parts if p.text]
+                    full_content_text = "\\n".join(text_parts)
+                    ollama_messages.append({"role": role, "content": full_content_text})
+                
+                # Generate
                 stream_resp = self.client.chat(
                     model=self.local_model,
-                    messages=messages,
-                    stream=True
+                    messages=ollama_messages,
+                    stream=True,
+                    options={
+                        'num_ctx': config.LOCAL_CONTEXT_WINDOW,
+                        'temperature': 0.7
+                    }
                 )
                 for chunk in stream_resp:
                     content = chunk['message']['content']
                     if content:
+                        print(f"{content}", end="", flush=True) # DEBUG: Printing chunks directly
                         yield {"type": "token", "content": content}
-                        full_text += content
+                        full_response_text += content
                         if config.VOICE: orion_tts.process_stream_chunk(content)
-                token_count = 0 # Placeholder for Ollama
+            
+            if config.VOICE: orion_tts.flush_stream()
+            
+            # Reconstruct Model Content Object (for consistency)
+            model_content_obj = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=full_response_text)]
+            )
+            
+            # Finalize
+            should_restart = self._finalize_exchange(
+                session_id, user_id, user_name, user_prompt, full_response_text, token_count,
+                 attachments_for_db, [], context_ids_for_db, user_content_for_db, model_content_obj
+            )
+            
+            yield {
+                "type": "usage",
+                "token_count": token_count,
+                "restart_pending": should_restart
+            }
 
         except Exception as e:
-            print(f"Generation Error: {e}")
-            yield {"type": "token", "content": f"[Error: {e}]"}
-            full_text = f"[Error: {e}]" # Ensure meaningful text for history
+            print(f"ERROR: {e}")
+            yield {"type": "token", "content": f"[System Error: {e}]"}
 
-        if config.VOICE: orion_tts.flush_stream()
+    def _finalize_exchange(self, session_id, user_id, user_name, user_prompt, response_text, token_count, attachments_for_db, new_tool_turns, context_ids_for_db, user_content_for_db, model_content_obj):
+        """
+        Internal helper: Handles post-processing. Identical signature to Pro.
+        """
+        # Archive
+        new_db_id = self._archive_exchange_to_db(
+             session_id, user_id, user_name, user_prompt, response_text, 
+             attachments_for_db, token_count, json.dumps(context_ids_for_db)
+        )
         
-        # Internal Yield for process_prompt to capture
-        yield {"type": "usage_internal", "token_count": token_count}
+        # Update History
+        new_exchange = {
+            "user_content": user_content_for_db,
+            "tool_calls": [], # Lite has no tools
+            "model_content": model_content_obj,
+            "db_id": new_db_id,
+            "token_count": token_count
+        }
         
-        # Return summary for finalization (legacy return, generator ignores this in loop)
-        return {"full_text": full_text, "token_count": token_count}
+        chat_session = self._get_session(session_id)
+        chat_session.append(new_exchange)
+        
+        # Limit History
+        if len(chat_session) > self.MAX_HISTORY_EXCHANGES:
+             # simple truncation
+             del chat_session[:5]
+             
+        print(f"----- Response Generated ({token_count} tokens) -----")
+        return False
 
-    def _finalize_exchange(self, session_id: str, user_prompt: str, response_text: str, token_count: int, vdb_context: str, user_id: str, user_name: str):
+    def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, attachments, token_count, vdb_context):
         """
-        Updates session history and performs archival tasks.
-        """
-        new_entry_user = {"role": "user", "content": user_prompt}
-        new_entry_model = {"role": "model", "content": response_text}
-        
-        session = self._get_session(session_id)
-        session.append(new_entry_user)
-        session.append(new_entry_model)
-        
-        print(f"----- Exchange Finalized ({token_count} tokens) -----")
-        
-        # --- Archival ---
-        # Lite Core = No Tools, No Attachments (Simplified)
-        self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, response_text, token_count, vdb_context) 
-
-    def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, token_count, vdb_context=""):
-        """
-        Writes the exchange to the database. Ported from OrionCore.
+        Writes to DB.
         """
         try:
-             # Determine Model Source Name
-             source_name = self.local_model if self.backend == "ollama" else self.model_name
-             
-             data_payload = {
+             source = self.local_model if self.backend == "ollama" else self.model_name
+             data = {
                 "session_id": session_id,
                 "user_id": user_id,
                 "user_name": user_name,
                 "timestamp": int(datetime.now(timezone.utc).timestamp()),
                 "prompt_text": prompt,
                 "response_text": response,
-                "attachments_metadata": "[]", # Empty for Lite
+                "attachments_metadata": json.dumps(attachments),
                 "token": token_count,
-                "function_calls": "[]", # Empty for Lite
-                "vdb_context": vdb_context,
-                "model_source": source_name 
+                "function_calls": "[]",
+                "vdb_context": vdb_context, 
+                "model_source": source
             }
+             result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data)
              
-             print(f"  - [Lite] Archiving to deep_memory (Source: {source_name})...")
-             result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data_payload)
-             print(f"  - Result: {result}")
+             # Fetch the new ID for context exclusion
+             latest_id_result = functions.execute_sql_read(query="SELECT id FROM deep_memory ORDER BY id DESC LIMIT 1")
+             latest_id_data = json.loads(latest_id_result)
+             if latest_id_data and latest_id_data[0].get('id'):
+                 return str(latest_id_data[0]['id'])
              
+             return "db_id_placeholder"
         except Exception as e:
-            print(f"[Lite Archival Error] {e}")
+            print(f"Archival/DB Error: {e}")
+            return None
 
-    # --- Main Orchestrator ---
-
-    def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str, stream: bool = True) -> Generator:
+    def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str, stream: bool = False) -> Generator:
         """
-        Main entry point. Orchestrates the pipeline: Prepare -> Generate -> Finalize.
+        Orchestrator: Identical to Pro.
         """
-        yield {"type": "status", "content": f"Processing ({self.backend})..."}
-        
-        # 1. Prepare
-        # Capture vdb_context from prepare step?
-        # Refactor: _prepare_prompt_data returns dict.
-        prompt_data = self._prepare_prompt_data(session_id, user_prompt, file_check, user_id, user_name)
-        vdb_ids_for_db = prompt_data.get("vdb_ids_json", "[]") # Use the IDs list for DB
-
-        
-        # 2. Generate (Stream)
-        yield {"type": "status", "content": f"Thinking..."}
-        
-        generator = self._generate_stream_response(prompt_data)
-        
-        full_text = ""
-        token_count = 0
-        
-        for chunk in generator:
-            if chunk.get("type") == "usage_internal":
-                token_count = chunk["token_count"]
-                continue # Don't yield this to bot
-                
-            yield chunk 
-            if chunk["type"] == "token":
-                full_text += chunk["content"]
-        
-        # 3. Finalize
-        self._finalize_exchange(session_id, user_prompt, full_text, token_count, vdb_ids_for_db, user_id, user_name)
-        # Call Archival here (since finalize signature is limited or update it)
-        self._archive_exchange_to_db(session_id, user_id, user_name, user_prompt, full_text, token_count, vdb_context_str)
-        
-        yield {
-            "type": "usage",
-            "token_count": token_count,
-            "restart_pending": False
-        }
-
-    
-    def _load_state_on_restart(self) -> bool:
-        """Loads session state after a restart."""
         try:
-            state_file = f"{config.DB_FILE}-x-restart_state.pkl"
-            state_blob_file = f"{config.DB_FILE}-x-restart_state-1-excluded_ids_blob.bin" # Unused in Lite but clearing for hygiene
+            yield {"type": "status", "content": "Initializing Request..."}
             
-            if os.path.exists(state_file):
-                print(f"--- Found restart state file: {state_file} ---")
-                with open(state_file, 'rb') as f:
-                    data = pickle.load(f)
-                    self.sessions = data.get('sessions', {})
-                    # Lite doesn't really have advanced state like excluded_ids, but we load sessions
-                
-                # Cleanup
-                os.remove(state_file)
-                if os.path.exists(state_blob_file): os.remove(state_blob_file)
-                
-                print(f"--- State restored. {len(self.sessions)} session(s) recovered. ---")
+            # --- Smart Truncation (Token Safety) ---
+            # Gemma API has a ~15k token limit usually. We enforce a safe rolling window.
+            SAFE_TOKEN_LIMIT = 10000 
+            chat_session = self._get_session(session_id)
+            
+            # Estimate current load
+            estimated_prompt_tokens = len(user_prompt) // 3 + 500 # + overhead
+            current_history_tokens = sum(ex.get("token_count", 0) for ex in chat_session)
+            
+            while chat_session and (current_history_tokens + estimated_prompt_tokens > SAFE_TOKEN_LIMIT):
+                removed = chat_session.pop(0)
+                current_history_tokens -= removed.get("token_count", 0)
+                print(f"--- [Lite Core] Truncating history for token safety. Removed exchange with {removed.get('token_count', 0)} tokens. ---")
+            
+            yield {"type": "status", "content": "Accessing Memory..."}
+            
+            (contents_to_send, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db) = \
+                self._prepare_prompt_data(session_id, user_prompt, file_check, user_id, user_name)
+            
+            yield {"type": "status", "content": "Thinking..."}
+            
+            # Lite only supports streaming for now in this impl, or we redirect
+            yield from self._generate_stream_response(
+                contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt,
+                attachments_for_db, context_ids_for_db, user_content_for_db
+            )
+            
+        except Exception as e:
+            print(f"CRITICAL ERROR: {e}")
+            yield {"type": "token", "content": f"[System Error: {e}]"}
+
+    def _load_state_on_restart(self) -> bool:
+        """Deserializes session histories from the database and rebuilds sessions."""
+        try:
+            with sqlite3.connect(functions.config.DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT session_id, history_blob FROM restart_state")
+                rows = cursor.fetchall()
+                if not rows:
+                    return False 
+
+                print("--- [Lite Core] Restart state detected. Loading sessions... ---")
+                self.sessions = {}
+                for session_id, history_blob in rows:
+                    history = pickle.loads(history_blob)
+                    self._get_session(session_id, history=history)
+
+                cursor.execute("DELETE FROM restart_state") 
+                conn.commit()
+                print(f"  - Successfully loaded state for {len(self.sessions)} session(s).")
                 return True
         except Exception as e:
-            print(f"State Load Error: {e}")
-        return False
+             print(f"  - ERROR: Failed to load restart state: {e}")
+             return False
 
+    def list_sessions(self) -> list:
+        """Returns a list of all active session IDs."""
+        return list(self.sessions.keys())
+
+    def manage_session_history(self, session_id: str, count: int = 0, index: int = -1) -> str:
+        """
+        Manages the history of a specific session.
+        If count > 0, it removes that many recent exchanges.
+        If index >= 0, it truncates history from that index onwards.
+        """
+        if session_id not in self.sessions:
+            return f"Session '{session_id}' not found."
+        
+        history = self.sessions[session_id]
+        
+        if index >= 0:
+            if index < len(history):
+                removed = len(history) - index
+                self.sessions[session_id] = history[:index]
+                return f"Truncated session '{session_id}' at index {index}. Removed {removed} exchanges."
+            else:
+                return f"Index {index} out of range for session '{session_id}'."
+        
+        elif count > 0:
+            if count >= len(history):
+                self.sessions[session_id] = []
+                return f"Cleared all history for session '{session_id}'."
+            else:
+                self.sessions[session_id] = history[:-count]
+                return f"Removed last {count} exchanges from session '{session_id}'."
+            
+        return "No action taken."
+
+    def get_session_mode(self, session_id: str) -> str:
+        """Compatible stub for Lite Core."""
+        return "lite"
+
+    def set_session_mode(self, session_id: str, mode: str) -> str:
+        """Compatible stub for Lite Core."""
+        return "Lite Core does not support mode switching."
+    
     def save_state_for_restart(self) -> bool:
-        """Saves current sessions to a pickle file."""
+        """Serializes the comprehensive history of all active sessions to the database."""
+        print("--- [Lite Core] Saving session states for system restart... ---")
         try:
-            state_file = f"{config.DB_FILE}-x-restart_state.pkl"
-            print(f"--- Saving state to {state_file} ---")
-            
-            data = {
-                'sessions': self.sessions,
-            }
-            
-            with open(state_file, 'wb') as f:
-                pickle.dump(data, f)
-            return True
+            with sqlite3.connect(functions.config.DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM restart_state") # Clear any old state
+                
+                records_to_save = []
+                for session_id, history in self.sessions.items():
+                    history_blob = pickle.dumps(history)
+                    records_to_save.append((session_id, history_blob))
+                
+                cursor.executemany(
+                    "INSERT INTO restart_state (session_id, history_blob) VALUES (?, ?)",
+                    records_to_save
+                )
+                conn.commit()
+                print(f"  - State for {len(records_to_save)} session(s) saved to database.")
+                return True
         except Exception as e:
-            print(f"State Save Error: {e}")
+            print(f"  - ERROR: Failed to save state for restart: {e}")
             return False
 
-    def execute_restart(self):
-        """Restarts the bot process."""
-        print("--- Executing Process Restart ---")
-        import sys
-        import subprocess
-        # Similar logic to Pro core
-        args = [sys.executable] + sys.argv
-        print(f"Restarting with args: {args}")
-        subprocess.Popen(args)
-        os._exit(0)
-
     def trigger_instruction_refresh(self, full_restart=False):
-        """Refreshes instructions (Soft) or triggers restart (Hard)."""
-        if full_restart:
-            if self.save_state_for_restart():
-                self.execute_restart()
-        else:
-            print("--- Soft Refreshing Instructions (Lite) ---")
-            # 1. Re-run manifest generator
-            functions.rebuild_manifests()
-            # 2. Re-read instructions
-            self.current_instructions = self._read_all_instructions()
-            print("--- Instructions Refreshed. ---")
+        # Stub logic
+        self.current_instructions = self._read_all_instructions()
+        print("Instructions refreshed.")
 
     def shutdown(self):
         """Performs a clean shutdown."""
-        print("--- Orion Lite Core shutting down. ---")
+        print("--- Orion Core shutting down. ---")
+        # --- NEW: Stop the TTS thread on shutdown ---
         if config.VOICE:
             orion_tts.stop_tts_thread()
         if config.VISION:
-             orion_replay.shutdown_obs()
-        print("--- Orion Lite is now offline. ---")
+            orion_replay.shutdown_obs()
+        print("--- Orion is now offline. ---")
+
+    def execute_restart(self):
+        """
+        Executes the final step of the restart by shutting down gracefully
+        and then replacing the current process.
+        """
+        print("  - State saved. Performing graceful shutdown before restart...")
+        self.shutdown() # <-- CRITICAL: Call the shutdown method here.
+        print("  - Shutdown complete. Executing process replacement...")
+        os.execv(sys.executable, ['python'] + sys.argv)

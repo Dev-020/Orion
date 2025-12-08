@@ -1,185 +1,292 @@
-# bot.py (Final Refactored Version)
+# bot.py (Refactored for Generator API & Mode Switching)
 
 import discord
 import os
 import asyncio
-from dotenv import load_dotenv
-from orion_core import OrionCore
+import time
+from dotenv import load_dotenv  
 from discord.ext import commands
-from system_utils import orion_tts # Import the tts module
-# All genai and file processing (fitz) imports are now removed.
+import threading
 
+# 1. Config Override (Must be before OrionCore init)
+from main_utils import config
+config.VOICE = False
+config.VISION = False
+
+# --- One "Brain" ---
 # Load environment variables
 load_dotenv()
 MAX_TEXT_FILE_SIZE = 51200  # 50 * 1024 bytes
 persona = os.getenv("ORION_PERSONA", "default")
-print(f"--- Bot starting with Persona: {persona} ---")
+print(f"--- Bot starting with Persona: {persona} (Voice/Vision Disabled) ---")
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-
-# The flag file is no longer needed as the AI will manage its own refresh.
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Bot(intents=intents, debug_guilds=[os.getenv("DISCORD_GUILD_ID")] if os.getenv("DISCORD_GUILD_ID") else None)
 
-# --- The single, unified instance of Orion's "Brain" ---
+# Selector Logic: Use Lite Core for Gemma/Ollama, Pro Core for everything else
+if "gemma" in config.AI_MODEL.lower() or getattr(config, 'BACKEND', 'api') == 'ollama':
+    try:
+        from orion_core_lite import OrionLiteCore as OrionCore
+        print(f"--- Loaded Orion Lite Core (Backend: {getattr(config, 'BACKEND', 'api')}) ---")
+    except Exception as e:
+        print(f"CRITICAL ERROR loading Lite Core: {e}")
+        from orion_core import OrionCore
+        print("--- Fallback to Orion Pro Core ---")
+else:
+    from orion_core import OrionCore
+    print("--- Loaded Orion Pro Core ---")
+
 core = OrionCore(persona=persona) 
-# Attach the core to the bot instance so cogs can access it
 bot.core = core
 
-# --- Security Check (is_owner) remains the same ---
-def is_owner():
-    def predicate(ctx: discord.ApplicationContext) -> bool:
-        owner_id = os.getenv("DISCORD_OWNER_ID")
-        if not owner_id: return False
-        return str(ctx.author.id) == owner_id
-    return commands.check(predicate)
+# --- Session Preferences ---
+# simple dict: session_id -> bool (True=Stream, False=Full)
+streaming_preferences = {}
 
-# --- Event: on_ready remains the same ---
-@bot.event
-async def on_ready():
-    print(f"--- {bot.user} has connected to Discord! ---")
-    print(f"--- Operating on {len(bot.guilds)} servers. ---")
+# --- Helper: Async Generator Consumer ---
+async def consume_generator_async(generator, message_to_edit):
+    """
+    Consumes the OrionCore generator updates and edits the Discord message.
+    Handles both streaming (token accumulation) and full responses.
+    Implements:
+      - 1.5s throttling for edits.
+      - 2000 char pagination (overflow to new message).
+      - Status updates.
+    """
+    full_text_buffer = ""
+    current_message = message_to_edit
+    
+    last_edit_time = 0
+    edit_interval = config.EDIT_TIME  # Seconds between edits to respect rate limits
+    
+    # Track pagination
+    # We only care about the *current* chunk we are streaming into
+    
+    try:
+        # fix: iterate asynchronously if the generator is async, 
+        # BUT OrionCore currently returns a synchronous generator in a thread usually?
+        # Actually core.process_prompt is a standard generator, so we iterate synchronously 
+        # but we might be running this in a thread. 
+        # However, we are in an async function here. 
+        # To keep the bot responsive, we should probably iterate direct if it's a generator,
+        # but since core blocks, we really should have run the whole process_prompt in a thread.
+        # Let's adjust: process_prompt is a generator. We need to iterate it. 
+        # If we iterate it in the main loop, it blocks.
+        # So we need to wrap the *iteration* in a thread or use an async wrapper.
+        # Since core is sync, we'll do the "run_in_executor" dance for each Step? No, that's inefficient.
+        # Better: run the Consumer in a thread, but the consumer needs to await bot.edit. 
+        # This is tricky mixing sync generator with async discord calls.
+        
+        # SOLUTION: We will not use 'async for' because core is sync.
+        # We will use a dedicated thread to consume the generator, push updates to a queue,
+        # and a local async loop to read the queue and update Discord.
+        
+        queue = asyncio.Queue()
+        
+        def generator_producer():
+            try:
+                for item in generator:
+                    asyncio.run_coroutine_threadsafe(queue.put(item), bot.loop)
+                asyncio.run_coroutine_threadsafe(queue.put("DONE"), bot.loop)
+            except Exception as e:
+                asyncio.run_coroutine_threadsafe(queue.put({"type": "error", "content": str(e)}), bot.loop)
 
-# --- Persona-Specific Commands ---
-if persona == "dnd":
-    print("--- Loading D&D commands cog... ---")
-    bot.load_extension("cogs.dnd_commands")
+        # Start producer thread
+        producer_thread = threading.Thread(target=generator_producer)
+        producer_thread.start()
+        
+        # Consumer loop (Async)
+        should_restart = False
+        message_chain = [message_to_edit] # Track all messages in response
+        
+        while True:
+            item = await queue.get()
+            if item == "DONE":
+                break
+                
+            if isinstance(item, dict):
+                msg_type = item.get("type")
+                content = item.get("content")
+                
+                if msg_type == "status":
+                    # Instant update for status changes (if safe)
+                    # We usually just log or show "..."
+                    pass 
+                    
+                elif msg_type == "token":
+                    full_text_buffer += content
+                    
+                    # Throttle edits
+                    now = time.time()
+                    if now - last_edit_time > edit_interval:
+                        message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
+                        last_edit_time = now
+                        
+                elif msg_type == "full_response":
+                    # Overwrite buffer with final clean text (just in case)
+                    full_text_buffer = item.get("text", "")
+                    should_restart = item.get("restart_pending", False)
+                    # Final update
+                    message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
 
-# --- Event: on_message (Final Refactored Logic) ---
+                elif msg_type == "error":
+                    full_text_buffer += f"\n\n[System Error: {content}]"
+                    message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
+            
+            queue.task_done()
+            
+        # Final flush ensure everything is written
+        message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
+        
+        return should_restart
+
+    except Exception as e:
+        print(f"Error in consumer: {e}")
+        await current_message.edit(content=f"{full_text_buffer}\n\n[Bot Error: {e}]")
+
+    return False # No restart by default
+
+async def update_message_chain(channel, chain, full_text):
+    """
+    Updates a chain of messages to reflect the full_text.
+    Splits text into chunks (1900 chars) and distributes across the chain.
+    Expands the chain if necessary.
+    """
+    CHUNK_SIZE = 1900
+    text_chunks = [full_text[i:i+CHUNK_SIZE] for i in range(0, len(full_text), CHUNK_SIZE)]
+    if not text_chunks: text_chunks = [""] # Handle empty case
+
+    for i, chunk in enumerate(text_chunks):
+        if i < len(chain):
+            # Update existing message if content differs
+            if chain[i].content != chunk:
+                # Discord quirk: editing to same content errors? usually ignored but checking is safer
+                await chain[i].edit(content=chunk)
+        else:
+            # Create new message for overflow
+            new_msg = await channel.send(chunk)
+            chain.append(new_msg)
+            
+    return chain
+
+# Old function removed
+
+
+# --- Commands ---
+
+@bot.slash_command(name="mode", description="Switch session mode.")
+async def switch_mode(ctx: discord.ApplicationContext, mode: discord.Option(str, choices=["cache", "function"])):
+    session_id = get_session_id(ctx)
+    result = core.set_session_mode(session_id, mode)
+    await ctx.respond(result, ephemeral=True)
+
+@bot.slash_command(name="stream", description="Toggle streaming implementation.")
+async def toggle_stream(
+    ctx: discord.ApplicationContext, 
+    setting: discord.Option(str, choices=["on", "off"], description="Enable or disable real-time streaming")
+):
+    session_id = get_session_id(ctx)
+    is_streaming = (setting == "on")
+    streaming_preferences[session_id] = is_streaming
+    await ctx.respond(f"Streaming set to **{setting.upper()}** for this session.", ephemeral=True)
+
+@bot.command(name="shutdown", description="Owner only shutdown/restart.")
+async def shutdown(ctx, mode: str = 'poweroff'):
+    if str(ctx.author.id) != os.getenv("DISCORD_OWNER_ID"): return
+    if mode == 'soft':
+        await ctx.respond("Soft refreshing instructions...")
+        await asyncio.to_thread(core.trigger_instruction_refresh, full_restart=False)
+        await ctx.send("Refresh complete.")
+    elif mode == 'hard':
+        await ctx.respond("Hard restart sequence engaged...")
+        if core.save_state_for_restart():
+            core.execute_restart()
+    else:
+        await ctx.respond("Shutting down.")
+        await bot.close()
+
+# --- Helpers ---
+def get_session_id(ctx_or_msg):
+    # Ensure we are looking at the channel, not the message/context itself
+    if hasattr(ctx_or_msg, 'channel'):
+        obj = ctx_or_msg.channel
+    else:
+        obj = ctx_or_msg
+        
+    # Basic mapping based on Channel Type
+    if isinstance(obj, discord.Thread):  
+        return f"discord-thread-{obj.parent.id}-{obj.id}"
+    elif isinstance(obj, discord.DMChannel):
+        return f"discord-dm-{obj.id}"
+    elif hasattr(obj, 'id'): # TextChannel, VoiceChannel, etc.
+        return f"discord-channel-{obj.id}"
+    
+    return f"discord-unknown-{id(obj)}" # Fallback
+
+# --- Event: on_message ---
 @bot.event
 async def on_message(message: discord.Message):
-    """This function runs every time a message is sent."""
-    if message.author == bot.user:
-        return
+    if message.author == bot.user: return
+    
+    if bot.user in message.mentions or isinstance(message.channel, discord.DMChannel):
+        session_id = get_session_id(message)
+        
+        # 1. Mode Check (Default Stream = True)
+        use_stream = streaming_preferences.get(session_id, True)
+        
+        # 2. Prepare Prompt
+        user_prompt = message.clean_content.replace(f"@{bot.user.name}", "").strip()
+        
+        # File Handling
+        file_check = []
+        if message.attachments:
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith('text/'):
+                     # Simple text read logic
+                     if attachment.size <= MAX_TEXT_FILE_SIZE:
+                         try:
+                             content = (await attachment.read()).decode('utf-8')
+                             user_prompt += f"\n\n--- FILE: {attachment.filename} ---\n{content}"
+                         except: pass
+                else:
+                    # Upload to Core
+                    try: 
+                        f = core.upload_file(await attachment.read(), attachment.filename, attachment.content_type or "")
+                        if f: file_check.append(f)
+                    except: pass
 
-    if bot.user in message.mentions:
-        async with message.channel.typing():
-            
-            # The hot-swap trigger is now handled internally by the AI, so the flag file check is removed.
-
-            # --- Hybrid Session ID Logic ---
-            if isinstance(message.channel, discord.Thread):
-                # It's a thread, so we create a more specific ID that includes the parent channel
-                session_id = f"discord-thread-{message.channel.parent.id}-{message.channel.id}"
-            elif message.guild: # It's a regular channel in a server
-                session_id = f"discord-channel-{message.channel.id}"
-            else: # Message is in a DM
-                session_id = f"discord-dm-{message.author.id}"
-
-            # --- Streamlined Multimodal Prompt Construction ---
-            user_prompt = message.clean_content.replace(f"@{bot.user.name}", "").strip()
-
-            file_check = []
-            if message.attachments:
-                for attachment in message.attachments:
-                    # Call the helper function in the core to handle the upload
-                    if attachment.content_type and attachment.content_type.startswith('text/'):
-                        # Check 2: Is the file within our size limit?
-                        if attachment.size <= MAX_TEXT_FILE_SIZE:
-                            try:
-                                file_bytes = await attachment.read()
-                                file_content = file_bytes.decode('utf-8')
-                                user_prompt += f"\n\n--- ATTACHED FILE: {attachment.filename} ---\n\n{file_content}"
-                                print(f"-> Appended content of '{attachment.filename}' to the prompt.")
-                            except Exception as e:
-                                print(f"-> ERROR: Failed to read or decode '{attachment.filename}': {e}")
-                                user_prompt += f"\n\n[System Note: User attached a file named '{attachment.filename}', but it could not be read.]"
-                        else:
-                            # The file is too large, so we add a note instead of the content.
-                            file_size_kb = round(attachment.size / 1024, 2)
-                            print(f"-> SKIPPED '{attachment.filename}' because it is too large ({file_size_kb} KB).")
-                            user_prompt += f"\n\n[System Note: The user attached a text file named '{attachment.filename}' ({file_size_kb} KB), which was too large to be read directly. Inform the user that you cannot read the file due to its size.]"
-                    else:
-                        try:
-                            file = core.upload_file(
-                                file_bytes=await attachment.read(),
-                                display_name=attachment.filename,
-                                mime_type=attachment.content_type or ""
-                            )
-                            if file:
-                                file_check.append(file)
-                            if not file:
-                                await message.reply(f"[Sorry, I couldn't upload the attachment'{attachment.filename}'.")
-                        except Exception as e:
-                            print(f"ERROR: Failed to upload attachment '{attachment.filename}': {e}")
-                            await message.reply(f"Sorry, I couldn't process the attachment '{attachment.filename}'.")
-            
-            # The call to the core is now clean, passing a list of parts.
-            response_text, token_count, restart_pending = await asyncio.to_thread(
-                core.process_prompt, 
+        # 3. Initial "Thinking" Message
+        response_msg = await message.reply("*[Orion is thinking...]*")
+        
+        # 4. Call Core (Generator)
+        def blocking_get_gen():
+            return core.process_prompt(
                 session_id=session_id,
                 user_prompt=user_prompt,
                 file_check=file_check,
                 user_id=str(message.author.id),
-                user_name=message.author.name
+                user_name=message.author.name,
+                stream=use_stream
             )
-            
-            # --- Message sending logic with token count display ---
-            if response_text and response_text.strip():
-                for i in range(0, len(response_text), 1980):
-                    chunk = response_text[i:i + 1980]
-                    if i + 1980 >= len(response_text):
-                        await message.reply(f"{chunk}\n\n*(`Tokens: {token_count}`)*")
-                    else:
-                        await message.reply(chunk)
-            else:
-                print(f"AI returned an empty response for user {message.author.name}. No message sent.")
-            
-            # --- Orchestrated Restart Logic ---
-            if restart_pending:
-                print("---! DELAYED RESTART SEQUENCE ACTIVATED !---")
-                if core.save_state_for_restart(): # Save state first
-                    core.execute_restart() # Now call the graceful restart
-
-# --- NEW: Stop Speech Command ---
-@bot.command(name="shutup", description="Stops the currently playing speech and clears the queue.")
-async def shutup(ctx: discord.ApplicationContext):
-    """Stops Orion's current speech."""
-    if config.VOICE:
-        await asyncio.to_thread(orion_tts.stop_speech)
-        await ctx.respond("Speech interrupted.", ephemeral=True, delete_after=5)
-    else:
-        await ctx.respond("Voice is not currently enabled.", ephemeral=True, delete_after=5)
-
-# --- Shutdown command remains the same ---
-@bot.command(name="shutdown", description="Shuts down the bot gracefully. (Owner only)")
-@is_owner()
-async def shutdown(
-    ctx: discord.ApplicationContext,
-    mode: discord.Option(str, "Choose the action: 'soft' (hot-swap), 'hard' (restart), 'poweroff' (shutdown).", choices=['soft', 'hard', 'poweroff'], default='poweroff')
-):
-    """Manages the bot's operational state: hot-swap, restart, or full shutdown."""
-    if mode == 'soft':
-        await ctx.respond("Acknowledged. Initiating a 'soft' hot-swap of instructions and tools...", ephemeral=True)
-        # Run the synchronous hot-swap in a separate thread to avoid blocking
-        await asyncio.to_thread(core.trigger_instruction_refresh, full_restart=False)
-        await ctx.followup.send("Hot-swap complete. All sessions have been migrated.", ephemeral=True)
-
-    elif mode == 'hard':
-        await ctx.respond("Acknowledged. Initiating a 'hard' orchestrated restart. Saving state...", ephemeral=True)
-        # Replicate the restart logic from on_message
-        if core.save_state_for_restart():
-            await ctx.followup.send("State saved. Executing restart now.", ephemeral=True)
-            core.execute_restart() # This now handles the shutdown internally
-
-    else: # 'poweroff'
-        await ctx.respond("Acknowledged. Shutting down completely.", ephemeral=True)
-        core.shutdown()
-        await bot.close()
+        
+        generator = await asyncio.to_thread(blocking_get_gen)
+        
+        # 5. Consume (Streams updates to response_msg)
+        should_restart = await consume_generator_async(generator, response_msg)
+        
+        # 6. Restart if needed
+        if should_restart:
+             print("--- RESTART TRIGGERED BY CHAT ---")
+             if core.save_state_for_restart():
+                 core.execute_restart()
 
 if __name__ == "__main__":
     if BOT_TOKEN:
-        try:
-            print("--- Starting Bot ---")
-            bot.run(BOT_TOKEN)
-        except KeyboardInterrupt:
-            # When Ctrl+C is pressed, bot.run() handles the graceful shutdown.
-            # This block is here to catch the interrupt and prevent an ugly traceback,
-            # allowing the program to exit cleanly after bot.run() finishes its cleanup.
-            print("\n--- Ctrl+C detected. Shutting down gracefully. ---")
+        bot.run(BOT_TOKEN)
     else:
-        print("FATAL ERROR: DISCORD_BOT_TOKEN not found in .env file.")
+        print("ERROR: NO TOKEN")

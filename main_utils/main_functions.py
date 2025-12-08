@@ -197,7 +197,8 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                 # Define which fields are essential for filtering and context, excluding redundant text fields.
                 essential_metadata_keys = [
                     'source_table', 'source_id', 'session_id', 'user_id', 'user_name', # 'vdb_context' is no longer needed here for the vector itself
-                    'timestamp', 'token', 'function_calls', 'vdb_context', 'attachments_metadata'
+                    'timestamp', 'token', 'function_calls', 'vdb_context', 'attachments_metadata',
+                    'model_source' # NEW: Added for source tracking
                 ]
                 meta = {
                     'source_table': table,
@@ -409,7 +410,7 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
         return f"Database Error: {e}"
 
 
-def execute_sql_write(query: str, params: list, user_id: str) -> str:
+def execute_sql_write(query: str, params: List[Union[str, int, float, bool, None]], user_id: str) -> str:
     """
     Executes a write query (INSERT, UPDATE, DELETE) on the database using a
     tiered security model.

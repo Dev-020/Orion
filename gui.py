@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 load_dotenv()
 
 from orion_core import OrionCore
+from orion_core_lite import OrionLiteCore
+from main_utils import config
 from gui_modules import constants as C
 from gui_modules import chat_components as Chat
 from gui_modules import tab_builders as Tabs
@@ -443,7 +445,14 @@ if __name__ == "__main__":
     customtkinter.set_default_color_theme("blue")
     
     try:
-        main_core = OrionCore()
+        # Dual Core Selection Logic (Mirrors bot.py)
+        if "gemma" in config.AI_MODEL.lower() or config.BACKEND == "ollama":
+            print(f"--- GUI starting with ORION LITE CORE ({config.BACKEND}) ---")
+            main_core = OrionLiteCore()
+        else:
+            print("--- GUI starting with ORION CORE (PRO) ---")
+            main_core = OrionCore()
+
         app = OrionGUI(core=main_core)
         app.run()
     except Exception as e:
