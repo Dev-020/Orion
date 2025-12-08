@@ -25,7 +25,7 @@ from system_utils import orion_replay, run_startup_diagnostics, generate_manifes
 
 # Define instruction files for clarity
 INSTRUCTIONS_FILES = [
-    'Primary_Directive.md', 
+    #'Primary_Directive.md', 
     #'Homebrew_Compendium.md',
     #'General_Prompt_Optimizer.md',
     #'DND_Handout.md',
@@ -40,7 +40,7 @@ INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ins
 
 class OrionCore:
     
-    def __init__(self, model_name: str = "gemini-3-pro-preview", persona: str = "default"):
+    def __init__(self, model_name: str = config.AI_MODEL, persona: str = "default"):
         """Initializes the unified AI 'brain', including session management."""
         self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
@@ -85,7 +85,7 @@ class OrionCore:
         print("--- Initializing Orion Core (Unified Model) ---")
         self.model_name = model_name
         if config.VERTEX:
-            self.client = genai.Client(vertexai=True, project=os.getenv("GEMINI_PROJECT_ID"), location="global")
+            self.client = genai.Client(vertexai=True, project=os.getenv("GOOGLE_CLOUD_PROJECT_ID"), location="global")
         else:
             self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
         self.tools = self._load_tools()
@@ -553,6 +553,7 @@ class OrionCore:
         mode = self.get_session_mode(session_id)
         
         # Shared config parameters
+        # Shared config parameters
         thinking_level = types.ThinkingLevel.LOW if stream else types.ThinkingLevel.HIGH
         safety_settings = [
             types.SafetySetting(
@@ -836,7 +837,8 @@ class OrionCore:
                 "attachments_metadata": json.dumps(attachment),
                 "token": token_count,
                 "function_calls": function_calls_json_string,
-                "vdb_context": vdb_context
+                "vdb_context": vdb_context,
+                "model_source": self.model_name  # NEW: Traceability
             }
             
             print(f"  - [DEBUG] Archiving exchange to deep_memory. Context used: {vdb_context}")

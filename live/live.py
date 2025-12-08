@@ -121,7 +121,7 @@ BASE_SYSTEM_INSTRUCTION = """
 
 client = None
 if config.VERTEX:
-    client = genai.Client(vertexai=True, project=os.getenv("GEMINI_PROJECT_ID"), location="global")
+    client = genai.Client(vertexai=True, project=os.getenv("GOOGLE_CLOUD_PROJECT_ID"), location="global")
 else:
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 

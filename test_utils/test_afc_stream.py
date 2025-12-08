@@ -13,7 +13,7 @@ def test_tool():
 
 tools = [test_tool]
 
-client = genai.Client(vertexai=True, project=os.getenv("GEMINI_PROJECT_ID"), location="global")
+client = genai.Client(vertexai=True, project=os.getenv("GOOGLE_CLOUD_PROJECT_ID"), location="global")
 
 def run_stream_test(enable_afc: bool):
     print(f"\n\n=== Testing with automatic_function_calling={enable_afc} ===")

@@ -7,7 +7,7 @@ load_dotenv()
 
 class MockCore:
     def __init__(self):
-        self.client = genai.Client(vertexai=True, project=os.getenv("GEMINI_PROJECT_ID"), location="global")
+        self.client = genai.Client(vertexai=True, project=os.getenv("GOOGLE_CLOUD_PROJECT_ID"), location="global")
 
 def test_agent():
     print("--- Testing NativeToolsAgent Fix ---")
