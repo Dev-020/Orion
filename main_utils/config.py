@@ -30,3 +30,6 @@ AI_MODEL = "gemma-3-27b-it"
 BACKEND = "api" # "api" or "ollama"
 LOCAL_MODEL = "gemma3:4b"  # Verified safe for hardware
 LOCAL_CONTEXT_WINDOW = 4096 # Safe limit for 16GB RAM
+
+# --- FILE CONFIGURATION ---
+TEXT_FILE_EXTENSIONS = ('.json', '.xml', '.txt', '.py', '.md', '.log', '.yml', '.yaml', '.sh', '.bat', '.css', '.html', '.js')

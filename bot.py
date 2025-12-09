@@ -16,7 +16,7 @@ config.VISION = False
 # --- One "Brain" ---
 # Load environment variables
 load_dotenv()
-MAX_TEXT_FILE_SIZE = 51200  # 50 * 1024 bytes
+MAX_TEXT_FILE_SIZE = 15360  # 15 * 1024 bytes (approx 3-4k tokens)
 persona = os.getenv("ORION_PERSONA", "default")
 print(f"--- Bot starting with Persona: {persona} (Voice/Vision Disabled) ---")
 
@@ -195,6 +195,73 @@ async def toggle_stream(
     streaming_preferences[session_id] = is_streaming
     await ctx.respond(f"Streaming set to **{setting.upper()}** for this session.", ephemeral=True)
 
+import io
+
+@bot.slash_command(name="history", description="Download chat history for this channel.")
+async def history(ctx: discord.ApplicationContext):
+    session_id = get_session_id(ctx)
+    history_list = core.chat.get_session(session_id)
+    
+    if not history_list:
+        await ctx.respond(f"No history found for session `{session_id}`.", ephemeral=True)
+        return
+
+    # Formatter
+    lines = [f"Chat History for Session: {session_id}", "="*40, ""]
+    for i, exchange in enumerate(history_list):
+        lines.append(f"--- Exchange {i+1} ---")
+        
+        # Helper to extract text from Content object or Dict
+        def get_text(content_obj):
+            text = ""
+            try:
+                # Case A: Object with parts
+                if hasattr(content_obj, "parts"):
+                    for part in content_obj.parts:
+                        if hasattr(part, "text") and part.text:
+                            text += part.text
+                # Case B: Dict (if persisted/loaded as dict)
+                elif isinstance(content_obj, dict):
+                     # Check 'parts' list
+                     if "parts" in content_obj:
+                         for part in content_obj["parts"]:
+                             # part could be dict or obj
+                             if isinstance(part, dict):
+                                 text += part.get("text", "")
+                             elif hasattr(part, "text"):
+                                 text += part.text
+            except Exception: 
+                text = "[Error extracting content]"
+            return text.strip()
+
+        user_text = get_text(exchange.get("user_content"))
+        model_text = get_text(exchange.get("model_content"))
+        
+        lines.append(f"User: {user_text}")
+        lines.append(f"Orion: {model_text}")
+        lines.append("-" * 20 + "\n")
+
+    full_output = "\n".join(lines)
+    
+    # Save to data directory
+    filename = f"history_{session_id}.txt"
+    filepath = os.path.join("data", filename)
+    
+    try:
+        # Write to local file
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(full_output)
+            
+        # Send the file
+        file_to_send = discord.File(filepath, filename=filename)
+        await ctx.respond(
+            content=f"History saved to `{filepath}` and attached below.",
+            file=file_to_send,
+            ephemeral=True
+        )
+    except Exception as e:
+        await ctx.respond(f"Error saving/sending history file: {e}", ephemeral=True)
+
 @bot.command(name="shutdown", description="Owner only shutdown/restart.")
 async def shutdown(ctx, mode: str = 'poweroff'):
     if str(ctx.author.id) != os.getenv("DISCORD_OWNER_ID"): return
@@ -246,19 +313,40 @@ async def on_message(message: discord.Message):
         file_check = []
         if message.attachments:
             for attachment in message.attachments:
-                if attachment.content_type and attachment.content_type.startswith('text/'):
-                     # Simple text read logic
+                ctype = attachment.content_type or ""
+                
+                # A. Text Files (Inject Content + Metadata)
+                is_text = ctype.startswith('text/') or ctype in ['application/json', 'application/xml']
+                is_text_ext = attachment.filename.lower().endswith(config.TEXT_FILE_EXTENSIONS)
+                
+                if is_text or is_text_ext:
                      if attachment.size <= MAX_TEXT_FILE_SIZE:
                          try:
                              content = (await attachment.read()).decode('utf-8')
                              user_prompt += f"\n\n--- FILE: {attachment.filename} ---\n{content}"
-                         except: pass
-                else:
-                    # Upload to Core
+                             
+                             # Create Metadata Object for DB tracking
+                             from types import SimpleNamespace
+                             text_file_obj = SimpleNamespace(
+                                 display_name=attachment.filename,
+                                 mime_type=ctype,
+                                 size_bytes=attachment.size,
+                                 uri="text://injected" # Marker for Core to NOT upload
+                             )
+                             file_check.append(text_file_obj)
+                         except: 
+                             user_prompt += f"\n[System: Could not read text file '{attachment.filename}']"
+                
+                # B. Supported Media (Upload to File API)
+                elif ctype.startswith(('image/', 'audio/', 'video/', 'application/pdf')):
                     try: 
-                        f = core.upload_file(await attachment.read(), attachment.filename, attachment.content_type or "")
+                        f = core.upload_file(await attachment.read(), attachment.filename, ctype)
                         if f: file_check.append(f)
                     except: pass
+                
+                # C. Unsupported (Notify AI)
+                else:
+                    user_prompt += f"\n[System: User attached unsupported file '{attachment.filename}' (Type: {ctype}). File was discarded.]"
 
         # 3. Initial "Thinking" Message
         response_msg = await message.reply("*[Orion is thinking...]*")

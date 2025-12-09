@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import json
 import pickle
 from main_utils import config, main_functions as functions
+from main_utils.chat_object import ChatObject
 from system_utils import orion_replay, run_startup_diagnostics, generate_manifests, orion_tts
 
 # --- TTS Integration ---
@@ -42,7 +43,6 @@ class OrionCore:
     
     def __init__(self, model_name: str = config.AI_MODEL, persona: str = "default"):
         """Initializes the unified AI 'brain', including session management."""
-        self.MAX_HISTORY_EXCHANGES = 30 # Set the hard limit for conversation history
         self.restart_pending = False
         # --- MODIFICATION: Make the core instance accessible to tools ---
         config.ORION_CORE_INSTANCE = self
@@ -118,14 +118,14 @@ class OrionCore:
         )
         self.cached_content = self.cache_manager.get_or_create_cache()
 
-        if not self._load_state_on_restart():
-            self.sessions: dict[str, list] = {}
+        # --- ChatObject Integration ---
+        self.chat = ChatObject()
+        self.sessions = self.chat.sessions # Alias for compatibility
         
-        # NEW: Track function calling mode per session
-        self.session_modes: dict[str, str] = {}  # session_id -> "cache" | "function"
-        self.default_mode = "cache"  # Default to cost-optimized mode
+        if not self.chat.load_state_on_restart():
+             pass 
             
-        print(f"--- Orion Core is online and ready. Managing {len(self.sessions)} session(s). ---")
+        print(f"--- Orion Core is online and ready. Managing {len(self.chat.sessions)} session(s). ---")
         
     def _read_all_instructions(self) -> str:
         """Reads and concatenates all specified instruction files."""
@@ -144,7 +144,7 @@ class OrionCore:
         Takes a session ID, retrieves the custom ExchangeDict history, and flattens
         it into the simple list[Content] format required by the GenAI API.
         """
-        chat_session = self.sessions.get(session_id, [])
+        chat_session = self.chat.get_session(session_id)
         contents_to_send = []
         for exchange in chat_session:
             if exchange.get("user_content"):
@@ -187,31 +187,7 @@ class OrionCore:
 
     def _get_session(self, session_id: str, history: list = []) -> list:
         """Retrieves an existing chat session or creates a new one."""
-        if session_id not in self.sessions:
-            print(f"--- Creating new session for ID: {session_id} ---")
-            
-            self.sessions[session_id] = history
-        return self.sessions[session_id]
-
-    def get_session_mode(self, session_id: str) -> str:
-        """Get current mode for session. Returns 'cache' or 'function'."""
-        return self.session_modes.get(session_id, self.default_mode)
-
-    def set_session_mode(self, session_id: str, mode: str) -> str:
-        """
-        Set mode for session. 
-        Args:
-            mode: Either 'cache' or 'function'
-        Returns:
-            Confirmation message
-        """
-        if mode not in ["cache", "function"]:
-            return f"Error: Invalid mode '{mode}'. Must be 'cache' or 'function'."
-        
-        self.session_modes[session_id] = mode
-        mode_name = "Context Caching" if mode == "cache" else "Function Calling"
-        print(f"[Mode Switch] Session '{session_id}' set to: {mode_name}")
-        return f"Session mode set to: {mode_name}"
+        return self.chat.get_session(session_id, history)
 
     def trigger_instruction_refresh(self, full_restart: bool = False):
         """Performs a full hot-swap. It reloads instructions AND reloads the tools
@@ -251,63 +227,28 @@ class OrionCore:
         return f'Refresh Complete. Tools and Instructions are all up to date.'
 
     def save_state_for_restart(self) -> bool:
-        """Serializes the comprehensive history of all active sessions to the database."""
-        print("--- Saving session states for system restart... ---")
-        try:
-            with sqlite3.connect(functions.config.DB_FILE) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM restart_state") # Clear any old state
-                
-                records_to_save = []
-                for session_id, history in self.sessions.items():
-                    history_blob = pickle.dumps(history)
-                    #excluded_ids_list = self.session_excluded_ids.get(session_id, [])
-                    #excluded_ids_blob = pickle.dumps(excluded_ids_list)
-                    records_to_save.append((session_id, history_blob))
-                
-                cursor.executemany(
-                    "INSERT INTO restart_state (session_id, history_blob) VALUES (?, ?)",
-                    records_to_save
-                )
-                conn.commit()
-                print(f"  - State for {len(records_to_save)} session(s) saved to database.")
-                return True
-        except Exception as e:
-            print(f"  - ERROR: Failed to save state for restart: {e}")
-            return False
+        return self.chat.save_state_for_restart()
 
     def _load_state_on_restart(self) -> bool:
-        """Deserializes session histories from the database and rebuilds sessions."""
-        try:
-            with sqlite3.connect(functions.config.DB_FILE) as conn:
-                cursor = conn.cursor()
-                # Note the simpler SQL query
-                cursor.execute("SELECT session_id, history_blob FROM restart_state")
-                rows = cursor.fetchall()
-                if not rows:
-                    return False # No state to load
+        return self.chat.load_state_on_restart()
+    
+    def execute_restart(self):
+         """Executes a hard restart of the script."""
+         # Re-uses logic compatible with main_utils
+         python = sys.executable
+         os.execl(python, python, *sys.argv)
+    
+    def get_session_mode(self, session_id: str) -> str:
+        return self.chat.get_session_mode(session_id)
 
-                print("--- Restart state detected in database. Loading sessions... ---")
-                self.sessions = {}
-                # self.session_excluded_ids is gone
-                for session_id, history_blob in rows:
-                    history = pickle.loads(history_blob)
-                    self._get_session(session_id, history=history)
-
-                cursor.execute("DELETE FROM restart_state") # Clean up the state table
-                conn.commit()
-                print(f"  - Successfully loaded state for {len(self.sessions)} session(s).")
-                return True
-        except Exception as e:
-            print(f"  - ERROR: Failed to load restart state: {e}. Starting with a clean slate.")
-            # Attempt to clean up a potentially corrupted table
-            try:
-                with sqlite3.connect(functions.config.DB_FILE) as conn:
-                    conn.execute("DELETE FROM restart_state")
-                    conn.commit()
-            except Exception as cleanup_e:
-                print(f"  - CRITICAL: Failed to even clean up restart_state table: {cleanup_e}")
-            return False
+    def set_session_mode(self, session_id: str, mode: str) -> str:
+        return self.chat.set_session_mode(session_id, mode)
+    
+    def list_sessions(self) -> list:
+        return self.chat.list_sessions()
+    
+    def manage_session_history(self, session_id: str, count: int = 0, index: int = -1) -> str:
+        return self.chat.manage_session_history(session_id, count, index)
 
     def _vision_file_handler(self, file_path: str):
         """Callback function for the replay_buffer's file watcher."""
@@ -377,7 +318,7 @@ class OrionCore:
         formatted_op_protocol = self._format_vdb_results_for_context(operational_protocols_results_raw, "Operational Protocols")
         
         # The formatted string for the AI's context
-        formatted_vdb_context = f"{formatted_deep_mem}\n{formatted_long_term}\n{formatted_op_protocol}".strip()
+        formatted_vdb_context = f"{formatted_deep_mem}\\n{formatted_long_term}\\n{formatted_op_protocol}".strip()
 
         # Extract only the source_ids from the VDB results to be archived.
         context_ids_for_db = []
@@ -387,7 +328,7 @@ class OrionCore:
                 if result_data.get('ids') and result_data['ids'][0]:
                     context_ids_for_db.extend(result_data['ids'][0])
 
-        vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
+        vdb_response = f'[Relevant Semantic Information from Vector DB restricted to only the Memory Entries for user: {user_id}:\\n{formatted_vdb_context}]' if formatted_vdb_context else ""
         
         # Format User Content
         data_envelope = {
@@ -469,7 +410,7 @@ class OrionCore:
                 agent_analysis_text = self.file_processing_agent.run(file_check, context=data_envelope)
                 
                 # We inject this analysis into the prompt instead of the raw file handles
-                analysis_context = f"\n\n[System: The user attached {len(file_check)} file(s). The File Processing Agent analyzed them and provided this context:]\n{agent_analysis_text}"
+                analysis_context = f"\\n\\n[System: The user attached {len(file_check)} file(s). The File Processing Agent analyzed them and provided this context:]\\n{agent_analysis_text}"
                 
                 # Update the final text part to include this analysis
                 # We need to reconstruct the text part since we can't easily append to the object
@@ -498,105 +439,73 @@ class OrionCore:
 
         return (contents_to_send, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db)
 
-    def _finalize_exchange(self, session_id, user_id, user_name, user_prompt, response_text, token_count, attachments_for_db, new_tool_turns, context_ids_for_db, user_content_for_db, model_content_obj):
+    def _get_generation_config(self, session_id: str, stream: bool = True):
         """
-        Internal helper: Handles post-processing, database archival, and history management.
-        Returns boolean indicating if a restart is pending.
-        """
-
-        # 2. Archive to Database
-        new_db_id = self._archive_exchange_to_db(
-            session_id,
-            user_id,
-            user_name,
-            user_prompt,
-            response_text, 
-            attachments_for_db,
-            token_count,
-            new_tool_turns,
-            json.dumps(context_ids_for_db)
-        )
-
-        # 3. Update Session History
-        new_exchange = {
-            "user_content": user_content_for_db,
-            "tool_calls": new_tool_turns,
-            "model_content": model_content_obj,
-            "db_id": new_db_id,
-            "token_count": token_count
-        }
-        
-        chat_session = self._get_session(session_id)
-        chat_session.append(new_exchange)
-        
-        # 4. Enforce History Limit
-        total_exchanges = len(chat_session)
-        if total_exchanges > self.MAX_HISTORY_EXCHANGES:
-            count_to_remove = 5
-            print(f"  - History limit reached. Truncating {count_to_remove} oldest exchange(s)...")
-            self.manage_session_history(session_id, count=count_to_remove, index=0)
-
-        print(f"----- Response Generated ({token_count} tokens) -----")
-        
-        should_restart = self.restart_pending
-        if self.restart_pending:
-            self.restart_pending = False 
-
-        return should_restart
-
-    def _get_generation_config(self, session_id: str, stream: bool = False):
-        """
-        Returns appropriate GenerateContentConfig based on session mode.
-        Cache mode: Uses cached content, NO tools
-        Function mode: Uses system instructions + tools, NO cache
+        Dynamically returns the generation config based on the session mode.
+        If mode is 'cache', we do NOT provide tools.
+        If mode is 'function', we provide tools.
         """
         mode = self.get_session_mode(session_id)
         
-        # Shared config parameters
-        # Shared config parameters
-        thinking_level = types.ThinkingLevel.LOW if stream else types.ThinkingLevel.HIGH
-        safety_settings = [
-            types.SafetySetting(
-                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH
-            )
-        ]
-        
+        # Config for Context Caching Mode (No Tools)
         if mode == "cache":
-            # CACHE MODE: Use cached content, NO tools
-            print(f"[Gen Config] Using CACHE mode (tools disabled)")
-            return types.GenerateContentConfig(
-                cached_content=self.cached_content.name,
-                thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
-                safety_settings=safety_settings
-            )
+            # Just send standard config
+            if config.VERTEX:
+                 return types.GenerateContentConfig(
+                    max_output_tokens=8192,
+                    temperature=0.9,
+                    response_modalities=["TEXT"], 
+                    system_instruction=self.cached_content # <--- Pass valid CachedContent object
+                 )
+            else:
+                 return types.GenerateContentConfig(
+                    max_output_tokens=8192,
+                    temperature=0.9,
+                    system_instruction=self.cached_content 
+                 )
+                 
+        # Config for Function Calling Mode (Tools)
         else:
-            # FUNCTION MODE: Use tools, NO cache
-            print(f"[Gen Config] Using FUNCTION mode (tools enabled, no cache)")
-            return types.GenerateContentConfig(
-                system_instruction=self.current_instructions,
-                tools=self.tools,
-                thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
-                safety_settings=safety_settings
-            )
+             # We can't reuse the CacheContent object if we want standard tools?
+             # Actually, Gemini API says tools and cache are mutually exclusive sometimes
+             # or imply distinct billing.
+             # But here we simply WON'T pass the cached_content object to system_instruction
+             # implying standard context window usage.
+             if config.VERTEX:
+                 return types.GenerateContentConfig(
+                    tools=self.tools,
+                    automatic_function_calling={'disable': False, 'maximum_remote_calls': 10},
+                    max_output_tokens=8192,
+                    temperature=0.9,
+                    response_modalities=["TEXT"],
+                    system_instruction=self.current_instructions
+                 )
+             else:
+                 return types.GenerateContentConfig(
+                    tools=self.tools,
+                    automatic_function_calling={'disable': False, 'maximum_remote_calls': 10},
+                    max_output_tokens=8192,
+                    temperature=0.9,
+                    system_instruction=self.current_instructions
+                 )
 
     def _generate_full_response(self, contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db):
         """
-        Internal helper: Handles non-streaming generation.
+        Internal helper: Handles non-streaming generation (for quick tool calls).
         """
         self.current_turn_context = data_envelope
-        print("----- Sending Prompt to Orion (Non-Streaming) . . . -----")
+        print("----- Sending Prompt to Orion (Full Response) . . . -----")
         
         try:
             response = self.client.models.generate_content(
-                model=f'{self.model_name}',
+                model=self.model_name,
                 contents=contents_to_send,
                 config=self._get_generation_config(session_id, stream=False)
             )
-            
-            self.current_turn_context = None # Clear context
 
-            # Handle Tool Calls
+            self.current_turn_context = None
+
+            # Handle Tool Calls (Automatic by SDK, but we capture for logs)
             new_tool_turns = []
             if response.automatic_function_calling_history:
                 all_tool_turns_from_api = [
@@ -614,7 +523,9 @@ class OrionCore:
             # Extract Text and Tokens
             response_content = response.candidates[0].content
             token_count = response.usage_metadata.total_token_count if response.usage_metadata else 0
-            print(response.usage_metadata.cached_content_token_count if response.usage_metadata else 0)
+            if response.usage_metadata:
+                 print(f"Token Count: {token_count} (Cached: {response.usage_metadata.cached_content_token_count})")
+            
             final_text = ""
             if response_content:
                 for part in response_content.parts:
@@ -686,7 +597,9 @@ class OrionCore:
                 if chunk.usage_metadata:
                     token_count = chunk.usage_metadata.total_token_count
                     
-            print(last_chunk.usage_metadata.cached_content_token_count)
+            if last_chunk and last_chunk.usage_metadata:
+                 print(last_chunk.usage_metadata.cached_content_token_count)
+            
             if config.VOICE:
                 orion_tts.flush_stream()
                 
@@ -741,6 +654,10 @@ class OrionCore:
         try:
             # Yield initial status
             yield {"type": "status", "content": "Initializing Request..."}
+            
+            # --- Smart Truncation Checking via ChatObject ---
+            # Enforce 1M token limit for Pro
+            self.chat.enforce_token_limit(session_id, token_limit=1000000)
 
             # 1. Prepare Data (This includes VDB lookups and File Uploads)
             # We yield a status before this potentially blocking call
@@ -807,101 +724,36 @@ class OrionCore:
                     output_lines.append(f"  - Metadata: {meta_summary}")
                 output_lines.append(f"  - Content: \"{doc}\"")
 
-            return "\n".join(output_lines)
+            return "\\n".join(output_lines)
 
         except (json.JSONDecodeError, IndexError, KeyError, TypeError):
             # If parsing fails, return an empty string to avoid polluting the context.
             return ""
 
-    def _archive_exchange_to_db(self, session_id, user_id, user_name, prompt, response, attachment, token_count, function_call, vdb_context):
+    def _finalize_exchange(self, session_id, user_id, user_name, user_prompt, response_text, token_count, attachments_for_db, new_tool_turns, context_ids_for_db, user_content_for_db, model_content_obj):
         """
-        Processes a prompt using automatic function calling and archives the result.
+        Internal helper: Handles post-processing, database archival, and history management.
+        Returns boolean indicating if a restart is pending.
         """
-        """Writes the complete conversational exchange to the database."""
-        try:
-            # --- Prepare data for archival using the high-level execute_write tool ---
-            # This tool handles synchronized writes to both SQLite and the Vector DB.
-            
-            # 1. Prepare the function calls as a JSON string for the database.
-            function_calls_json_list = [content_obj.model_dump_json() for content_obj in function_call] if function_call else []
-            function_calls_json_string = f"[{', '.join(function_calls_json_list)}]"
-
-            # 2. Construct the data payload for the 'deep_memory' table.
-            data_payload = {
-                "session_id": session_id,
-                "user_id": user_id,
-                "user_name": user_name,
-                "timestamp": int(datetime.now(timezone.utc).timestamp()),
-                "prompt_text": prompt,
-                "response_text": response,
-                "attachments_metadata": json.dumps(attachment),
-                "token": token_count,
-                "function_calls": function_calls_json_string,
-                "vdb_context": vdb_context,
-                "model_source": self.model_name  # NEW: Traceability
-            }
-            
-            print(f"  - [DEBUG] Archiving exchange to deep_memory. Context used: {vdb_context}")
-
-            # 3. Call the high-level orchestrator to perform the synchronized write.
-            result = functions.execute_write(table="deep_memory", operation="insert", user_id=user_id, data=data_payload)
-            print(f" -> Archival result: {result}")
-            
-            if "Success" in result:
-                latest_id_result = functions.execute_sql_read(query="SELECT id FROM deep_memory ORDER BY id DESC LIMIT 1")
-                latest_id_data = json.loads(latest_id_result)
-                if latest_id_data:
-                    newest_id = str(latest_id_data[0]['id'])
-                    print(f"  - Returning new DB ID for session '{session_id}': {newest_id}")
-                    return newest_id # <-- MODIFICATION
-            
-            return None # <-- MODIFICATION
-
-        except Exception as e:
-            print(f"ERROR: An unexpected error occurred during archival for user {user_id}: {e}")
-            return None # <-- MODIFICATION
-
-    # --- MODIFICATION: Replaced with new unified function as per user spec ---
-    def manage_session_history(self, session_id: str, count: int, index: int = 0):
-        """
-        Manages the active chat session history using count and index.
-        - Deletes 'count' items starting from 'index'.
-        - If 'index' is 0, it deletes the 'count' oldest.
-        - If 'count' is >= (total - index), it truncates from 'index' to the end.
+        # Archive via ChatObject
+        new_db_id = self.chat.archive_exchange(
+            session_id=session_id,
+            user_id=user_id,
+            user_name=user_name,
+            prompt_text=user_prompt,
+            response_text=response_text,
+            attachments=attachments_for_db,
+            token_count=token_count,
+            vdb_context=json.dumps(context_ids_for_db), # Serialize for storage
+            model_source=(self.local_model if None else self.model_name), # Fixme: No self.local_model access? OrionPro uses API model
+            user_content_obj=user_content_for_db,
+            model_content_obj=model_content_obj,
+            tool_calls_list=new_tool_turns
+        )
         
-        Args:
-            session_id: The ID of the session to manage.
-            count: The number of exchanges to remove.
-            index: The starting index to remove from. Defaults to 0.
-        """
-        if session_id not in self.sessions:
-            print(f"--- manage_session_history: No session found for ID {session_id} ---")
-            return "Error: No session found."
-        
-        if count <= 0:
-            return "No action taken: Count must be > 0."
-        if index < 0:
-            return "No action taken: Index must be >= 0."
+        print(f"----- Response Generated ({token_count} tokens) -----")
+        return self.restart_pending
 
-        chat_session = self.sessions[session_id]
-        total_exchanges = len(chat_session)
-        
-        if index >= total_exchanges:
-            return f"No action taken: Index {index} is out of bounds."
-
-        # Your logic: If count is "too large", clamp it to "delete until end"
-        if (index + count) > total_exchanges:
-            count = total_exchanges - index # This clamps it
-            print(f"--- manage_session_history: Count clamped to {count} (delete until end).")
-
-        print(f"--- manage_session_history: Deleting {count} exchange(s) starting from index {index}. ---")
-        
-        # This single line handles all cases:
-        self.sessions[session_id] = chat_session[:index] + chat_session[index+count:]
-        
-        return f"Success: {count} exchange(s) removed."
-    
-# ... inside the OrionCore class ...
     def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str):
         """
         Uploads a file-like object to the GenAI File API via the client.
@@ -950,13 +802,6 @@ class OrionCore:
         except Exception as e:
             print(f"ERROR: File API upload failed for '{display_name}'. Error: {e}")
             return None
-
-    def list_sessions(self) -> list[str]:
-        """
-        Returns a list of all active session IDs currently
-        being managed by the core.
-        """
-        return list(self.sessions.keys())
     
     def shutdown(self):
         """Performs a clean shutdown."""
