@@ -397,44 +397,55 @@ async def on_message(message: discord.Message):
         # 2. Prepare Prompt
         user_prompt = message.clean_content.replace(f"@{bot.user.name}", "").strip()
         
+        # --- Context Buffer Retrieval ---
+        recent_context = ""
+        channel_id = message.channel.id
+        if channel_id in recent_messages_buffer:
+            # Get the deque
+            buffer = recent_messages_buffer[channel_id]
+            
+            # Convert to list and filter out the CURRENT triggering message if it somehow got in (unlikely due to order, but good safety)
+            # Also filter out any messages that mirror the current one to be safe.
+            # Actually, we process the buffer retrieval BEFORE appending the current message? 
+            # OR we append current message to buffer? 
+            # LOGIC: The current mention message should NOT be in the "recent context" (it's the active prompt).
+            # So we grab buffer content first.
+            
+            # Format the context
+            context_lines = ["[Recent Channel Activity (Last 30 Messages)]"]
+            for msg_data in buffer:
+                # msg_data = {timestamp, author_name, author_id, content, attachments[]}
+                ts = msg_data['timestamp'].strftime("%H:%M:%S")
+                meta = f"[{ts}] {msg_data['author_name']} (ID: {msg_data['author_id']}):"
+                content = msg_data['content']
+                
+                # Attachments
+                if msg_data['attachments']:
+                    att_str = " ".join([f"[Attachment: {a['filename']} | Type: {a['content_type']} | Size: {a['size']}]" for a in msg_data['attachments']])
+                    content += f" {att_str}"
+                
+                context_lines.append(f"{meta} {content}")
+            
+            if len(context_lines) > 1: # Only if we have history
+                recent_context = "\n".join(context_lines) + "\n\n[Current Message]"
+        
         # File Handling
         file_check = []
         if message.attachments:
             for attachment in message.attachments:
                 ctype = attachment.content_type or ""
                 
-                # A. Text Files (Inject Content + Metadata)
-                is_text = ctype.startswith('text/') or ctype in ['application/json', 'application/xml']
-                is_text_ext = attachment.filename.lower().endswith(config.TEXT_FILE_EXTENSIONS)
-                
-                if is_text or is_text_ext:
-                     if attachment.size <= MAX_TEXT_FILE_SIZE:
-                         try:
-                             content = (await attachment.read()).decode('utf-8')
-                             user_prompt += f"\n\n--- FILE: {attachment.filename} ---\n{content}"
-                             
-                             # Create Metadata Object for DB tracking
-                             from types import SimpleNamespace
-                             text_file_obj = SimpleNamespace(
-                                 display_name=attachment.filename,
-                                 mime_type=ctype,
-                                 size_bytes=attachment.size,
-                                 uri="text://injected" # Marker for Core to NOT upload
-                             )
-                             file_check.append(text_file_obj)
-                         except: 
-                             user_prompt += f"\n[System: Could not read text file '{attachment.filename}']"
-                
-                # B. Supported Media (Upload to File API)
-                elif ctype.startswith(('image/', 'audio/', 'video/', 'application/pdf')):
-                    try: 
-                        f = core.upload_file(await attachment.read(), attachment.filename, ctype)
-                        if f: file_check.append(f)
-                    except: pass
-                
-                # C. Unsupported (Notify AI)
-                else:
-                    user_prompt += f"\n[System: User attached unsupported file '{attachment.filename}' (Type: {ctype}). File was discarded.]"
+                # Unified File Handling via Core
+                try: 
+                    file_bytes = await attachment.read()
+                    # Offload blocking upload to thread to prevent heartbeat timeout
+                    f = await bot.loop.run_in_executor(None, core.upload_file, file_bytes, attachment.filename, ctype)
+                    if f: 
+                        file_check.append(f)
+                    else:
+                        user_prompt += f"\n[System: User attached file '{attachment.filename}' but it failed to process.]"
+                except Exception as e:
+                    user_prompt += f"\n[System: Error reading attachment '{attachment.filename}': {e}]"
 
         # 3. Initial "Thinking" Message
         response_msg = await message.reply("*[Orion is thinking...]*")
@@ -447,7 +458,8 @@ async def on_message(message: discord.Message):
                 file_check=file_check,
                 user_id=str(message.author.id),
                 user_name=message.author.name,
-                stream=use_stream
+                stream=use_stream,
+                recent_context=recent_context # <--- NEW ARGUMENT
             )
         
         generator = await asyncio.to_thread(blocking_get_gen)

@@ -16,6 +16,7 @@ import json
 import pickle
 from main_utils import config, main_functions as functions
 from main_utils.chat_object import ChatObject
+from main_utils.file_manager import UploadFile
 from system_utils import orion_replay, run_startup_diagnostics, generate_manifests, orion_tts
 
 # --- TTS Integration ---
@@ -26,7 +27,7 @@ from system_utils import orion_replay, run_startup_diagnostics, generate_manifes
 
 # Define instruction files for clarity
 INSTRUCTIONS_FILES = [
-    #'Primary_Directive.md', 
+    'Primary_Directive.md', 
     #'Homebrew_Compendium.md',
     #'General_Prompt_Optimizer.md',
     #'DND_Handout.md',
@@ -88,6 +89,14 @@ class OrionCore:
             self.client = genai.Client(vertexai=True, project=os.getenv("GOOGLE_CLOUD_PROJECT_ID"), location="global")
         else:
             self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        
+        # --- File Manager Initialization ---
+        self.file_manager = UploadFile(
+            core_backend="api", # Pro Core is always API based (Vertex or Standard)
+            client=self.client,
+            file_processing_agent=None # Will be lazy loaded if Vertex
+        )
+        
         self.tools = self._load_tools()
         self.tools.append(self.trigger_instruction_refresh)
         
@@ -107,16 +116,26 @@ class OrionCore:
             self.current_instructions += f"\n\n---\n\n{voice_notification}"
 
         # --- Initialize Context Caching ---
-        from system_utils.gemini_cache_manager import GeminiCacheManager
-        self.cache_manager = GeminiCacheManager(
-            client=self.client,
-            db_file=functions.config.DB_FILE,
-            model_name=self.model_name,
-            system_instructions=self.current_instructions,
-            persona=self.persona
-            # Tools NOT in cache - passed per-request based on mode
-        )
-        self.cached_content = self.cache_manager.get_or_create_cache()
+        self.cache_manager = None
+        self.cached_content = None
+        
+        if config.CONTEXT_CACHING:
+            from system_utils.gemini_cache_manager import GeminiCacheManager
+            self.cache_manager = GeminiCacheManager(
+                client=self.client,
+                db_file=functions.config.DB_FILE,
+                model_name=self.model_name,
+                system_instructions=self.current_instructions,
+                persona=self.persona
+                # Tools NOT in cache - passed per-request based on mode
+            )
+            try:
+                self.cached_content = self.cache_manager.get_or_create_cache()
+            except Exception as e:
+                print(f"WARNING: Cache initialization failed: {e}. Proceeding without cache.")
+                self.cached_content = None
+        else:
+            print("--- Context Caching DISABLED by config ---")
 
         # --- ChatObject Integration ---
         self.chat = ChatObject()
@@ -220,8 +239,9 @@ class OrionCore:
         self.current_instructions = self._read_all_instructions()
         
         # --- Invalidate and recreate cache with new instructions ---
-        self.cache_manager.system_instructions = self.current_instructions
-        self.cached_content = self.cache_manager.invalidate_and_recreate()
+        if self.cache_manager:
+            self.cache_manager.system_instructions = self.current_instructions
+            self.cached_content = self.cache_manager.invalidate_and_recreate()
         
         print(f"--- HOT-SWAP COMPLETE: {len(self.sessions)} session(s) migrated. Cache recreated. ---")
         return f'Refresh Complete. Tools and Instructions are all up to date.'
@@ -354,7 +374,7 @@ class OrionCore:
             )
         else:
             mode_msg = (
-                "[OPERATIONAL MODE: Function Calling] All 45 tools are available. "
+                "[OPERATIONAL MODE: Function Calling] All tools are available. "
                 "Automatic Function Calling is ENABLED. Context caching is disabled "
                 "in this mode for compatibility."
             )
@@ -382,54 +402,69 @@ class OrionCore:
         if file_check: 
             for file in file_check:
                 print(f"  - File '{file.display_name}' added to prompt for AI processing.")
+                
+                # Normalize 'name' vs 'uri' access
+                file_uri = getattr(file, 'name', getattr(file, 'uri', 'unknown_uri'))
+                
                 file_metadata = {
-                    "file_ref": file.name,
+                    "file_ref": file_uri,
                     "file_name": file.display_name,
                     "mime_type": file.mime_type,
-                    "size_bytes": file.size_bytes
+                    "size_bytes": getattr(file, 'size_bytes', 0)
                 }
                 attachments_for_db.append(file_metadata)
             print(f"--- Processed a total of {len(file_check)} files ---")
         user_content_for_db = types.UserContent(parts=[types.Part.from_text(text=json.dumps(data_envelope, indent=2))])
         
         # Finalize User Content Structure
+        # Finalize User Content Structure
         data_envelope["vdb_context"] = vdb_response
-        final_text_part = types.Part.from_text(text=json.dumps(data_envelope, indent=2))
+        final_text_part_text = json.dumps(data_envelope, indent=2)
         
-        # The final user turn consists of file parts + consolidated text part
+        # --- MODIFICATION: Handle Injected Text Content ---
+        # Some files (code, logs OR Vertex Analysis) are now returned as objects with 'text_content'
+        injected_text_buffers = []
+        api_part_files = []
+        file_injections = []
         
-        # --- MODIFICATION: Agent Pre-Processing for VertexAI ---
-        if config.VERTEX and file_check:
-            print("--- [System] VertexAI detected with files. Engaging FileProcessingAgent for pre-analysis... ---")
-            try:
-                if self.file_processing_agent is None:
-                    from agents.file_processing_agent import FileProcessingAgent
-                    self.file_processing_agent = FileProcessingAgent(self)
+        for f in file_check:
+            if hasattr(f, 'text_content'):
+                # It's an injected text file or Analysis
+                # We inject it into the prompt text
+                header = f"\n\n--- FILE: {f.display_name} ({f.mime_type}) ---\n"
                 
-                # The agent analyzes the files and returns a text description
-                agent_analysis_text = self.file_processing_agent.run(file_check, context=data_envelope)
+                # If it's an analysis, maybe add a specific header?
+                if getattr(f, 'is_analysis', False):
+                    header = f"\n\n--- FILE ANALYSIS: {f.display_name} ({f.mime_type}) ---\n[System: The following is an AI analysis of the file.]\n"
                 
-                # We inject this analysis into the prompt instead of the raw file handles
-                analysis_context = f"\\n\\n[System: The user attached {len(file_check)} file(s). The File Processing Agent analyzed them and provided this context:]\\n{agent_analysis_text}"
+                content_block = f"{header}{f.text_content}"
+                injected_text_buffers.append(content_block)
                 
-                # Update the final text part to include this analysis
-                # We need to reconstruct the text part since we can't easily append to the object
-                current_text = json.dumps(data_envelope, indent=2)
-                combined_text = current_text + analysis_context
-                final_text_part = types.Part.from_text(text=combined_text)
-                
-                # For Vertex, we DO NOT send the file handles, only the text analysis
-                final_part = [final_text_part]
-                print("--- [System] File analysis complete. Context injected. Raw files detached from Vertex prompt. ---")
-                
-            except Exception as e:
-                print(f"ERROR: File Processing Agent failed: {e}")
-                # Fallback? If we send files to Vertex it might crash, but let's try or just send text
-                final_part = [final_text_part] # Send text only to be safe
-                data_envelope["system_notifications"].append(f"[System Error: File analysis failed: {e}]")
-        else:
-            # Standard GenAI behavior: Attach files directly
-            final_part = file_check + [final_text_part]
+                # Add to formal data envelope list for frontend/logging
+                file_injections.append({
+                    "name": f.display_name,
+                    "mime": f.mime_type,
+                    "content_preview": f.text_content[:200] + "..." if len(f.text_content) > 200 else f.text_content
+                })
+            else:
+                # It's a real API file object (Video/PDF/Image)
+                api_part_files.append(f)
+
+        # Update Envelope with specific injections list
+        if file_injections:
+            data_envelope["file_injections"] = file_injections
+            # Re-dump the envelope to include the new field
+            final_text_part_text = json.dumps(data_envelope, indent=2)
+
+        # Append injected text to the main prompt text
+        if injected_text_buffers:
+             final_text_part_text += "".join(injected_text_buffers)
+
+        final_text_part = types.Part.from_text(text=final_text_part_text)
+        
+        # Standard GenAI behavior: Attach API files directly + Text Part
+        # (Vertex Analysis objects were filtered into injected_text_buffers, so they won't be in api_part_files)
+        final_part = api_part_files + [final_text_part]
 
         final_content = types.UserContent(parts=final_part)
         
@@ -537,7 +572,8 @@ class OrionCore:
                 orion_tts.speak(final_text)
 
             # Update cache TTL (rolling heartbeat)
-            self.cache_manager.update_cache_ttl(self.cached_content.name)
+            if self.cache_manager and self.cached_content:
+                self.cache_manager.update_cache_ttl(self.cached_content.name)
 
             # Finalize
             should_restart = self._finalize_exchange(
@@ -606,7 +642,8 @@ class OrionCore:
             self.current_turn_context = None
 
             # Update cache TTL (rolling heartbeat)
-            self.cache_manager.update_cache_ttl(self.cached_content.name)
+            if self.cache_manager:
+                self.cache_manager.update_cache_ttl(self.cached_content.name)
 
             # Reconstruct Model Content (Simplified for Stream)
             model_content_obj = types.Content(
@@ -756,52 +793,16 @@ class OrionCore:
 
     def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str):
         """
-        Uploads a file-like object to the GenAI File API via the client.
-        Returns a File handle object on success, or an error string on failure.
+        Delegates upload logic to the centralized File Manager.
         """
-        # --- MODIFICATION: Delegate to Agent if on VertexAI ---
-        if config.VERTEX:
-            try:
-                if self.file_processing_agent is None:
-                    from agents.file_processing_agent import FileProcessingAgent
-                    self.file_processing_agent = FileProcessingAgent(self)
-                
-                print(f"  - [System] VertexAI detected. Delegating upload of '{display_name}' to FileProcessingAgent...")
-                return self.file_processing_agent.upload_file(file_bytes, display_name, mime_type)
-            except Exception as e:
-                print(f"ERROR: Failed to delegate upload to agent: {e}")
-                return None
-        
-        # --- Original Logic for GenAI SDK ---
-        try:
-            print(f"  - Uploading file '{display_name}' to the File API...")
-            # 1. Upload the file
-            file_handle = self.client.files.upload(
-                file=io.BytesIO(file_bytes),
-                config=types.UploadFileConfig(
-                    mime_type=mime_type,
-                    display_name=display_name
-                )
-            )
-            print(f"  - Upload successful. File Name: {file_handle.name}. Waiting for processing...")
-
-            # 2. Poll for ACTIVE state
-            while file_handle.state.name == "PROCESSING":
-                time.sleep(1) # Wait for 1 seconds before checking again
-                file_handle = self.client.files.get(name=file_handle.name)
-
-            # 3. Check final state
-            if file_handle.state.name == "FAILED":
-                print(f"ERROR: File '{display_name}' failed processing by the API.")
-                # Optionally, delete the failed file to clean up
-                self.client.files.delete(name=file_handle.name)
-                return None
-            
-            print(f"  - File '{display_name}' is now ACTIVE and ready. URI: {file_handle.uri}")
-            return file_handle
-        except Exception as e:
-            print(f"ERROR: File API upload failed for '{display_name}'. Error: {e}")
-            return None
+        # Lazy inject Agent if needed by Manager for Vertex
+        if config.VERTEX and self.file_manager.file_processing_agent is None:
+             from agents.file_processing_agent import FileProcessingAgent
+             self.file_processing_agent = FileProcessingAgent(self)
+             self.file_manager.file_processing_agent = self.file_processing_agent
+             
+        # The manager handles everything (including Vertex analysis)
+        return self.file_manager.process_file(file_bytes, display_name, mime_type)
     
     def shutdown(self):
         """Performs a clean shutdown."""

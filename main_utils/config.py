@@ -20,18 +20,26 @@ OUTPUT_DIR = PROJECT_ROOT / "instructions"
 
 # --- GLOBAL VARIABLES ---
 PERSONA = "default"
-VOICE = True
-VISION = False
-ORION_CORE_INSTANCE = None
-VERTEX = False
-SAVE = False
-EDIT_TIME = 1.5
-AI_MODEL = "gemma-3-27b-it"
+VERTEX = False # VertexAI SDK / GenAI SDK
 BACKEND = "ollama" # "api" or "ollama"
-LOCAL_MODEL = "qwen3:1.7b-q8_0"  # Faster, stable, no 'thinking' overhead
-LOCAL_CONTEXT_WINDOW = 4096 * 4
+
+# --- UTIL VARIABLES ---
+LOCAL_CONTEXT_WINDOW = 4096 * 4 # Context window for local models
+PAST_MEMORY = False # Past Semantic Memory Support
+SAVE = False # Disables saving TTS voice to local
+EDIT_TIME = 1.5 # Frequency of editing discord messages in seconds
+VOICE = True # TTS voice support
+VISION = False # Vision support
+
+# --- CORE CONFIGS ---
+ORION_CORE_INSTANCE = None # Where the core instance is stored
 THINKING_SUPPORT = True # Global flag: Auto-disables if model rejects 'think'
-PAST_MEMORY = False
+CONTEXT_CACHING = False # Master switch for Context Caching (Free Tier limit protection)
+OLLAMA_CLOUD = True # Uses Ollama Cloud instead of local
+
+# --- AI MODELS ---
+LOCAL_MODEL = "deepseek-v3.1:671b-cloud" # Local model Ollama API
+AI_MODEL = "models/gemma-3-27b-it" # AI model for Gemini API
 
 # --- FILE CONFIGURATION ---
 TEXT_FILE_EXTENSIONS = ('.json', '.xml', '.txt', '.py', '.md', '.log', '.yml', '.yaml', '.sh', '.bat', '.css', '.html', '.js')
@@ -46,4 +54,14 @@ NO PAST MEMORY SUPPORT
 ibm/granite3.3:2b-instruct-q6_K
 ibm/granite3.3:2b-instruct-q4_K_M
 qwen3:1.7b-q8_0
+
+Gemma Models:
+models/gemma-3-27b-it
+models/gemma-3-12b-it
+models/gemma-3-4b-it
+models/gemma-3-1b-it
+
+Ollama Cloud Models:
+qwen3-vl:235b-instruct-cloud
+deepseek-v3.1:671b-cloud
 """

@@ -8,6 +8,8 @@ import pickle
 import sys
 import io
 import time
+import asyncio
+import base64
 from typing import Generator
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -23,6 +25,7 @@ except ImportError:
 
 from main_utils import config, main_functions as functions
 from main_utils.chat_object import ChatObject
+from main_utils.file_manager import UploadFile
 from system_utils import orion_replay, orion_tts
 
 # Define instruction files
@@ -102,11 +105,28 @@ class OrionLiteCore:
         elif self.backend == "ollama":
             if ollama is None:
                 raise ImportError("Ollama library not found. Please install with `pip install ollama`.")
-            print(f"--- [Lite Core] Using Local Ollama: {self.local_model} ---")
-            self.client = ollama.Client(
-                #host="https://ollama.com",
-                #headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')}
-            )
+
+            
+            if config.OLLAMA_CLOUD:
+                print(f"--- [Lite Core] Using Ollama Cloud: {self.local_model} ---")
+                self.client = ollama.Client(
+                    host="https://ollama.com",
+                    headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')}
+                )
+            else:
+                print(f"--- [Lite Core] Using Local Ollama: {self.local_model} ---")
+                self.client = ollama.Client()
+            
+        # --- File Processing Agent Initialization (VLM) ---
+        from agents.file_processing_agent import FileProcessingAgent
+        self.file_processing_agent = FileProcessingAgent(self)
+        
+        # --- File Manager Initialization ---
+        self.file_manager = UploadFile(
+            core_backend=self.backend, 
+            client=self.client if self.backend == "api" else None,
+            file_processing_agent=self.file_processing_agent
+        )
          
 
     def _read_all_instructions(self) -> str:
@@ -234,31 +254,108 @@ class OrionLiteCore:
              data_envelope["system_notifications"].append(f"[Vision: Attached {self.vision_attachments['display_name']}]")
              self.vision_attachments = {}
 
+        if config.VISION and self.vision_attachments:
+             data_envelope["system_notifications"].append(f"[Vision: Attached {self.vision_attachments['display_name']}]")
+             self.vision_attachments = {}
+
         # Construct User Content Part
+        
+        # --- MODIFICATION: Handle Unified File Objects ---
+        final_file_parts = []
+        injected_text_buffers = []
+        file_injections = []
+        
+        # Separation: Text Injections vs Real Attachments
+        if file_check:
+             for f in file_check:
+                 # Check for Text Extraction or Analysis
+                 if hasattr(f, 'text_content'):
+                     header = f"\n\n--- FILE: {f.display_name} ---\n"
+                     if getattr(f, 'is_analysis', False):
+                         header = f"\n\n--- FILE ANALYSIS: {f.display_name} ({f.mime_type}) ---\n[System: The following is an AI analysis of the file.]\n"
+                     
+                     injected_text_buffers.append(f"{header}{f.text_content}")
+                     
+                     # Add to formal data envelope list
+                     file_injections.append({
+                        "name": f.display_name,
+                        "mime": getattr(f, 'mime_type', 'text/plain'),
+                        "content_preview": f.text_content[:200] + "..." if len(f.text_content) > 200 else f.text_content
+                     })
+                 else:
+                     # It's a Media File (API File or Local Base64/Path)
+                     # If generic API file (Vertex/Standard) -> Add to parts
+                     if hasattr(f, 'uri') and f.uri.startswith('http'): 
+                         final_file_parts.append(f)
+                     elif self.backend == "ollama" and hasattr(f, 'base64_data'):
+                         pass 
+ 
+        # Note: In Lite Core, we usually construct one big 'UserContent'.
+        if file_injections:
+             data_envelope["file_injections"] = file_injections
+
+        if injected_text_buffers:
+            data_envelope["user_prompt"] += "".join(injected_text_buffers)
+            
+        # Re-serialization of envelope
         final_text_part = types.Part.from_text(text=json.dumps(data_envelope, indent=2))
         
-        # --- File Attachment Handling (Standard GenAI Behavior) ---
+        # --- File Attachment Handling ---
         attachments_for_db = []
         if file_check:
-            # Filter API vs Metadata-only files (Text files are already injected)
-            api_files = [f for f in file_check if not getattr(f, 'uri', '').startswith('text://')]
-            
-            # Attach ONLY API files to the prompt
-            final_part = api_files + [final_text_part]
-            
-            # Extract metadata for DB
-            for f_handle in file_check:
+            # Metadata Extraction
+            for f in file_check:
                 try:
+                    # Normalize URI/Name
+                    ref = getattr(f, 'name', getattr(f, 'uri', 'unknown'))
                     attachments_for_db.append({
-                        "file_ref": f_handle.uri,
-                        "file_name": getattr(f_handle, 'display_name', 'unknown'),
-                        "mime_type": getattr(f_handle, 'mime_type', 'unknown'),
-                        "size_bytes": getattr(f_handle, 'size_bytes', 0)
+                        "file_ref": ref,
+                        "file_name": getattr(f, 'display_name', 'unknown'),
+                        "mime_type": getattr(f, 'mime_type', 'unknown'),
+                        "size_bytes": getattr(f, 'size_bytes', 0)
                     })
                 except Exception as e:
                     print(f"Warning: Could not extract metadata from file handle: {e}")
             
             data_envelope["system_notifications"].append(f"[System: User attached {len(file_check)} file(s)]")
+            
+            # For API Backend: Combine File Parts + Text Part
+            if self.backend == "api":
+                final_part = final_file_parts + [final_text_part]
+            else:
+                # For Local/Ollama: We just send the Text Part here.
+                # Images need to be passed strictly via the `images` arg in `ollama.chat`.
+                # We will attach the raw file objects to the *User Content Object* custom field?
+                # Or we rely on `file_check` being passed down? 
+                # `_generate_stream_response` signature assumes `contents_to_send`.
+                # We need to hack the `UserContent` to hold the image data if we want it to flow to `_generate`.
+                # Google Types don't natively support "Base64 Image" parts that aren't API files?
+                # Actually they do: types.Part.from_bytes(...)
+                # Let's try to convert Base64 to Blob part if possible? 
+                # But Ollama client expects specific structure. 
+                # EASIEST PATH: We are passing `file_check` via `_finalize` etc? No.
+                # `_generate` receives `contents_to_send`.
+                # We should embed the images as parts in the UserContent.
+                
+                ollama_parts = [final_text_part]
+                for f in file_check:
+                    if hasattr(f, 'base64_data'):
+                        # Attach as a "proxy" part or just raw object?
+                        # The `_generate` loop iterates parts.
+                        # We can attach a custom object if we want.
+                        # Let's attach a "Placeholder Part" that holds the image data.
+                        # Python allows dynamic attributes.
+                        # Use standard GenAI Blob for data storage
+                        try:
+                            # f.base64_data is text. Decode to bytes for the Part.
+                            img_bytes = base64.b64decode(f.base64_data)
+                            p = types.Part.from_bytes(data=img_bytes, mime_type=f.mime_type)
+                            ollama_parts.append(p)
+                        except Exception as e:
+                            print(f"Error creating image part: {e}")
+                        
+                final_part = ollama_parts
+
         else:
             final_part = [final_text_part]
 
@@ -328,7 +425,25 @@ class OrionLiteCore:
                 # History (Convert Google Types to Dict)
                 for content in contents_to_send:
                     role = "user" if content.role == "user" else "assistant"
-                    text_parts = [p.text for p in content.parts if p.text]
+                    
+                    # Text Extraction
+                    text_parts = []
+                    images_list = []
+                    
+                    if content.parts:
+                        for p in content.parts:
+                            if hasattr(p, 'text') and p.text:
+                                text_parts.append(p.text)
+                            
+                            # Handle Standard GenAI Image Part (Blob)
+                            if hasattr(p, 'inline_data') and p.inline_data:
+                                try:
+                                    # Convert bytes back to Base64 String for Ollama
+                                    b64_img = base64.b64encode(p.inline_data.data).decode('utf-8')
+                                    images_list.append(b64_img)
+                                except Exception as e:
+                                    print(f"Error extracting image for Ollama: {e}")
+                                
                     full_text = "\n".join(text_parts)
                     
                     # --- UNWRAP JSON ENVELOPE FOR OLLAMA ---
@@ -365,7 +480,11 @@ class OrionLiteCore:
                             # Not JSON or parse error, use raw text
                             pass
 
-                    ollama_messages.append({"role": role, "content": full_text})
+                    ollama_msg = {"role": role, "content": full_text}
+                    if images_list:
+                        ollama_msg["images"] = images_list
+                        
+                    ollama_messages.append(ollama_msg)
                 
                 # Streaming with Compatibility Fallback
                 
@@ -535,36 +654,6 @@ class OrionLiteCore:
 
     def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str):
         """
-        Uploads a file-like object to the GenAI File API via the client.
-        Returns a File handle object on success, or None on failure.
+        Delegates to centralized File Manager.
         """
-        try:
-            print(f"  - Uploading file '{display_name}' to the File API...")
-            # 1. Upload the file
-            file_handle = self.client.files.upload(
-                file=io.BytesIO(file_bytes),
-                config=types.UploadFileConfig(
-                    mime_type=mime_type,
-                    display_name=display_name
-                )
-            )
-            print(f"  - Upload successful. File Name: {file_handle.name}. Waiting for processing...")
-
-            # 2. Poll for ACTIVE state
-            # Note: client.files.get() re-fetches the object
-            while file_handle.state.name == "PROCESSING":
-                time.sleep(1) 
-                file_handle = self.client.files.get(name=file_handle.name)
-
-            # 3. Check final state
-            if file_handle.state.name == "FAILED":
-                print(f"ERROR: File '{display_name}' failed processing by the API.")
-                self.client.files.delete(name=file_handle.name)
-                return None
-            
-            print(f"  - File '{display_name}' is now ACTIVE and ready. URI: {file_handle.uri}")
-            return file_handle
-
-        except Exception as e:
-            print(f"ERROR: File API upload failed for '{display_name}'. Error: {e}")
-            return None
+        return self.file_manager.process_file(file_bytes, display_name, mime_type)

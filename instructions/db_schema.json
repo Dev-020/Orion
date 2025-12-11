@@ -11,7 +11,8 @@
       "attachments_metadata",
       "token",
       "function_calls",
-      "vdb_context"
+      "vdb_context",
+      "model_source"
     ],
     "primary_key": "id",
     "text_column": "response_text",
