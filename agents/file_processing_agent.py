@@ -3,7 +3,10 @@ import dotenv
 import os
 import io
 import time
+import io
+import time
 import json
+import base64
 from google import genai
 try:
     import ollama
@@ -11,6 +14,11 @@ except ImportError:
     ollama = None
 
 from main_utils import config
+
+try:
+    import fitz # PyMuPDF
+except ImportError:
+    fitz = None
 
 dotenv.load_dotenv()
 
@@ -131,9 +139,37 @@ Your role is to act as a **Specialized File Processing Unit**.
                 elif hasattr(f, 'base64_data'):
                      images_list.append(f.base64_data)
                 
-                # Local Path (PDF/Video - Unavailable to standard LLaVA without processing tools)
+                # Local Path (PDF/Video/Docs) -> Convert to Images via PyMuPDF
                 elif hasattr(f, 'local_path'):
-                     final_prompt += f"\n\n[System: File '{getattr(f, 'display_name', '')}' is at {f.local_path}. (Complex file reading not yet implemented for Ollama Agent).]"
+                    ext = os.path.splitext(f.local_path)[1].lower()
+                    if fitz and ext in ['.pdf', '.xps', '.epub', '.mobi', '.fb2', '.cbz']:
+                         try:
+                             print(f"  - [FileAgent] Rendering '{getattr(f, 'display_name', 'doc')}' to images via PyMuPDF...")
+                             doc = fitz.open(f.local_path)
+                             # Cap at 3 pages
+                             max_pages = min(3, len(doc))
+                             for i in range(max_pages):
+                                 page = doc.load_page(i)
+                                 pix = page.get_pixmap()
+                                 # Convert to PNG in memory
+                                 img_bytes = pix.tobytes("png")
+                                 # Base64 Encode for Ollama
+                                 b64_str = base64.b64encode(img_bytes).decode('utf-8')
+                                 images_list.append(b64_str)
+                             
+                             if len(doc) > 3:
+                                 final_prompt += f"\n\n[System: Document '{getattr(f, 'display_name', '')}' truncated. Displaying first 3 of {len(doc)} pages.]"
+                             else:
+                                 final_prompt += f"\n\n[System: Displaying full content of '{getattr(f, 'display_name', '')}' ({len(doc)} pages).]"
+                             
+                             doc.close()
+                         except Exception as e:
+                             print(f"  - [FileAgent] Error rendering document: {e}")
+                             final_prompt += f"\n\n[System: Error rendering document '{getattr(f, 'display_name', '')}'. Fallback: {e}]"
+                    else:
+                         # Unsupported or PyMuPDF missing
+                         status = "Unsupported file type" if fitz else "PyMuPDF not installed"
+                         final_prompt += f"\n\n[System: File '{getattr(f, 'display_name', '')}' ({ext}) is unreadable. {status}. Please provide a screenshot or text description.]"
 
             messages = [
                 {"role": "system", "content": self.system_instructions if config.OLLAMA_CLOUD else "You describe images in detail"},

@@ -30,6 +30,7 @@ SAVE = False # Disables saving TTS voice to local
 EDIT_TIME = 1.5 # Frequency of editing discord messages in seconds
 VOICE = True # TTS voice support
 VISION = False # Vision support
+BUFFER_SIZE = 30 # Number of messages to keep in buffer
 
 # --- CORE CONFIGS ---
 ORION_CORE_INSTANCE = None # Where the core instance is stored

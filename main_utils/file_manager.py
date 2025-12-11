@@ -190,7 +190,8 @@ class UploadFile:
         # B. PDFs/Docs -> Save to temp for potential RAG/Tool usage
         # (Ollama can't natively "read" PDFs without a tool)
         print(f"  - Staging Local File '{display_name}'...")
-        temp_dir = os.path.join(os.getcwd(), "temp_uploads")
+        # Use data/ directory for temp storage
+        temp_dir = os.path.join(os.getcwd(), "data", "temp_uploads")
         os.makedirs(temp_dir, exist_ok=True)
         
         file_path = os.path.join(temp_dir, display_name)

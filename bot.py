@@ -8,6 +8,7 @@ import io
 from dotenv import load_dotenv  
 from discord.ext import commands
 import threading
+from collections import deque # <--- Added for efficient buffer
 
 # 1. Config Override (Must be before OrionCore init)
 from main_utils import config
@@ -17,7 +18,6 @@ config.VISION = False
 # --- One "Brain" ---
 # Load environment variables
 load_dotenv()
-MAX_TEXT_FILE_SIZE = 15360  # 15 * 1024 bytes (approx 3-4k tokens)
 persona = os.getenv("ORION_PERSONA", "default")
 print(f"--- Bot starting with Persona: {persona} (Voice/Vision Disabled) ---")
 
@@ -48,6 +48,10 @@ bot.core = core
 # --- Session Preferences ---
 # simple dict: session_id -> bool (True=Stream, False=Full)
 streaming_preferences = {}
+
+# --- Global Activity Buffer ---
+# Map: channel_id -> deque(maxlen=config.BUFFER_SIZE) of dicts
+recent_messages_buffer = {} 
 
 # --- Helper: Async Generator Consumer ---
 async def consume_generator_async(generator, message_to_edit):
@@ -388,6 +392,47 @@ def get_session_id(ctx_or_msg):
 async def on_message(message: discord.Message):
     if message.author == bot.user: return
     
+    # --- BUFFER LOGIC START ---
+    try:
+        # We buffer ALL messages from other users
+        # Filter: Skip if it mentions the bot (it will be processed as a prompt anyway)
+        # Note: Users might want context of "What did I just say to you?" but 
+        # normally recent history contains the answer. 
+        # The prompt says "ignore discord messages that specifically mentions the AI model".
+        # So filtering mentions is correct.
+        
+        is_mentioning_bot = bot.user in message.mentions or isinstance(message.channel, discord.DMChannel)
+        
+        if not is_mentioning_bot:
+            channel_id = message.channel.id
+            if channel_id not in recent_messages_buffer:
+                recent_messages_buffer[channel_id] = deque(maxlen=config.BUFFER_SIZE)
+            
+            # Metadata Extraction
+            atts_meta = []
+            if message.attachments:
+                for a in message.attachments:
+                    atts_meta.append({
+                        "filename": a.filename,
+                        "content_type": a.content_type or "unknown",
+                        "size": f"{a.size // 1024}KB"
+                    })
+            
+            msg_data = {
+                "timestamp": message.created_at, # Datetime
+                "author_name": message.author.display_name,
+                "author_id": str(message.author.id),
+                "content": message.clean_content,
+                "attachments": atts_meta
+            }
+            
+            recent_messages_buffer[channel_id].append(msg_data)
+            print(f"[\033[96mBuffer Debug\033[0m] Channel {channel_id}: Appended message from {msg_data['author_name']}")
+            
+    except Exception as e:
+        print(f"Error in buffering message: {e}")
+    # --- BUFFER LOGIC END ---
+    
     if bot.user in message.mentions or isinstance(message.channel, discord.DMChannel):
         session_id = get_session_id(message)
         
@@ -404,15 +449,8 @@ async def on_message(message: discord.Message):
             # Get the deque
             buffer = recent_messages_buffer[channel_id]
             
-            # Convert to list and filter out the CURRENT triggering message if it somehow got in (unlikely due to order, but good safety)
-            # Also filter out any messages that mirror the current one to be safe.
-            # Actually, we process the buffer retrieval BEFORE appending the current message? 
-            # OR we append current message to buffer? 
-            # LOGIC: The current mention message should NOT be in the "recent context" (it's the active prompt).
-            # So we grab buffer content first.
-            
             # Format the context
-            context_lines = ["[Recent Channel Activity (Last 30 Messages)]"]
+            context_lines = [f"[Recent Channel Activity (Last {getattr(config, 'BUFFER_SIZE', 30)} Messages)]"]
             for msg_data in buffer:
                 # msg_data = {timestamp, author_name, author_id, content, attachments[]}
                 ts = msg_data['timestamp'].strftime("%H:%M:%S")
@@ -428,6 +466,10 @@ async def on_message(message: discord.Message):
             
             if len(context_lines) > 1: # Only if we have history
                 recent_context = "\n".join(context_lines) + "\n\n[Current Message]"
+                
+            # CLEAR BUFFER (As requested to prevent duplication)
+            recent_messages_buffer[channel_id].clear()
+            print(f"[\033[93mBuffer Debug\033[0m] Channel {channel_id}: Buffer cleared after context retrieval.")
         
         # File Handling
         file_check = []
@@ -447,6 +489,10 @@ async def on_message(message: discord.Message):
                 except Exception as e:
                     user_prompt += f"\n[System: Error reading attachment '{attachment.filename}': {e}]"
 
+        if recent_context:
+             # Prepend context to the prompt
+             user_prompt = f"{recent_context}\n\n{user_prompt}"
+
         # 3. Initial "Thinking" Message
         response_msg = await message.reply("*[Orion is thinking...]*")
         
@@ -458,8 +504,7 @@ async def on_message(message: discord.Message):
                 file_check=file_check,
                 user_id=str(message.author.id),
                 user_name=message.author.name,
-                stream=use_stream,
-                recent_context=recent_context # <--- NEW ARGUMENT
+                stream=use_stream
             )
         
         generator = await asyncio.to_thread(blocking_get_gen)
