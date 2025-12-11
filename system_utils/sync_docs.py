@@ -9,7 +9,10 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 from pathlib import Path
-from .embed_document import run_embedding_sync
+try:
+    from .embed_document import run_embedding_sync
+except ImportError:
+    from embed_document import run_embedding_sync
 
 # Add project root to be able to import main_utils
 sys.path.append(str(Path(__file__).resolve().parent.parent))

@@ -4,6 +4,7 @@ import discord
 import os
 import asyncio
 import time
+import io
 from dotenv import load_dotenv  
 from discord.ext import commands
 import threading
@@ -100,9 +101,25 @@ async def consume_generator_async(generator, message_to_edit):
         producer_thread = threading.Thread(target=generator_producer)
         producer_thread.start()
         
-        # Consumer loop (Async)
+    # Consumer loop (Async)
         should_restart = False
         message_chain = [message_to_edit] # Track all messages in response
+        thought_buffer = ""
+        is_thinking = True # simplistic state tracking
+
+        def get_display_text(is_thought_phase=True):
+            """Helper to format text based on phase."""
+            text = ""
+            if is_thought_phase:
+                 # In thought phase: Show thoughts (Quote) + Response so far (empty usually)
+                if thought_buffer:
+                    encoded_thoughts = thought_buffer.strip().replace(chr(10), chr(10) + '> ')
+                    text += f"> **Thinking Process:**\n> {encoded_thoughts}\n\n"
+                text += full_text_buffer
+            else:
+                # In response phase: Show ONLY Response (Thoughts are handled via file)
+                text += full_text_buffer
+            return text
         
         while True:
             item = await queue.get()
@@ -114,34 +131,102 @@ async def consume_generator_async(generator, message_to_edit):
                 content = item.get("content")
                 
                 if msg_type == "status":
-                    # Instant update for status changes (if safe)
-                    # We usually just log or show "..."
                     pass 
+                
+                elif msg_type == "thought":
+                    thought_buffer += content
+                    # We are in thinking phase
                     
+                    # Throttle edits
+                    now = time.time()
+                    if now - last_edit_time > edit_interval:
+                        display_text = get_display_text(is_thought_phase=True)
+                        # We use message_to_edit directly here or message_chain[0]
+                        # Since we haven't split yet, chain[0] is the main msg
+                        await update_message_chain(message_to_edit.channel, message_chain, display_text)
+                        last_edit_time = now
+
                 elif msg_type == "token":
+                    # FIRST TOKEN TRANSITION DETECT
+                    if is_thinking and thought_buffer:
+                        is_thinking = False
+                        # 1. Convert thoughts to file
+                        try:
+                            thought_file = discord.File(
+                                io.BytesIO(thought_buffer.encode('utf-8')), 
+                                filename="thought_process.md"
+                            )
+                            
+                            # CLEANUP OVERFLOW: Delete extra messages if thoughts spilled over
+                            if len(message_chain) > 1:
+                                for overflow_msg in message_chain[1:]:
+                                    try:
+                                        await overflow_msg.delete()
+                                    except:
+                                        pass # Best effort
+                                message_chain = [message_chain[0]]
+
+                            # 2. Update ORIGINAL message: Clear text, Attach file
+                            # Note: We must be careful not to lose the "Response so far" if any (unlikely if strictly sequential)
+                            await message_to_edit.edit(content="", file=thought_file)
+                            
+                            # 3. Start NEW message chain for the response
+                            # We send a placeholder or the first token to start it
+                            new_msg = await message_to_edit.channel.send(content) # Send first token
+                            message_chain = [new_msg] # Reset chain to this new message
+                            full_text_buffer = content # Start buffer with this token
+                            
+                            last_edit_time = time.time()
+                            continue # Skip standard processing this loop
+                            
+                        except Exception as e:
+                            print(f"Failed to attach thought file: {e}")
+                            # Fallback: Just keep printing text
+                            pass
+                    
                     full_text_buffer += content
                     
                     # Throttle edits
                     now = time.time()
                     if now - last_edit_time > edit_interval:
-                        message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
+                        display_text = get_display_text(is_thought_phase=False)
+                        message_chain = await update_message_chain(message_to_edit.channel, message_chain, display_text)
                         last_edit_time = now
                         
                 elif msg_type == "full_response":
-                    # Overwrite buffer with final clean text (just in case)
+                    # Overwrite buffer with final clean text
                     full_text_buffer = item.get("text", "")
                     should_restart = item.get("restart_pending", False)
-                    # Final update
-                    message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
+                    pass
 
                 elif msg_type == "error":
                     full_text_buffer += f"\n\n[System Error: {content}]"
-                    message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
+                    display_text = get_display_text(is_thought_phase=is_thinking)
+                    message_chain = await update_message_chain(message_to_edit.channel, message_chain, display_text)
             
             queue.task_done()
-            
-        # Final flush ensure everything is written
-        message_chain = await update_message_chain(message_to_edit.channel, message_chain, full_text_buffer)
+        
+        # Final flush
+        # Check if we never transitioned (e.g. only thoughts, no tokens?) unlikely but solvable
+        if is_thinking and thought_buffer:
+             # Case: thoughts finished but no tokens? Or just done.
+             # Convert to file regardless
+            try:
+                thought_file = discord.File(
+                    io.BytesIO(thought_buffer.encode('utf-8')), 
+                    filename="thought_process.md"
+                )
+                await message_to_edit.edit(content="", file=thought_file)
+                # If there's text buffer, send it in new msg
+                if full_text_buffer:
+                    new_msg = await message_to_edit.channel.send(full_text_buffer)
+                    message_chain = [new_msg]
+            except:
+                pass
+        else:
+            # Normal flush of response
+            display_text = get_display_text(is_thought_phase=False)
+            message_chain = await update_message_chain(message_to_edit.channel, message_chain, display_text)
         
         return should_restart
 
@@ -165,8 +250,11 @@ async def update_message_chain(channel, chain, full_text):
         if i < len(chain):
             # Update existing message if content differs
             if chain[i].content != chunk:
-                # Discord quirk: editing to same content errors? usually ignored but checking is safer
-                await chain[i].edit(content=chunk)
+                try:
+                    await chain[i].edit(content=chunk)
+                except discord.errors.HTTPException:
+                    # Rare race condition or sizing issue
+                    pass 
         else:
             # Create new message for overflow
             new_msg = await channel.send(chunk)

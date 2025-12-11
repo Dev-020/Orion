@@ -11,6 +11,7 @@ import time
 from typing import Generator
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+load_dotenv()
 
 # API Backends
 from google import genai
@@ -102,7 +103,11 @@ class OrionLiteCore:
             if ollama is None:
                 raise ImportError("Ollama library not found. Please install with `pip install ollama`.")
             print(f"--- [Lite Core] Using Local Ollama: {self.local_model} ---")
-            self.client = ollama.Client() 
+            self.client = ollama.Client(
+                #host="https://ollama.com",
+                #headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')}
+            )
+         
 
     def _read_all_instructions(self) -> str:
         """Reads instruction files."""
@@ -184,13 +189,19 @@ class OrionLiteCore:
              deep_memory_where = {"$and": [{"source_table": "deep_memory"}, {"source_id": {"$nin": excluded_ids}}, {"session_id": session_id}]}
 
         try:
-            deep_memory_results_raw = functions.execute_vdb_read(query_texts=[user_prompt], n_results=3, where=deep_memory_where)
-            long_term_results_raw = functions.execute_vdb_read(query_texts=[user_prompt], n_results=2, where={"source_table": "long_term_memory"})
+            # OPTIMIZATION: Skip VDB for Local Ollama backend to save resources
+            if config.PAST_MEMORY:
+                deep_memory_results_raw = functions.execute_vdb_read(query_texts=[user_prompt], n_results=2, where=deep_memory_where)
+                long_term_results_raw = functions.execute_vdb_read(query_texts=[user_prompt], n_results=1, where={"source_table": "long_term_memory"})
             
-            formatted_deep_mem = self._format_vdb_results_for_context(deep_memory_results_raw, "Deep Memory")
-            formatted_ltm = self._format_vdb_results_for_context(long_term_results_raw, "Long-Term Memory")
-            
-            formatted_vdb_context = f"{formatted_deep_mem}\\n{formatted_ltm}".strip()
+                formatted_deep_mem = self._format_vdb_results_for_context(deep_memory_results_raw, "Deep Memory")
+                formatted_ltm = self._format_vdb_results_for_context(long_term_results_raw, "Long-Term Memory")
+                
+                formatted_vdb_context = f"{formatted_deep_mem}\\n{formatted_ltm}".strip()
+            else:
+                formatted_vdb_context = ""
+                deep_memory_results_raw = "{}"
+                long_term_results_raw = "{}"
         except:
             formatted_vdb_context = ""
             deep_memory_results_raw = "{}"
@@ -305,30 +316,108 @@ class OrionLiteCore:
                 ollama_messages = []
                 
                 # System Prompt
-                ollama_messages.append({"role": "system", "content": self.current_instructions})
+                # Append Lite-Specific Directive to stabilize small models
+                lite_directive = (
+                    "\n\n[SYSTEM NOTE: You are running on a lightweight local backend. "
+                    "Input metadata is provided in headers (e.g., [Metadata:...]). "
+                    "Do NOT analyze the data structure. Do NOT mention JSON. "
+                    "Respond naturally as the persona defined above.]"
+                )
+                ollama_messages.append({"role": "system", "content": self.current_instructions + lite_directive})
                 
                 # History (Convert Google Types to Dict)
                 for content in contents_to_send:
                     role = "user" if content.role == "user" else "assistant"
                     text_parts = [p.text for p in content.parts if p.text]
                     full_text = "\n".join(text_parts)
+                    
+                    # --- UNWRAP JSON ENVELOPE FOR OLLAMA ---
+                    # DeepSeek/Ollama models confuse the JSON wrapper with instructions.
+                    # We parse it to extract just the human-readable Prompt + System Notes.
+                    if role == "user":
+                        try:
+                            data = json.loads(full_text)
+                            if "user_prompt" in data:
+                                clean_prompt = data["user_prompt"]
+                                # Prepend System Notifications if any
+                                if "system_notifications" in data and data["system_notifications"]:
+                                    notes = "\n".join(data["system_notifications"])
+                                    clean_prompt = f"{notes}\n\n{clean_prompt}"
+                                
+                                # Prepend Vector Context if any
+                                if "vdb_context" in data and data["vdb_context"]:
+                                    clean_prompt = f"{data['vdb_context']}\n\n{clean_prompt}"
+                                    
+                                # Prepend Metadata (Auth/Time) formatted for Reader
+                                meta_header = ""
+                                if "auth" in data:
+                                    auth = data["auth"]
+                                    u_name = auth.get("user_name", "Unknown")
+                                    u_id = auth.get("user_id", "?")
+                                    ts = data.get("timestamp_utc", "")
+                                    meta_header = f"[Metadata: User='{u_name}' (ID: {u_id}) | Time='{ts}']\n"
+                                
+                                clean_prompt = f"{meta_header}{clean_prompt}"
+                                    
+                            
+                            full_text = clean_prompt
+                        except:
+                            # Not JSON or parse error, use raw text
+                            pass
+
                     ollama_messages.append({"role": role, "content": full_text})
                 
-                stream = self.client.chat(
-                    model=self.local_model,
-                    messages=ollama_messages,
-                    stream=True,
-                )
+                # Streaming with Compatibility Fallback
                 
-                for chunk in stream:
-                    content = chunk['message']['content']
-                    if content:
-                        yield {"type": "token", "content": content}
-                        full_response_text += content
-                        if config.VOICE: orion_tts.process_stream_chunk(content)
+                while True:
+                    try:
+                        stream_kwargs = {
+                            "model": self.local_model,
+                            "messages": ollama_messages,
+                            "stream": True,
+                            "keep_alive": -1
+                        }
+                        # ONLY add the 'think' parameter if globally enabled.
+                        if config.THINKING_SUPPORT:
+                            stream_kwargs["think"] = True
+
+                        stream = self.client.chat(**stream_kwargs)
+                        
+                        # We must iterate inside the try block to catch lazy errors
+                        for chunk in stream:
+                             # Access dictionary keys safely    
+                            msg = chunk.get('message', {})
+                            
+                            # 1. Handle Thinking (Terminal Only + Yield)
+                            if msg.get('thinking'):
+                                think_text = msg['thinking']
+                                print(f"\033[90m{think_text}\033[0m", end='', flush=True)
+                                yield {"type": "thought", "content": think_text}
+                            
+                            # 2. Handle Content (Yield to Discord)
+                            content = msg.get('content')
+                            if content:
+                                yield {"type": "token", "content": content}
+                                full_response_text += content
+                                if config.VOICE: orion_tts.process_stream_chunk(content)
+                        
+                        # If we finish the loop successfully, break the while loop
+                        break
+
+                    except Exception as e:
+                        # Check if error is due to 'think' parameter (Status 400 / "does not support thinking")
+                        if "does not support thinking" in str(e):
+                            print(f"--- Model does not support Thinking. Retrying without it. (Error: {e}) ---")
+                            print(f"--- Disabling Thinking Mode for this session to improve performance. ---")
+                            config.THINKING_SUPPORT = False # Persist flag change for this runtime
+                            continue # Retry loop
+                        else:
+                            # Genuine error, re-raise to outer block
+                            raise e
                 
                 # Ollama doesn't give usage in stream? Stubbing.
-                token_count = len(full_response_text) // 3  
+                token_count = len(full_response_text) // 3
+                # End of Stream Loop  
         
         except Exception as e:
             print(f"Error in generation: {e}")
@@ -343,8 +432,8 @@ class OrionLiteCore:
             types.ModelContent(parts=[types.Part.from_text(text=full_response_text)]) 
         )
         
-        # Persist State (Autosave Lite)
-        self.chat.save_state_for_restart()
+        # Autosave Removed meant for restart persistence only
+        # self.chat.save_state_for_restart()
         yield {"type": "done"}
 
     def _finalize_exchange(self, session_id, user_id, user_name, user_prompt, response_text, token_count, attachments_for_db, new_tool_turns, context_ids_for_db, user_content_for_db, model_content_obj):
