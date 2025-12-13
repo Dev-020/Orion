@@ -20,8 +20,13 @@ from main_utils import config
 try:
     from orion_core import OrionCore
 except ImportError:
-    # Fallback/Mock for initial testing if needed, but intended to work with real core
-    print("WARNING: Could not import OrionCore. Server will likely fail.")
+    print("WARNING: Could not import OrionCore.")
+    pass
+
+try:
+    from orion_core_lite import OrionLiteCore 
+except ImportError:
+    print("WARNING: Could not import OrionLiteCore.")
     pass
 
 # --- LOGGING SETUP ---
@@ -51,6 +56,7 @@ class FileMetadata(BaseModel):
     display_name: Optional[str] = None
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = 0
+    text_content: Optional[str] = None # CRITICAL: Allow analysis text to pass through validation
 
 class PromptRequest(BaseModel):
     prompt: str
@@ -76,6 +82,8 @@ class StartableFile:
         self.display_name = data.get("display_name")
         self.mime_type = data.get("mime_type")
         self.size_bytes = data.get("size_bytes")
+        # Ensure we pass the analysis text if present (for VLM results)
+        self.text_content = data.get("text_content")
         # Add any other attrs Core expects access to
 
 # --- LIFECYCLE MANAGER ---
@@ -89,8 +97,15 @@ async def lifespan(app: FastAPI):
     logger.info("Server starting up...")
     try:
         # Initialize the Brain
-        core_instance = OrionCore()
-        logger.info("OrionCore Initialized Successfully.")
+        if config.BACKEND == "ollama":
+             logger.info("Initializing OrionLiteCore (Ollama Backend)...")
+             core_instance = OrionLiteCore()
+             logger.info("OrionLiteCore Initialized Successfully.")
+        else:
+             logger.info("Initializing OrionCore (API Backend)...")
+             core_instance = OrionCore()
+             logger.info("OrionCore Initialized Successfully.")
+
     except Exception as e:
         logger.critical(f"Failed to init OrionCore: {e}")
         # We might want to exit, but let's keep server alive to report health=bad
@@ -198,6 +213,8 @@ async def process_prompt(request: PromptRequest):
                     # We serialize it to JSON line
                     import json
                     yield json.dumps(chunk) + "\n"
+                    # Force yield to event loop to ensure StreamingResponse flushes to socket
+                    await asyncio.sleep(0)
                     
             except Exception as e:
                 logger.error(f"Error during processing: {e}")

@@ -1,10 +1,19 @@
-
 import requests
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Optional, Generator
+import logging
+
+# Configure logger (libraries shouldn't usually do basicConfig, but this ensures output in our setup)
+logger = logging.getLogger("OrionClient")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)s - [OrionClient] - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 class OrionClient:
     """
@@ -12,6 +21,7 @@ class OrionClient:
     """
     def __init__(self, base_url: str = "http://127.0.0.1:8000"):
         self.base_url = base_url.rstrip("/")
+        logger.info(f"OrionClient initialized with Server URL: {self.base_url}")
         # Verify connection immediately? No, let it fail gracefully on first request or handled by Launcher.
     
     def process_prompt(
@@ -28,6 +38,7 @@ class OrionClient:
         Matches OrionCore.process_prompt signature.
         """
         url = f"{self.base_url}/process_prompt"
+        logger.info(f"Sending prompt to {url} | User: {user_name} | Session: {session_id}")
         
         # Serialize file objects to simple dicts for JSON payload
         files_payload = []
@@ -41,7 +52,8 @@ class OrionClient:
                     "uri": getattr(f, 'uri', None), 
                     "display_name": getattr(f, 'display_name', None),
                     "mime_type": getattr(f, 'mime_type', None),
-                    "size_bytes": getattr(f, 'size_bytes', 0)
+                    "size_bytes": getattr(f, 'size_bytes', 0),
+                    "text_content": getattr(f, 'text_content', None) # Pass analysis text
                 })
 
         payload = {
@@ -55,48 +67,80 @@ class OrionClient:
         
         try:
             # timeout bumped for long thinking
-            with requests.post(url, json=payload, stream=True, timeout=120) as response:
-                if response.status_code != 200:
-                    yield {"type": "token", "content": f"Error from server: {response.text}"}
-                    return
-
+            with requests.post(url, json=payload, stream=True) as response:
+                response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
                 # Server sends NDJSON (newline delimited JSON)
                 for line in response.iter_lines():
                     if line:
+                        decoded_line = line.decode('utf-8')
                         try:
-                            chunk = json.loads(line)
+                            chunk = json.loads(decoded_line)
                             yield chunk
                         except json.JSONDecodeError:
+                            logger.error(f"Failed to decode JSON line: {decoded_line}")
                             yield {"type": "token", "content": f"[Chunk Error] {line}"}
+            logger.info("Response stream completed successfully.")
 
         except requests.exceptions.ConnectionError:
+            logger.error("[System Error] Could not connect to Orion Server. Is it running?")
             yield {"type": "token", "content": "[System Error] Could not connect to Orion Server. Is it running?"}
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error processing prompt: {e}")
+            yield {"type": "token", "content": f"[System Error] Server request failed: {e}"}
         except Exception as e:
+            logger.error(f"[System Error] Client exception: {e}")
             yield {"type": "token", "content": f"[System Error] Client exception: {e}"}
 
-    def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str) -> object:
+    def upload_file(self, file_path: str = None, mime_type: str = None, file_obj=None, display_name=None):
         """
-        Uploads bytes to server. Returns a SimpleNamespace object mimicking the Core's return.
+        Uploads a file to the server.
+        Args:
+            file_path: Path to file on disk (optional if file_obj provided).
+            mime_type: MIME type of the file.
+            file_obj: Bytes or file-like object (optional, used if file_path is None).
+            display_name: Filename to use if uploading from memory.
         """
-        url = f"{self.base_url}/upload_file"
+        url = f"{self.base_url}/upload_file" # CORRECTED endpoint
         
         try:
-            # We send using multipart/form-data
-            files = {"file": (display_name, file_bytes, mime_type)}
-            data = {"display_name": display_name, "mime_type": mime_type}
+            files = {}
+            data = {"mime_type": mime_type}
             
+            if file_path:
+                path = Path(file_path)
+                if not path.exists():
+                    logger.error(f"File not found: {file_path}")
+                    return None
+                files = {"file": (path.name, open(file_path, 'rb'), mime_type)}
+                data["display_name"] = path.name
+                
+            elif file_obj:
+                # Handle bytes or file-like
+                import io
+                if isinstance(file_obj, bytes):
+                    f_stream = io.BytesIO(file_obj)
+                else:
+                    f_stream = file_obj
+                    
+                filename = display_name or "uploaded_file"
+                files = {"file": (filename, f_stream, mime_type)}
+                data["display_name"] = filename
+            else:
+                logger.error("upload_file requires either file_path or file_obj")
+                return None
+
             resp = requests.post(url, files=files, data=data, timeout=60)
             
             if resp.status_code == 200:
-                data = resp.json()
-                # Return object with .name, .uri access
+                logger.info("File upload successful.")
+                data_json = resp.json()
                 from types import SimpleNamespace
-                return SimpleNamespace(**data)
+                return SimpleNamespace(**data_json)
             else:
-                print(f"Upload failed: {resp.text}")
+                logger.error(f"File upload failed [URL: {url}]: {resp.text}")
                 return None
         except Exception as e:
-            print(f"Upload exception: {e}")
+            logger.error(f"Error during file upload [URL: {url}]: {e}")
             return None
 
     def save_state_for_restart(self) -> bool:
@@ -105,6 +149,7 @@ class OrionClient:
         For now, we return True so bot logic proceeds.
         """
         # In a real impl, maybe POST /save_state
+        logger.info("save_state_for_restart called. Returning True as server manages state.")
         return True
 
     def execute_restart(self):
@@ -112,15 +157,17 @@ class OrionClient:
         If the bot calls this, it usually terminates itself or the whole app.
         In Client-Server, if Bot terminates, Launcher might restart it.
         """
+        logger.info("Client requested restart. Exiting process...")
         print("Client requested restart. Exiting process...")
         sys.exit(0) # Launcher should handle the restart if configured.
     # --- Session Management ---
     def list_sessions(self) -> list:
         try:
-            resp = requests.get(f"{self.base_url}/list_sessions", timeout=5)
+            resp = requests.get(f"{self.base_url}/list_sessions")
             if resp.status_code == 200:
                 return resp.json().get("sessions", [])
-        except: pass
+        except Exception as e:
+            logger.error(f"Failed to list sessions: {e}")
         return []
 
     def get_session_mode(self, session_id: str) -> str:
@@ -129,9 +176,10 @@ class OrionClient:
         try:
             resp = requests.get(f"{self.base_url}/get_mode", params={"session_id": session_id}, timeout=5)
             if resp.status_code == 200:
-                return resp.json().get("mode", "cache")
-        except: pass
-        return "cache"
+                return resp.json().get("mode", "default")
+        except Exception as e:
+            logger.error(f"Failed to get session mode for {session_id}: {e}")
+        return "default"
 
     def set_session_mode(self, session_id: str, mode: str):
         requests.post(f"{self.base_url}/switch_mode", json={"session_id": session_id, "mode": mode})
@@ -180,6 +228,15 @@ class OrionClient:
                 if val is None: raise KeyError(key)
                 return val
         return RemoteSessionDict(self)
+
+    # --- Legacy/Deprecated Methods (Stubs to prevent crashes) ---
+    def save_state_for_restart(self):
+        logger.warning("Client: save_state_for_restart called but not supported in Client-Server mode.")
+        return False
+
+    def execute_restart(self):
+        logger.warning("Client: execute_restart called. Please use the Launcher TUI to restart services.")
+        pass
 
     def shutdown(self):
         # Client shutdown, generic cleanup

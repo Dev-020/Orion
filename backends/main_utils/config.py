@@ -26,14 +26,14 @@ DATA_DIR = BACKEND_ROOT / "data"
 # --- GLOBAL VARIABLES ---
 PERSONA = "default"
 VERTEX = False # VertexAI SDK / GenAI SDK
-BACKEND = "api" # "api" or "ollama"
+BACKEND = "ollama" # "api" or "ollama"
 
 # --- UTIL VARIABLES ---
 LOCAL_CONTEXT_WINDOW = 4096 * 4 # Context window for local models
 PAST_MEMORY = False # Past Semantic Memory Support
 SAVE = False # Disables saving TTS voice to local
 EDIT_TIME = 1.5 # Frequency of editing discord messages in seconds
-VOICE = True # TTS voice support
+VOICE = False # TTS voice support
 VISION = False # Vision support
 BUFFER_SIZE = 30 # Number of messages to keep in buffer
 

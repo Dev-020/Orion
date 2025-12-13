@@ -358,20 +358,39 @@ async def history(ctx: discord.ApplicationContext):
     except Exception as e:
         await ctx.respond(f"Error saving/sending history file: {e}", ephemeral=True)
 
+import sys # Added for sys.exit
+
 @bot.command(name="shutdown", description="Owner only shutdown/restart.")
-async def shutdown(ctx, mode: str = 'poweroff'):
-    if str(ctx.author.id) != os.getenv("DISCORD_OWNER_ID"): return
-    if mode == 'soft':
-        await ctx.respond("Soft refreshing instructions...")
-        await asyncio.to_thread(core.trigger_instruction_refresh, full_restart=False)
-        await ctx.send("Refresh complete.")
-    elif mode == 'hard':
-        await ctx.respond("Hard restart sequence engaged...")
-        if core.save_state_for_restart():
-            core.execute_restart()
-    else:
-        await ctx.respond("Shutting down.")
-        await bot.close()
+async def shutdown(ctx):
+    if str(ctx.author.id) != os.getenv("DISCORD_OWNER_ID"):
+        await ctx.respond("You are not authorized to shutdown the bot.", ephemeral=True)
+        return
+
+    await ctx.defer()
+    
+    # Check if we should restart or just stop
+    # In Client-Server, "shutdown" usually means stop. 
+    # But if user wants restart, we can add a flag or separate command.
+    # For now, let's assume this command toggles a restart if we use a specific arg?
+    # Actually, legacy behavior was toggleable. 
+    # Let's make this command just STOP, and rely on !restart for restart?
+    # Or just use exit code 5 for restart, code 0 for stop.
+    
+    # Simple Toggle:
+    # If used as !shutdown -> Stop (Code 0)
+    # If used as !restart -> Restart (Code 5)
+    
+    # Since slash command name is fixed to "shutdown", let's just make it a STOP.
+    # User can restart via TUI.
+    
+    # WAIT: User wants !restart capability.
+    # Let's change this to a restart command or add keys.
+    # Legacy: "Hard restart sequence engaged..." -> This implies restart.
+    
+    await ctx.respond("♻️ **Bot Restart Sequence Engaged** (Supervisor Pattern)")
+    # We exit with Code 5. Launcher will restart us.
+    await bot.close()
+    sys.exit(5)
 
 # --- Helpers ---
 def get_session_id(ctx_or_msg):
@@ -483,14 +502,23 @@ async def on_message(message: discord.Message):
                 
                 # Unified File Handling via Core
                 try: 
+                    # 1. Download bytes
                     file_bytes = await attachment.read()
-                    # Offload blocking upload to thread to prevent heartbeat timeout
-                    f = await bot.loop.run_in_executor(None, core.upload_file, file_bytes, attachment.filename, ctype)
+                    
+                    # 2. Upload directly from memory
+                    # Signature: upload_file(file_path=None, mime_type=str, file_obj=bytes, display_name=str)
+                    f = await bot.loop.run_in_executor(
+                        None, 
+                        lambda: core.upload_file(mime_type=ctype, file_obj=file_bytes, display_name=attachment.filename)
+                    )
+
                     if f: 
                         file_check.append(f)
                     else:
+                        print(f"[\033[91mUpload Error\033[0m] Failed to upload {attachment.filename}")
                         user_prompt += f"\n[System: User attached file '{attachment.filename}' but it failed to process.]"
                 except Exception as e:
+                    print(f"[\033[91mUpload Exception\033[0m] {e}")
                     user_prompt += f"\n[System: Error reading attachment '{attachment.filename}': {e}]"
 
         if recent_context:

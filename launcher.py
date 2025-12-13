@@ -5,9 +5,11 @@ import time
 import subprocess
 import shutil
 import glob
+import logging
 from pathlib import Path
 from datetime import datetime
 import msvcrt # Windows specific
+import atexit
 
 # Add backends to path to get config
 sys.path.append(str(Path(__file__).resolve().parent / "backends"))
@@ -78,31 +80,54 @@ class LogManager:
 
 class ProcessManager:
     def __init__(self):
-        self.procs = {} 
+        self.procs = {}
+        # Initialize statuses for all known processes to prevent KeyError in UI
         self.statuses = {k: "STOPPED" for k in PROCESSES.keys()}
+        # Ensure subprocesses use UTF-8 for IO to prevent 'charmap' errors on Windows
+        self.env = os.environ.copy()
+        self.env["PYTHONIOENCODING"] = "utf-8"
         
+    def add_process(self, key, name, process, log_path):
+        """Registers a process (already started or to be managed)."""
+        self.procs[key] = process
+        self.statuses[key] = "RUNNING"
+        PROCESSES[key] = {"name": name, "log": log_path}
+
     def start_process(self, key):
-        if key in self.procs and self.procs[key].poll() is None:
-            return 
+        if key in self.procs:
+            if self.procs[key].poll() is None: return # Already running
             
-        p_info = PROCESSES[key]
-        log_path = p_info["log"]
-        
-        # Ensure clean state for this run if somehow file exists (e.g. created manually)
-        # But global cleanup usually handles this.
-        
-        log_file = open(log_path, "a", encoding='utf-8') 
-        
+        # Re-construct command based on key
+        cmd = [sys.executable, "-u"]
+        if key == "server":
+            cmd.append("backends/server.py")
+            log_path = LOG_DIR / "server.log"
+        elif key == "bot":
+            cmd.append("frontends/bot.py")
+            log_path = LOG_DIR / "bot.log"
+        elif key == "gui":
+            cmd.append("frontends/gui.py")
+            log_path = LOG_DIR / "gui.log"
+        else:
+            return
+
         try:
-            self.procs[key] = subprocess.Popen(
-                p_info["cmd"],
-                stdout=log_file,
+            # SESSION LOGGING: Append ("a") mode. Archiving only happens on Launcher startup.
+            f = open(log_path, "a", encoding='utf-8')
+            f.write(f"\n--- [RESTARTING SERVICE: {key} @ {datetime.now()}] ---\n")
+            
+            p = subprocess.Popen(
+                cmd, 
+                stdout=f, 
                 stderr=subprocess.STDOUT,
                 cwd=str(Path(__file__).parent),
                 text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                env=self.env
             )
+            self.procs[key] = p
             self.statuses[key] = "RUNNING"
+            PROCESSES[key]["log"] = log_path # Update path just in case
         except Exception as e:
             self.statuses[key] = f"ERROR: {e}"
 
@@ -112,11 +137,17 @@ class ProcessManager:
             if p.poll() is None:
                 p.terminate()
                 try:
-                    p.wait(timeout=5)
+                    p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     p.kill()
             del self.procs[key]
             self.statuses[key] = "STOPPED"
+
+    def start_all(self):
+        self.start_process("server")
+        time.sleep(1)
+        self.start_process("bot")
+        self.start_process("gui")
 
     def stop_all(self):
         for key in list(self.procs.keys()):
@@ -124,18 +155,54 @@ class ProcessManager:
 
     def check_health(self):
         for key, p in list(self.procs.items()):
-            if p.poll() is not None:
-                self.statuses[key] = f"EXITED ({p.returncode})"
-                del self.procs[key] 
+            ret = p.poll()
+            if ret is not None:
+                # SUPERVISOR PATTERN: Exit Code 5 = Request Restart
+                if ret == 5:
+                    self.statuses[key] = f"RESTARTING..."
+                    del self.procs[key]
+                    # Brief delay to allow port release or cleanup
+                    time.sleep(1)
+                    self.start_process(key)
+                else:
+                    self.statuses[key] = f"EXITED ({ret})"
+                    del self.procs[key] 
 
-# --- TUI ---
+# --- LAUNCHER LOGGING ---
+# Logs for the orchestrator itself (commands run, errors, etc)
+LOG_DIR = Path(__file__).parent / "backends" / "data" / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    filename=LOG_DIR / "launcher.log",
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# --- TUI GLOBALS ---
 console = Console()
 pm = ProcessManager()
-command_buffer = ""
-last_command_feedback = "Type 'help' for commands."
-selected_log = "server" 
+atexit.register(pm.stop_all)
 
-def tail_logs(key):
+# Central State to avoid UnboundLocalError anomalies
+APP_STATE = {
+    "selected_log": "server",
+    "scroll_offset": 0,
+    "input_buffer": "",
+    "history": [], # List of (cmd, feedback) tuples
+    "last_feedback": "Type 'help' for commands."
+}
+
+def get_log_view_height():
+    """Calculates available height for logs based on terminal size."""
+    try:
+        # Total height - Header(3) - Footer(3) - Panel Borders(2) = roughly -8
+        # We allow a larger buffer AND a safety factor for wrapping (long lines take >1 row)
+        available_height = max(10, console.size.height - 10)
+        return int(available_height * 0.75) # Safety factor for wrapped lines
+    except:
+        return 20
+
+def tail_logs(key, offset=0):
     """Reads the last N lines of the selected log file."""
     log_path = PROCESSES[key]["log"]
     if not log_path.exists():
@@ -144,7 +211,20 @@ def tail_logs(key):
     try:
         with open(log_path, "r", encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
-            return lines[-20:] 
+            if not lines: return []
+            
+            view_height = get_log_view_height()
+            
+            if offset == 0:
+                return lines[-view_height:]
+            else:
+                end_index = -offset
+                start_index = -(view_height + offset)
+                # Handle out of bounds
+                if abs(start_index) > len(lines):
+                    start_index = 0
+                    end_index = view_height
+                return lines[start_index:end_index]
     except Exception as e:
         return [f"[red]Error reading log: {e}[/]"]
 
@@ -184,17 +264,46 @@ def render_status():
     return Panel(table, title="System Status", border_style="blue")
 
 def render_input_console():
+    # Deprecated by render_control_panel but kept if layout uses it
+    return render_control_panel()
+
+def render_control_panel():
+    # Show history
+    history_lines = []
+    if APP_STATE["history"]:
+        for cmd, fb in APP_STATE["history"][-3:]: # Show last 3
+            history_lines.append(f"[grey50]> {cmd}[/]")
+            if fb:
+                history_lines.append(f"[italic cyan]{fb}[/]")
+            
+    history_text = "\n".join(history_lines)
+    
+    # Current input
+    content = f"{history_text}\n[bold white]> {APP_STATE['input_buffer']}[/]"
+    if int(datetime.now().timestamp() * 2) % 2 == 0:
+        content += " [blink]_[/]"
+    
     return Panel(
-        f"> {command_buffer}[blink]_[/blink]\n\n[grey]{last_command_feedback}[/]",
-        title="Console Input", border_style="yellow"
+        content,
+        title="Command Input (Type 'help')",
+        border_style="blue",
+        height=10
     )
 
 def render_main():
-    logs = tail_logs(selected_log)
+    # Fix NameError by ensuring we pull from APP_STATE
+    key = APP_STATE.get("selected_log", "server")
+    offset = APP_STATE.get("scroll_offset", 0)
+    
+    logs = tail_logs(key, offset)
     log_text = Text.from_ansi("".join(logs)) 
+    header_text = f"Live Logs: [bold yellow]{PROCESSES[key]['name']}[/bold yellow] (Path: {PROCESSES[key]['log']})"
+    if offset > 0:
+        header_text += f" [bold red](SCROLLING: {offset})[/bold red]"
+        
     return Panel(
         log_text, 
-        title=f"Live Logs: [bold yellow]{PROCESSES[selected_log]['name']}[/bold yellow] (Path: {PROCESSES[selected_log]['log']})",
+        title=header_text,
         border_style="green"
     )
 
@@ -205,64 +314,75 @@ def render_footer():
     )
 
 def process_command(cmd: str):
-    global last_command_feedback, selected_log
     parts = cmd.lower().strip().split()
     if not parts: return
-
     action = parts[0]
     
-    if action == "quit" or action == "exit":
-        raise KeyboardInterrupt
-        
-    elif action == "help":
-        last_command_feedback = "Available: start/stop [server|bot|gui], logs [server|bot|gui], quit"
+    logging.info(f"Command executed: {cmd}") 
 
+    feedback = ""
+
+    if action == "help":
+        feedback = "Commands: start <all|server|bot|gui>, stop <...>, restart <...>, logs <server|bot|gui>, quit"
+        
+    elif action == "quit":
+        pm.stop_all()
+        sys.exit(0)
+        
     elif action in ["start", "stop", "restart"]:
         if len(parts) < 2:
-            last_command_feedback = f"Usage: {action} <service>"
-            return
-        target = parts[1]
-        
-        # Mapping aliases
-        if target in ["all", "everything"]:
-            targets = ["server", "bot"]
-        elif target in PROCESSES:
-            targets = [target]
+            feedback = f"Usage: {action} <service>"
         else:
-            last_command_feedback = f"Unknown service: {target}"
-            return
-            
-        for t in targets:
-            if action == "start":
-                pm.start_process(t)
-                last_command_feedback = f"Started {t}..."
-            elif action == "stop":
-                pm.stop_process(t)
-                last_command_feedback = f"Stopped {t}..."
-            elif action == "restart":
-                pm.stop_process(t)
-                time.sleep(0.5)
-                pm.start_process(t)
-                last_command_feedback = f"Restarted {t}..."
+            t = parts[1]
+            if t == "all":
+                if action == "start": 
+                    pm.start_all()
+                    feedback = "Started all services."
+                elif action == "stop": 
+                    pm.stop_all()
+                    feedback = "Stopped all services."
+                elif action == "restart": 
+                    pm.stop_all()
+                    # time.sleep done in start_all/restart logic if needed
+                    pm.start_all() 
+                    feedback = "Restarted all services."
+            elif t in PROCESSES:
+                if action == "start":
+                    pm.start_process(t)
+                    feedback = f"Started {t}..."
+                elif action == "stop":
+                    pm.stop_process(t)
+                    feedback = f"Stopped {t}..."
+                elif action == "restart":
+                    pm.stop_process(t)
+                    time.sleep(0.5)
+                    pm.start_process(t)
+                    feedback = f"Restarted {t}..."
+            else:
+                feedback = f"Unknown service: {t}"
                 
     elif action == "logs":
         if len(parts) < 2:
-            last_command_feedback = "Usage: logs <service>"
-            return
-        target = parts[1]
-        if target in PROCESSES:
-            selected_log = target
-            last_command_feedback = f"Showing logs for {target}"
+            feedback = "Usage: logs <service>"
         else:
-            last_command_feedback = f"Unknown log source: {target}"
+            target = parts[1]
+            if target in PROCESSES:
+                APP_STATE["selected_log"] = target
+                APP_STATE["scroll_offset"] = 0
+                feedback = f"Showing logs for {target}"
+            else:
+                feedback = f"Unknown log source: {target}"
             
     else:
-        last_command_feedback = f"Unknown command: {action}"
+        feedback = f"Unknown command: {action}"
+        
+    APP_STATE["last_feedback"] = feedback
+    APP_STATE["history"].append((cmd, feedback))
+    if len(APP_STATE["history"]) > 5:
+        APP_STATE["history"].pop(0)
 
 
 def main():
-    global command_buffer
-    
     # --- STARTUP CLEANUP ---
     # Archive any stale logs from previous runs before starting anything
     LogManager.cleanup_all_logs()
@@ -273,6 +393,7 @@ def main():
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--server", action="store_true")
     parser.add_argument("--bot", action="store_true")
+    parser.add_argument("--gui", action="store_true")
     args = parser.parse_args()
 
     if args.server or args.all:
@@ -280,40 +401,60 @@ def main():
         time.sleep(1) 
     if args.bot or args.all:
         pm.start_process("bot")
+    if args.gui or args.all:
+        pm.start_process("gui")
     
     layout = generate_layout()
     
     with Live(layout, refresh_per_second=10, screen=True) as live:
         try:
             while True:
+                layout["header"].update(render_header())
+                layout["sidebar"]["status_pane"].update(render_status())
+                layout["sidebar"]["input_pane"].update(render_control_panel())
+                layout["main"].update(render_main())
+                layout["footer"].update(render_footer())
+                
                 while msvcrt.kbhit():
                     char = msvcrt.getch()
                     
                     if char == b'\r': 
-                        process_command(command_buffer)
-                        command_buffer = ""
+                        process_command(APP_STATE["input_buffer"])
+                        APP_STATE["input_buffer"] = ""
                     elif char == b'\x08': 
-                        command_buffer = command_buffer[:-1]
+                        APP_STATE["input_buffer"] = APP_STATE["input_buffer"][:-1]
                     elif char == b'\x03': 
                         raise KeyboardInterrupt
                     elif char == b'\xe0': 
-                        msvcrt.getch()
+                        # Arrow keys
+                        key = msvcrt.getch()
+                        if key == b'H': # Up
+                            try:
+                                key_log = APP_STATE["selected_log"]
+                                lp = PROCESSES[key_log]["log"]
+                                if lp.exists():
+                                    with open(lp, "rb") as f:
+                                        # Fast line count (byte scan might be faster but line count is safe)
+                                        lines_count = sum(1 for _ in f)
+                                        view_height = get_log_view_height()
+                                        max_scroll = max(0, lines_count - view_height)
+                                        if APP_STATE["scroll_offset"] < max_scroll:
+                                            APP_STATE["scroll_offset"] += 1
+                            except:
+                                APP_STATE["scroll_offset"] += 1 # Fallback
+                            
+                        elif key == b'P': # Down
+                            APP_STATE["scroll_offset"] = max(0, APP_STATE["scroll_offset"] - 1)
                     else:
                         try:
                             s = char.decode('utf-8')
                             if s.isprintable():
-                                command_buffer += s
+                                APP_STATE["input_buffer"] += s
                         except: pass
 
                 pm.check_health()
+                time.sleep(0.1)
                 
-                layout["header"].update(render_header())
-                layout["sidebar"]["status_pane"].update(render_status()) 
-                layout["sidebar"]["input_pane"].update(render_input_console())
-                layout["main"].update(render_main())
-                layout["footer"].update(render_footer())
-                
-                time.sleep(0.05) 
         except KeyboardInterrupt:
             pass
         finally:

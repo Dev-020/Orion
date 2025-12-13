@@ -428,12 +428,12 @@ class OrionGUI:
              self.app.after(0, lambda: Chat.add_system_message(self.chat_frame, f"Error: {e}", "error"))
 
     def do_hard_restart_thread(self):
-        try:
-             self.app.after(0, lambda: Chat.add_system_message(self.chat_frame, "--- Saving state... ---"))
-             if self.core.save_state_for_restart():
-                 self.core.execute_restart()
-        except Exception as e:
-             self.app.after(0, lambda: Chat.add_system_message(self.chat_frame, f"Error: {e}", "error"))
+        """
+        Supervisor Pattern: Exit with code 5 to trigger Launcher restart.
+        """
+        Chat.add_system_message(self.chat_frame, "--- RESTARTING GUI (Supervisor) ---")
+        self.app.quit()
+        sys.exit(5)
 
     def on_closing(self):
         self.core.shutdown()

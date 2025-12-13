@@ -266,6 +266,7 @@ class OrionLiteCore:
         file_injections = []
         
         # Separation: Text Injections vs Real Attachments
+        print(file_check)
         if file_check:
              for f in file_check:
                  # Check for Text Extraction or Analysis
@@ -627,10 +628,11 @@ class OrionLiteCore:
 
     def trigger_instruction_refresh(self, full_restart: bool = False):
         if full_restart:
-            self.execute_restart()
-        else:
-            self.current_instructions = self._read_all_instructions()
-            return "Instructions Refreshed"
+            print("WARNING: 'full_restart' flag ignored in Client-Server mode.")
+            return "[System Note]: Full restart ignored in Client-Server mode. Use TUI to restart Server."
+        
+        self.current_instructions = self._read_all_instructions()
+        return "Instructions Refreshed (Hot Swap)"
 
     def shutdown(self):
         """Performs a clean shutdown."""

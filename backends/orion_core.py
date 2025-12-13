@@ -211,16 +211,16 @@ class OrionCore:
     def trigger_instruction_refresh(self, full_restart: bool = False):
         """Performs a full hot-swap. It reloads instructions AND reloads the tools
         from functions.py, then rebuilds all active chat sessions."""
-        if full_restart:
-            print("---! FULL SYSTEM RESTART INITIATED !---")
-            self.restart_pending = True
-            return "[System Note]: Skipped Hot-Swap. Restart sequence initiated. The system will reboot after this response. Please do not perform any actions to avoid looping the restart."
-        
         print("---! HOT-SWAP INSTRUCTIONS TRIGGERED !---")
+        
+        if full_restart:
+            print("WARNING: 'full_restart' flag ignored in Client-Server mode. Use TUI to restart Server.")
+            return "[System Note]: Full restart ignored in Client-Server mode. Use TUI to restart Server."
+
         # --- NEW: Reload the tools first ---
         try:
             # Reload all modules within the 'main_utils' package
-            for loader, modname, is_pkg in pkgutil.walk_packages(path=functions.__all__, prefix=functions.__name__ + '.'):
+            for loader, modname, is_pkg in pkgutil.walk_packages(path=functions.__path__, prefix=functions.__name__ + '.'):
                 if modname in sys.modules:
                     importlib.reload(sys.modules[modname])
 
