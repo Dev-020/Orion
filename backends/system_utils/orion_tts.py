@@ -15,8 +15,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from main_utils import config
 
 # --- 1. CONFIGURATION ---
-MODEL_PATH = Path(config.PROJECT_ROOT) / "data" / "piper_models" / "firefly" / "en_US-fireflyv2-medium.onnx"
-CONFIG_PATH = Path(config.PROJECT_ROOT) / "data" / "piper_models" / "firefly" / "en_US-fireflyv2-medium.onnx.json"
+MODEL_PATH = config.DATA_DIR / "piper_models" / "firefly" / "en_US-fireflyv2-medium.onnx"
+CONFIG_PATH = config.DATA_DIR / "piper_models" / "firefly" / "en_US-fireflyv2-medium.onnx.json"
 LOG_FOLDER = f"{Path(config.PROJECT_ROOT)}/databases/{config.PERSONA}/audio_logs"  # <-- NEW: Folder to save all generated audio
 # --- NEW: TTS Queue and Thread Management ---
 tts_queue = queue.Queue()

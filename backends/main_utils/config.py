@@ -15,13 +15,18 @@ COLLECTION_NAME = ""
 
 # --- STATIC PATHS ---
 # These are constant and can be used directly.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = PROJECT_ROOT / "instructions"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# New Data Directory
+BACKEND_ROOT = PROJECT_ROOT / "backends"
+OUTPUT_DIR = BACKEND_ROOT / "instructions"
+# New Data Directory
+BACKEND_ROOT = PROJECT_ROOT / "backends"
+DATA_DIR = BACKEND_ROOT / "data"
 
 # --- GLOBAL VARIABLES ---
 PERSONA = "default"
 VERTEX = False # VertexAI SDK / GenAI SDK
-BACKEND = "ollama" # "api" or "ollama"
+BACKEND = "api" # "api" or "ollama"
 
 # --- UTIL VARIABLES ---
 LOCAL_CONTEXT_WINDOW = 4096 * 4 # Context window for local models
@@ -40,7 +45,7 @@ OLLAMA_CLOUD = True # Uses Ollama Cloud instead of local
 
 # --- AI MODELS ---
 LOCAL_MODEL = "deepseek-v3.1:671b-cloud" # Local model Ollama API
-AI_MODEL = "models/gemma-3-27b-it" # AI model for Gemini API
+AI_MODEL = "gemini-2.5-flash" # AI model for Gemini API
 
 # --- FILE CONFIGURATION ---
 TEXT_FILE_EXTENSIONS = ('.json', '.xml', '.txt', '.py', '.md', '.log', '.yml', '.yaml', '.sh', '.bat', '.css', '.html', '.js')
@@ -61,6 +66,9 @@ models/gemma-3-27b-it
 models/gemma-3-12b-it
 models/gemma-3-4b-it
 models/gemma-3-1b-it
+
+Gemini Models:
+gemini-2.5-flash
 
 Ollama Cloud Models:
 qwen3-vl:235b-instruct-cloud

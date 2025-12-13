@@ -9,14 +9,21 @@ import customtkinter
 import tkinter
 from tkinter import filedialog, messagebox
 import threading
+import sys
+from pathlib import Path
+
+# --- PATH HACK FOR REFRACTOR PHASE 1 ---
+# Add 'backends' to sys.path so we can import 'orion_core', 'main_utils', etc.
+sys.path.append(str(Path(__file__).resolve().parent.parent / 'backends'))
+# ---------------------------------------
+
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 
 load_dotenv()
 
-from orion_core import OrionCore
-from orion_core_lite import OrionLiteCore
+from orion_client import OrionClient
 from main_utils import config
 from gui_modules import constants as C
 from gui_modules import chat_components as Chat
@@ -24,7 +31,7 @@ from gui_modules import tab_builders as Tabs
 from gui_modules import file_utils as FileUtils
 
 class OrionGUI:
-    def __init__(self, core: OrionCore):
+    def __init__(self, core):
         self.core = core
         self.app = customtkinter.CTk()
         self.app.title(C.WINDOW_TITLE)
@@ -445,13 +452,9 @@ if __name__ == "__main__":
     customtkinter.set_default_color_theme("blue")
     
     try:
-        # Dual Core Selection Logic (Mirrors bot.py)
-        if "gemma" in config.AI_MODEL.lower() or config.BACKEND == "ollama":
-            print(f"--- GUI starting with ORION LITE CORE ({config.BACKEND}) ---")
-            main_core = OrionLiteCore()
-        else:
-            print("--- GUI starting with ORION CORE (PRO) ---")
-            main_core = OrionCore()
+        if True: # Always use Client
+            print("--- GUI starting in Client Mode ---")
+            main_core = OrionClient(base_url="http://127.0.0.1:8000")
 
         app = OrionGUI(core=main_core)
         app.run()

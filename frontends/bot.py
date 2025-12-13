@@ -2,6 +2,14 @@
 
 import discord
 import os
+import sys
+from pathlib import Path
+
+# --- PATH HACK FOR REFRACTOR PHASE 1 ---
+# Add 'backends' to sys.path so we can import 'orion_core', 'main_utils', etc.
+sys.path.append(str(Path(__file__).resolve().parent.parent / 'backends'))
+# ---------------------------------------
+
 import asyncio
 import time
 import io
@@ -29,20 +37,12 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Bot(intents=intents, debug_guilds=[os.getenv("DISCORD_GUILD_ID")] if os.getenv("DISCORD_GUILD_ID") else None)
 
-# Selector Logic: Use Lite Core for Gemma/Ollama, Pro Core for everything else
-if "gemma" in config.AI_MODEL.lower() or getattr(config, 'BACKEND', 'api') == 'ollama':
-    try:
-        from orion_core_lite import OrionLiteCore as OrionCore
-        print(f"--- Loaded Orion Lite Core (Backend: {getattr(config, 'BACKEND', 'api')}) ---")
-    except Exception as e:
-        print(f"CRITICAL ERROR loading Lite Core: {e}")
-        from orion_core import OrionCore
-        print("--- Fallback to Orion Pro Core ---")
-else:
-    from orion_core import OrionCore
-    print("--- Loaded Orion Pro Core ---")
+# --- CLIENT WRAPPER ---
+from orion_client import OrionClient 
 
-core = OrionCore(persona=persona) 
+print("--- Initializing Orion Client ---")
+# Connect to local Server
+core = OrionClient(base_url="http://127.0.0.1:8000")
 bot.core = core
 
 # --- Session Preferences ---
@@ -337,7 +337,11 @@ async def history(ctx: discord.ApplicationContext):
     
     # Save to data directory
     filename = f"history_{session_id}.txt"
-    filepath = os.path.join("data", filename)
+    filename = f"history_{session_id}.txt"
+    # Data is now in backends/data
+    data_dir = Path(__file__).resolve().parent.parent / "backends" / "data"
+    data_dir.mkdir(exist_ok=True, parents=True) # Ensure it exists
+    filepath = data_dir / filename
     
     try:
         # Write to local file
@@ -520,6 +524,22 @@ async def on_message(message: discord.Message):
 
 if __name__ == "__main__":
     if BOT_TOKEN:
-        bot.run(BOT_TOKEN)
+        print("--- Starting Discord Bot Client ---")
+        
+        # --- LOAD COGS ---
+        cogs_dir = Path(__file__).resolve().parent / "cogs"
+        if cogs_dir.exists():
+            for filename in os.listdir(cogs_dir):
+                if filename.endswith(".py"):
+                    try:
+                        bot.load_extension(f"cogs.{filename[:-3]}")
+                        print(f"Loaded Cog: {filename}")
+                    except Exception as e:
+                        print(f"Failed to load cog {filename}: {e}")
+
+        try:
+            bot.run(BOT_TOKEN)
+        except Exception as e:
+            print(f"Bot Crashed: {e}")
     else:
         print("ERROR: NO TOKEN")

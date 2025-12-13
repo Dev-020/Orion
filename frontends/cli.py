@@ -1,4 +1,12 @@
 # cli.py (V2.7 - Multimodal Compatible)
+import sys
+from pathlib import Path
+
+# --- PATH HACK FOR REFRACTOR PHASE 1 ---
+# Add 'backends' to sys.path so we can import 'orion_core'
+sys.path.append(str(Path(__file__).resolve().parent.parent / 'backends'))
+# ---------------------------------------
+
 from orion_core import OrionCore
 from dotenv import load_dotenv
 import json

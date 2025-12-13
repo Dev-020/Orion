@@ -34,3 +34,7 @@ data/live_session_state.json
 test_utils/live/live_session_state.json
 test_utils/data/live_session_state.json
 /live/_artifact_files
+/backends/data
+/backends/debug_frames
+/backends/text
+/backends/instructions
