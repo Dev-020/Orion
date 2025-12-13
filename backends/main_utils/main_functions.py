@@ -41,6 +41,9 @@ from chromadb.types import Metadata
 from pathlib import Path
 from system_utils import sync_docs, generate_manifests
 from . import config
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- CONSTANTS ---
 DAILY_SEARCH_QUOTA = 10000
@@ -54,7 +57,7 @@ def get_db_paths(persona: str) -> dict:
     
     # Checks if the Persona Folder exist
     if not persona_dir.is_dir():
-        print(f"  Error: '{persona}' directory not found at {persona_dir}.")
+        logger.error(f"  Error: '{persona}' directory not found at {persona_dir}.")
         return {}
     
     return {
@@ -79,7 +82,7 @@ def _get_chroma_collection():
         collection = chroma_client.get_or_create_collection(name=config.COLLECTION_NAME)
         return collection
     except Exception as e:
-        print(f"Error connecting to ChromaDB: {e}")
+        logger.error(f"Error connecting to ChromaDB: {e}")
         return None
 
 def _sanitize_metadata(metadata: Metadata) -> Metadata:
@@ -97,7 +100,7 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
     (HIGH-LEVEL ORCHESTRATOR) Automates a synchronized write to both SQLite and the Vector DB.
     It relies on the low-level tools for all execution and security checks.
     """
-    print(f"--- Synchronized Write --- User: {user_id}, Table: {table}, Op: {operation}")
+    logger.info(f"--- Synchronized Write --- User: {user_id}, Table: {table}, Op: {operation}")
 
     # --- OBSOLETE: The vdb_context compression logic has been removed as we now store IDs, not raw data. ---
 
@@ -130,7 +133,7 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
 
     # --- 2. Synchronize with Vector DB (Secondary Database) ---
     try:
-        print("  - SQLite write successful. Proceeding with Vector DB synchronization...")
+        logger.info("  - SQLite write successful. Proceeding with Vector DB synchronization...")
         
         pk_map = {
             'long_term_memory': 'event_id',
@@ -147,14 +150,14 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
             # This is a known limitation of this design. The vector will be orphaned.
             # A more complex solution would be to read before deleting, but we accept this limitation for now.
             if table == 'active_memory':
-                 print("  - VDB sync: Skipping DELETE for 'active_memory' as its ID is hashed.")
+                 logger.info("  - VDB sync: Skipping DELETE for 'active_memory' as its ID is hashed.")
             elif pk_name and where and pk_name in where:
                 vdb_id_val = where[pk_name]
                 vdb_id = f"{table}_{vdb_id_val}"
                 execute_vdb_write(operation='delete', user_id=user_id, ids=[vdb_id])
-                print(f"  - VDB sync: Initiated DELETE for ID {vdb_id}")
+                logger.info(f"  - VDB sync: Initiated DELETE for ID {vdb_id}")
             else:
-                print(f"  - VDB sync: Skipping DELETE for table '{table}' - no PK in 'where' or table not configured.")
+                logger.info(f"  - VDB sync: Skipping DELETE for table '{table}' - no PK in 'where' or table not configured.")
         
         # --- B. Handle INSERT or UPDATE ---
         else:
@@ -164,7 +167,7 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                 # Ordering by the primary key DESC and taking the first result is the simplest, most direct way.
                 read_query = f"SELECT * FROM {table} ORDER BY {pk_name} DESC LIMIT 1"
                 read_result_json = execute_sql_read(query=read_query)
-                #print(read_result_json)
+                #logger.debug(read_result_json)
                 if "returned no results" not in read_result_json:
                     read_result = json.loads(read_result_json)
                     if read_result:
@@ -182,7 +185,7 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
                             full_data_row = read_result[0]
             
             if not full_data_row:
-                print(f"  - VDB sync: Skipping {operation.upper()} - could not obtain full data row for vectorization.")
+                logger.warning(f"  - VDB sync: Skipping {operation.upper()} - could not obtain full data row for vectorization.")
                 return sql_result
 
             # --- C. Document Factory ---
@@ -269,12 +272,12 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
             # --- D. Execute VDB Write ---
             if doc and meta and vdb_id:
                 execute_vdb_write(operation='add', user_id=user_id, ids=[vdb_id], documents=[doc], metadatas=[meta])
-                print(f"  - VDB sync: Completed {operation.upper()} for ID {vdb_id}")
+                logger.info(f"  - VDB sync: Completed {operation.upper()} for ID {vdb_id}")
             else:
-                print(f"  - VDB sync: Skipping {operation.upper()} for table '{table}' - no document creation rule found.")
+                logger.info(f"  - VDB sync: Skipping {operation.upper()} for table '{table}' - no document creation rule found.")
 
     except Exception as e:
-        print(f"Warning: SQLite write was successful, but Vector DB sync failed: {e}")
+        logger.warning(f"Warning: SQLite write was successful, but Vector DB sync failed: {e}")
 
     return sql_result
 
@@ -282,7 +285,7 @@ def execute_vdb_read(query_texts: list[str], n_results: int = 7, where: Optional
     """
     Queries the vector database for similar documents. Can be filtered by metadata (`where`) or a specific list of `ids`.
     """
-    print(f"--- Vector DB Query --- Queries: {query_texts} | N: {n_results} | Where: {where} | IDs: {ids}")
+    logger.info(f"--- Vector DB Query --- Queries: {query_texts} | N: {n_results} | Where: {where} | IDs: {ids}")
     collection = _get_chroma_collection()
     if not collection:
         return "Error: Could not connect to the vector database."
@@ -306,8 +309,8 @@ def execute_vdb_write(operation: str, user_id: str, documents: Optional[list[str
     - 'update': Medium-level, restricted to the data's owner or the Primary Operator.
     - 'delete': High-level, restricted to the Primary Operator only.
     """
-    print(f"--- Vector DB Write Request from User: {user_id} ---")
-    print(f"  - Operation: {operation.upper()}")
+    logger.info(f"--- Vector DB Write Request from User: {user_id} ---")
+    logger.info(f"  - Operation: {operation.upper()}")
 
     collection = _get_chroma_collection()
     if not collection:
@@ -319,20 +322,20 @@ def execute_vdb_write(operation: str, user_id: str, documents: Optional[list[str
 
     # --- Authorization Logic ---
     if operation == 'add':
-        print("  - Authorized for low-level ADD.")
+        logger.info("  - Authorized for low-level ADD.")
         is_authorized = True
 
     elif operation == 'delete':
         if owner_id and user_id == owner_id:
-            print("  - Authorized for high-level DELETE as Primary Operator.")
+            logger.info("  - Authorized for high-level DELETE as Primary Operator.")
             is_authorized = True
         else:
-            print(f"  - SECURITY ALERT: Denied unauthorized DELETE attempt by user {user_id}.")
+            logger.warning(f"  - SECURITY ALERT: Denied unauthorized DELETE attempt by user {user_id}.")
             return "Error: Authorization failed. This operation is restricted to the Primary Operator."
 
     elif operation == 'update':
         if owner_id and user_id == owner_id:
-            print("  - Authorized for high-level UPDATE as Primary Operator.")
+            logger.debug("  - Authorized for high-level UPDATE as Primary Operator.")
             is_authorized = True
         else:
             # For non-owners, we must verify they own all documents they are trying to update.
@@ -351,10 +354,10 @@ def execute_vdb_write(operation: str, user_id: str, documents: Optional[list[str
                 # If we have the list, it's now safe to iterate
                 for metadata in metadatas_list:
                     if metadata.get('user_id') != user_id:
-                        print(f"  - SECURITY ALERT: Denied unauthorized UPDATE by {user_id} on a document owned by {metadata.get('user_id')}.")
+                        logger.warning(f"  - SECURITY ALERT: Denied unauthorized UPDATE by {user_id} on a document owned by {metadata.get('user_id')}.")
                         return "Error: Authorization failed. You can only update documents that you own."
                 
-                print("  - Authorized for medium-level UPDATE as document owner.")
+                logger.info("  - Authorized for medium-level UPDATE as document owner.")
                 is_authorized = True
                 # --- END OF CORRECTED LOGIC ---
             except Exception as e:
@@ -392,7 +395,7 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
     (Pillar 1) Executes a read-only SQL query (SELECT) against the database.
     Returns results as a JSON string.
     """
-    print(f"--- DB READ --- Query: {query} | Params: {params}")
+    logger.info(f"--- DB READ --- Query: {query} | Params: {params}")
     
     if not query.strip().upper().startswith("SELECT"):  
         return "Error: This tool is for read-only (SELECT) queries."
@@ -415,32 +418,32 @@ def execute_sql_write(query: str, params: List[Union[str, int, float, bool, None
     Executes a write query (INSERT, UPDATE, DELETE) on the database using a
     tiered security model.
     """
-    print(f"--- DB Write Request from User: {user_id} ---")
-    print(f"  - Query: {query}")
-    #print(f"  - Params: {params}")
+    logger.info(f"--- DB Write Request from User: {user_id} ---")
+    logger.info(f"  - Query: {query}")
+    #logger.debug(f"  - Params: {params}")
     
     normalized_query = query.strip().upper()
     owner_id = os.getenv("DISCORD_OWNER_ID")
 
     if normalized_query.startswith('UPDATE') or normalized_query.startswith('DELETE'):
-        print(f"{owner_id} : {user_id}")
+        logger.debug(f"{owner_id} : {user_id}")
         is_authorized = (owner_id and user_id == owner_id)
 
         if normalized_query.startswith('UPDATE "USER_PROFILES"'):
             targeted_user_id = str(params[-1])
             if user_id == targeted_user_id:
-                print("  - Authorized as self-update for user_profiles.")
+                logger.info("  - Authorized as self-update for user_profiles.")
                 is_authorized = True
 
         if not is_authorized:
             error_msg = "Error: Authorization failed. This operation is restricted to the Primary Operator or for updating your own profile."
-            print(f"  - SECURITY ALERT: Denied unauthorized write attempt by user {user_id}.")
+            logger.warning(f"  - SECURITY ALERT: Denied unauthorized write attempt by user {user_id}.")
             return error_msg
         
-        print("  - Authorized for high-level write.")
+        logger.info("  - Authorized for high-level write.")
 
     elif normalized_query.startswith('INSERT'):
-        print("  - Authorized for low-level INSERT.")
+        logger.info("  - Authorized for low-level INSERT.")
         pass
 
     else:
@@ -452,11 +455,11 @@ def execute_sql_write(query: str, params: List[Union[str, int, float, bool, None
             cursor.execute(query, tuple(params))
             conn.commit()
             rows_affected = cursor.rowcount
-            print(f"  - Write successful. {rows_affected} row(s) affected.")
+            logger.info(f"  - Write successful. {rows_affected} row(s) affected.")
             return f"Success. The query executed and affected {rows_affected} row(s)."
 
     except sqlite3.Error as e:
-        print(f"ERROR: A database error occurred in execute_sql_write: {e}")
+        logger.error(f"ERROR: A database error occurred in execute_sql_write: {e}")
         return f"An unexpected database error occurred: {e}"
 
 
@@ -465,16 +468,16 @@ def execute_sql_ddl(query: str, user_id: str) -> str:
     (Pillar 2) Executes a Data Definition Language (DDL) query against the database.
     This is a high-level, protected tool restricted to the Primary Operator.
     """
-    print(f"--- DB DDL Request from User: {user_id} ---")
-    print(f"  - Query: {query}")
+    logger.info(f"--- DB DDL Request from User: {user_id} ---")
+    logger.info(f"  - Query: {query}")
 
     owner_id = os.getenv("DISCORD_OWNER_ID")
     if not (owner_id and user_id == owner_id):
         error_msg = "Error: Authorization failed. This operation is restricted to the Primary Operator."
-        print(f"  - SECURITY ALERT: Denied unauthorized DDL attempt by user {user_id}.")
+        logger.warning(f"  - SECURITY ALERT: Denied unauthorized DDL attempt by user {user_id}.")
         return error_msg
     
-    print("  - Authorized for high-level DDL operation.")
+    logger.info("  - Authorized for high-level DDL operation.")
 
     normalized_query = query.strip().upper()
     if not (
@@ -490,11 +493,11 @@ def execute_sql_ddl(query: str, user_id: str) -> str:
             cursor = conn.cursor()
             cursor.executescript(query)
             conn.commit()
-            print("  - DDL query executed successfully.")
+            logger.info("  - DDL query executed successfully.")
             return "Success. The DDL query was executed and the changes have been committed."
 
     except sqlite3.Error as e:
-        print(f"ERROR: A database error occurred in execute_sql_ddl: {e}")
+        logger.error(f"ERROR: A database error occurred in execute_sql_ddl: {e}")
         return f"An unexpected database error occurred: {e}"
 
 # --- HIGH-LEVEL SELF-REFERENTIAL TOOLS ---
@@ -504,7 +507,7 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
     (Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,
     commits the change, and pushes the branch to the remote 'origin'.
     """
-    print(f"--- Git Commit Proposal received for '{file_path}' ---")
+    logger.info(f"--- Git Commit Proposal received for '{file_path}' ---")
 
     owner_id = os.getenv("DISCORD_OWNER_ID")
     if str(user_id) != owner_id:
@@ -525,7 +528,7 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
         
         # Fetch latest changes from origin and ensure the local main branch is up-to-date.
         origin = repo.remote(name='origin')
-        print("  - Fetching latest from origin...")
+        logger.info("  - Fetching latest from origin...")
         origin.fetch()
         repo.heads.master.checkout(force=True) # Use master or main as appropriate
         repo.git.reset('--hard', 'origin/master')
@@ -545,20 +548,20 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
         # --- FIX: Restore branch_name assignment ---
         branch_name = f"orion-changes/{timestamp}-{sanitized_message[:50]}"
 
-        print(f"  - Creating new branch: {branch_name}")
+        logger.info(f"  - Creating new branch: {branch_name}")
         new_branch = repo.create_head(branch_name)
         new_branch.checkout()
 
-        print(f"  - Writing {len(new_content)} bytes to {file_path}")
+        logger.info(f"  - Writing {len(new_content)} bytes to {file_path}")
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with open(target_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
-        print("  - Staging and committing changes...")
+        logger.info("  - Staging and committing changes...")
         repo.index.add([str(target_path)])
         repo.index.commit(commit_message)
 
-        print(f"  - Pushing branch '{branch_name}' to origin...")
+        logger.info(f"  - Pushing branch '{branch_name}' to origin...")
         origin = repo.remote(name='origin')
         origin.push(branch_name)
 
@@ -566,7 +569,7 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
                 f"with your changes for `{file_path}`. Please review and merge the pull request on GitHub.")
 
     except GitCommandError as e:
-        print(f"ERROR: A Git command failed: {e}")
+        logger.error(f"ERROR: A Git command failed: {e}")
         # --- START: Improvement ---
         if branch_name and "push" in str(e).lower():
             return (f"Error: The commit was created locally in branch '{branch_name}', but failed to push to GitHub. "
@@ -574,13 +577,13 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
         return f"A Git command failed, but your changes might be saved locally in branch '{branch_name}'. Please review. Details: {e}"
         # --- END: Improvement ---
     except Exception as e:
-        print(f"ERROR: An unexpected error occurred in create_git_commit_proposal: {e}")
+        logger.error(f"ERROR: An unexpected error occurred in create_git_commit_proposal: {e}")
         return f"An unexpected error occurred. Your changes might be saved locally in branch '{branch_name}'. Please review. Details: {e}"
     finally:
         # --- START: Improvement ---
         # Ensure we always return to the original branch, even on failure.
         if repo and original_branch:
-            print(f"  - Returning to original branch: {original_branch.name}")
+            logger.info(f"  - Returning to original branch: {original_branch.name}")
             original_branch.checkout()
         # --- END: Improvement ---
 
@@ -591,25 +594,25 @@ def manual_sync_instructions(user_id: str) -> str:
     Triggers a manual synchronization of the AI's core instruction files.
     SECURITY: This is a restricted tool.
     """
-    print("--- Manual Instruction Sync requested... ---")
+    logger.info("--- Manual Instruction Sync requested... ---")
     primary_operator_id = os.getenv("DISCORD_OWNER_ID")
     if str(user_id) != primary_operator_id:
-        print(f"--- SECURITY ALERT: Unauthorized attempt to use manual_sync_instructions by user_id '{user_id}' ---")
+        logger.warning(f"--- SECURITY ALERT: Unauthorized attempt to use manual_sync_instructions by user_id '{user_id}' ---")
         return "Error: Unauthorized. This function is restricted to the Primary Operator only."
 
     try:
-        print("--- Operator authorized. Proceeding with manual sync... ---")
+        logger.info("--- Operator authorized. Proceeding with manual sync... ---")
         sync_docs.sync_instructions()
         return "Core instruction files have been successfully synchronized from the source."
     except Exception as e:
-        print(f"ERROR during manual sync: {e}")
+        logger.error(f"ERROR during manual sync: {e}")
         return f"An unexpected error occurred during the manual sync process: {e}"
 
 def rebuild_manifests(manifest_names: list[str]) -> str:
     """
     Rebuilds specified manifest JSON files using the central config.
     """
-    print(f"--- ACTION: Rebuilding manifests: {manifest_names} ---")
+    logger.info(f"--- ACTION: Rebuilding manifests: {manifest_names} ---")
     # Use the centrally managed config for paths
     db_path = Path(config.DB_FILE)
     output_path = Path(config.OUTPUT_DIR)
@@ -635,7 +638,7 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
                 db_not_required_map[name](output_path)
                 rebuilt_successfully.append(name)
             except Exception as e:
-                print(f"Error rebuilding manifest '{name}': {e}")
+                logger.error(f"Error rebuilding manifest '{name}': {e}")
         elif name in db_required_map:
             db_manifests_to_run.append(name)
         else:
@@ -653,7 +656,7 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
                     db_required_map[name](conn, output_path)
                     rebuilt_successfully.append(name)
                 except Exception as e:
-                    print(f"Error rebuilding manifest '{name}': {e}")
+                    logger.error(f"Error rebuilding manifest '{name}': {e}")
         finally:
             conn.close()
             
@@ -664,7 +667,7 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
 
 def browse_website(url: str) -> str:
     """Reads the text content of a single webpage."""
-    print(f"--- Browsing website: {url} ---")
+    logger.info(f"--- Browsing website: {url} ---")
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
@@ -679,7 +682,7 @@ def list_project_files(subdirectory: str = ".") -> str:
     """
     Lists all files and directories within the project.
     """
-    print(f"--- Listing Project Files on directory {subdirectory} ---")
+    logger.info(f"--- Listing Project Files on directory {subdirectory} ---")
     try:
         start_path = (PROJECT_ROOT / subdirectory).resolve()
         if not start_path.is_relative_to(PROJECT_ROOT):
@@ -705,7 +708,7 @@ def delegate_to_native_tools_agent(task: str) -> str:
     This tool should be used when a user's query cannot be answered directly and requires external information or computation.
     The 'task' parameter should be a detailed description of what the agent needs to accomplish.
     """
-    print(f"--- Delegating task to Native Tools Agent: {task} ---")
+    logger.info(f"--- Delegating task to Native Tools Agent: {task} ---")
 
     core = config.ORION_CORE_INSTANCE
     if not core:
@@ -725,7 +728,7 @@ def read_file(file_path: str, start_line: Optional[int] = None, end_line: Option
     optionally within a specified line range. For binary files (images, PDFs, audio, etc.)
     or very large text files, it uploads the file and returns a file object for the LLM to process.
     """
-    print(f"--- Reading File located on: {file_path} ---")
+    logger.info(f"--- Reading File located on: {file_path} ---")
     try:
         target_path = (PROJECT_ROOT / file_path).resolve()
 
@@ -746,7 +749,7 @@ def read_file(file_path: str, start_line: Optional[int] = None, end_line: Option
         file_size = target_path.stat().st_size
         # Use upload for non-text files OR for text files larger than ~200k tokens (800KB)
         if not is_text or file_size > 800_000:
-            print(f"  - File is non-text ({mime_type}) or large ({file_size / 1_000_000:.2f} MB). Uploading to File API...")
+            logger.info(f"  - File is non-text ({mime_type}) or large ({file_size / 1_000_000:.2f} MB). Uploading to File API...")
             if not config.ORION_CORE_INSTANCE:
                 return "Error: Orion Core instance not available for file upload."
             
@@ -763,7 +766,7 @@ def read_file(file_path: str, start_line: Optional[int] = None, end_line: Option
 
                 # --- AGENTIC WORKFLOW INITIATION ---
                 if file_handle:
-                    print("--- Delegating to File Processing Agent ---")
+                    logger.info("--- Delegating to File Processing Agent ---")
                     core = config.ORION_CORE_INSTANCE
                     if not core:
                         return "Error: Orion Core instance not available for agent delegation."

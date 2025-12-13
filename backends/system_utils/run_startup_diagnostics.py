@@ -13,6 +13,10 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from main_utils import main_functions as functions
+from main_utils.orion_logger import setup_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 # This function would be imported and called by orion_core.py during its boot sequence.
 # The `tools` dictionary would be passed in from the OrionCore instance to avoid circular imports.
@@ -33,7 +37,7 @@ def run_heartbeat_check(tools: Dict[str, Callable]) -> bool:
     suite_path = config.DATA_DIR / 'diagnostic_suite.json'
     all_tests_passed = True
 
-    print("--- INITIATING TIER 1 HEARTBEAT CHECK ---")
+    logger.info("--- INITIATING TIER 1 HEARTBEAT CHECK ---")
 
     if not os.path.exists(suite_path):
         print(f"CRITICAL ERROR: Diagnostic suite file not found at {suite_path}. Aborting checks.")
@@ -98,4 +102,6 @@ def main():
     run_heartbeat_check(tools_dict)
 
 if __name__ == "__main__":
+    from main_utils import config
+    setup_logging("StartupDiagnostics", config.DATA_DIR / "logs" / "system_utils.log")
     main()

@@ -36,6 +36,7 @@ EDIT_TIME = 1.5 # Frequency of editing discord messages in seconds
 VOICE = False # TTS voice support
 VISION = False # Vision support
 BUFFER_SIZE = 30 # Number of messages to keep in buffer
+AUTO_BACKUP_INTERVAL_HOURS = 12 # Time in hours between auto-backups
 
 # --- CORE CONFIGS ---
 ORION_CORE_INSTANCE = None # Where the core instance is stored

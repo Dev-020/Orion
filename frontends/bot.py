@@ -3,6 +3,7 @@
 import discord
 import os
 import sys
+import logging
 from pathlib import Path
 
 # --- PATH HACK FOR REFRACTOR PHASE 1 ---
@@ -13,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / 'backends'))
 import asyncio
 import time
 import io
+import logging
 from dotenv import load_dotenv  
 from discord.ext import commands
 import threading
@@ -20,14 +22,20 @@ from collections import deque # <--- Added for efficient buffer
 
 # 1. Config Override (Must be before OrionCore init)
 from main_utils import config
+from main_utils.orion_logger import setup_logging
+
 config.VOICE = False
 config.VISION = False
+
+# --- LOGGING SETUP ---
+LOG_FILE = config.DATA_DIR / "logs" / "bot.log"
+logger = setup_logging("Bot", LOG_FILE, level=logging.INFO)
 
 # --- One "Brain" ---
 # Load environment variables
 load_dotenv()
 persona = os.getenv("ORION_PERSONA", "default")
-print(f"--- Bot starting with Persona: {persona} (Voice/Vision Disabled) ---")
+logger.info(f"--- Bot starting with Persona: {persona} (Voice/Vision Disabled) ---")
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -40,7 +48,7 @@ bot = discord.Bot(intents=intents, debug_guilds=[os.getenv("DISCORD_GUILD_ID")] 
 # --- CLIENT WRAPPER ---
 from orion_client import OrionClient 
 
-print("--- Initializing Orion Client ---")
+logger.info("--- Initializing Orion Client ---")
 # Connect to local Server
 core = OrionClient(base_url="http://127.0.0.1:8000")
 bot.core = core
@@ -73,39 +81,6 @@ async def consume_generator_async(generator, message_to_edit):
     # We only care about the *current* chunk we are streaming into
     
     try:
-        # fix: iterate asynchronously if the generator is async, 
-        # BUT OrionCore currently returns a synchronous generator in a thread usually?
-        # Actually core.process_prompt is a standard generator, so we iterate synchronously 
-        # but we might be running this in a thread. 
-        # However, we are in an async function here. 
-        # To keep the bot responsive, we should probably iterate direct if it's a generator,
-        # but since core blocks, we really should have run the whole process_prompt in a thread.
-        # Let's adjust: process_prompt is a generator. We need to iterate it. 
-        # If we iterate it in the main loop, it blocks.
-        # So we need to wrap the *iteration* in a thread or use an async wrapper.
-        # Since core is sync, we'll do the "run_in_executor" dance for each Step? No, that's inefficient.
-        # Better: run the Consumer in a thread, but the consumer needs to await bot.edit. 
-        # This is tricky mixing sync generator with async discord calls.
-        
-        # SOLUTION: We will not use 'async for' because core is sync.
-        # We will use a dedicated thread to consume the generator, push updates to a queue,
-        # and a local async loop to read the queue and update Discord.
-        
-        queue = asyncio.Queue()
-        
-        def generator_producer():
-            try:
-                for item in generator:
-                    asyncio.run_coroutine_threadsafe(queue.put(item), bot.loop)
-                asyncio.run_coroutine_threadsafe(queue.put("DONE"), bot.loop)
-            except Exception as e:
-                asyncio.run_coroutine_threadsafe(queue.put({"type": "error", "content": str(e)}), bot.loop)
-
-        # Start producer thread
-        producer_thread = threading.Thread(target=generator_producer)
-        producer_thread.start()
-        
-    # Consumer loop (Async)
         should_restart = False
         message_chain = [message_to_edit] # Track all messages in response
         thought_buffer = ""
@@ -124,12 +99,9 @@ async def consume_generator_async(generator, message_to_edit):
                 # In response phase: Show ONLY Response (Thoughts are handled via file)
                 text += full_text_buffer
             return text
-        
-        while True:
-            item = await queue.get()
-            if item == "DONE":
-                break
-                
+
+        # NATIVE ASYNC LOOP - No Threading/Encoding needed
+        async for item in generator:
             if isinstance(item, dict):
                 msg_type = item.get("type")
                 content = item.get("content")
@@ -184,7 +156,7 @@ async def consume_generator_async(generator, message_to_edit):
                             continue # Skip standard processing this loop
                             
                         except Exception as e:
-                            print(f"Failed to attach thought file: {e}")
+                            logger.error(f"Failed to attach thought file: {e}")
                             # Fallback: Just keep printing text
                             pass
                     
@@ -208,7 +180,6 @@ async def consume_generator_async(generator, message_to_edit):
                     display_text = get_display_text(is_thought_phase=is_thinking)
                     message_chain = await update_message_chain(message_to_edit.channel, message_chain, display_text)
             
-            queue.task_done()
         
         # Final flush
         # Check if we never transitioned (e.g. only thoughts, no tokens?) unlikely but solvable
@@ -235,7 +206,7 @@ async def consume_generator_async(generator, message_to_edit):
         return should_restart
 
     except Exception as e:
-        print(f"Error in consumer: {e}")
+        logger.error(f"Error in consumer: {e}")
         await current_message.edit(content=f"{full_text_buffer}\n\n[Bot Error: {e}]")
 
     return False # No restart by default
@@ -450,10 +421,10 @@ async def on_message(message: discord.Message):
             }
             
             recent_messages_buffer[channel_id].append(msg_data)
-            print(f"[\033[96mBuffer Debug\033[0m] Channel {channel_id}: Appended message from {msg_data['author_name']}")
+            logger.debug(f"[\033[96mBuffer Debug\033[0m] Channel {channel_id}: Appended message from {msg_data['author_name']}")
             
     except Exception as e:
-        print(f"Error in buffering message: {e}")
+        logger.error(f"Error in buffering message: {e}")
     # --- BUFFER LOGIC END ---
     
     if bot.user in message.mentions or isinstance(message.channel, discord.DMChannel):
@@ -492,7 +463,7 @@ async def on_message(message: discord.Message):
                 
             # CLEAR BUFFER (As requested to prevent duplication)
             recent_messages_buffer[channel_id].clear()
-            print(f"[\033[93mBuffer Debug\033[0m] Channel {channel_id}: Buffer cleared after context retrieval.")
+            logger.debug(f"[\033[93mBuffer Debug\033[0m] Channel {channel_id}: Buffer cleared after context retrieval.")
         
         # File Handling
         file_check = []
@@ -500,25 +471,29 @@ async def on_message(message: discord.Message):
             for attachment in message.attachments:
                 ctype = attachment.content_type or ""
                 
-                # Unified File Handling via Core
+                # Unified File Handling via Core (ASYNC)
                 try: 
                     # 1. Download bytes
                     file_bytes = await attachment.read()
                     
-                    # 2. Upload directly from memory
-                    # Signature: upload_file(file_path=None, mime_type=str, file_obj=bytes, display_name=str)
-                    f = await bot.loop.run_in_executor(
-                        None, 
-                        lambda: core.upload_file(mime_type=ctype, file_obj=file_bytes, display_name=attachment.filename)
+                    # 2. Upload directly (ASYNC)
+                    logger.info(f"Uploading {attachment.filename} ({len(file_bytes)} bytes)...")
+                    
+                    # DIRECT AWAIT - No run_in_executor needed for async methods
+                    f = await core.async_upload_file(
+                        mime_type=ctype, 
+                        file_obj=file_bytes, 
+                        display_name=attachment.filename
                     )
 
                     if f: 
                         file_check.append(f)
+                        logger.info(f"Successfully uploaded: {attachment.filename}")
                     else:
-                        print(f"[\033[91mUpload Error\033[0m] Failed to upload {attachment.filename}")
+                        logger.error(f"[\033[91mUpload Error\033[0m] Failed to upload {attachment.filename}")
                         user_prompt += f"\n[System: User attached file '{attachment.filename}' but it failed to process.]"
                 except Exception as e:
-                    print(f"[\033[91mUpload Exception\033[0m] {e}")
+                    logger.error(f"[\033[91mUpload Exception\033[0m] {e}")
                     user_prompt += f"\n[System: Error reading attachment '{attachment.filename}': {e}]"
 
         if recent_context:
@@ -528,31 +503,33 @@ async def on_message(message: discord.Message):
         # 3. Initial "Thinking" Message
         response_msg = await message.reply("*[Orion is thinking...]*")
         
-        # 4. Call Core (Generator)
-        def blocking_get_gen():
-            return core.process_prompt(
-                session_id=session_id,
-                user_prompt=user_prompt,
-                file_check=file_check,
-                user_id=str(message.author.id),
-                user_name=message.author.name,
-                stream=use_stream
-            )
+        # 4. Call Core (Async Generator) - DIRECT
+        # No blocking_get_gen, no to_thread. Just call the async generator method.
+        generator = core.async_process_prompt(
+            session_id=session_id,
+            user_prompt=user_prompt,
+            file_check=file_check,
+            user_id=str(message.author.id),
+            user_name=message.author.name,
+            stream=use_stream
+        )
         
-        generator = await asyncio.to_thread(blocking_get_gen)
+        # 5. Consume (Streams updates to response_msg)
+        # We await the consumer, which iterates the generator.
+        should_restart = await consume_generator_async(generator, response_msg)
         
         # 5. Consume (Streams updates to response_msg)
         should_restart = await consume_generator_async(generator, response_msg)
         
         # 6. Restart if needed
         if should_restart:
-             print("--- RESTART TRIGGERED BY CHAT ---")
+             logger.info("--- RESTART TRIGGERED BY CHAT ---")
              if core.save_state_for_restart():
                  core.execute_restart()
 
 if __name__ == "__main__":
     if BOT_TOKEN:
-        print("--- Starting Discord Bot Client ---")
+        logger.info("--- Starting Discord Bot Client ---")
         
         # --- LOAD COGS ---
         cogs_dir = Path(__file__).resolve().parent / "cogs"
@@ -561,13 +538,13 @@ if __name__ == "__main__":
                 if filename.endswith(".py"):
                     try:
                         bot.load_extension(f"cogs.{filename[:-3]}")
-                        print(f"Loaded Cog: {filename}")
+                        logger.info(f"Loaded Cog: {filename}")
                     except Exception as e:
-                        print(f"Failed to load cog {filename}: {e}")
+                        logger.error(f"Failed to load cog {filename}: {e}")
 
         try:
             bot.run(BOT_TOKEN)
         except Exception as e:
-            print(f"Bot Crashed: {e}")
+            logger.critical(f"Bot Crashed: {e}")
     else:
-        print("ERROR: NO TOKEN")
+        logger.critical("ERROR: NO TOKEN")

@@ -20,6 +20,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT / 'backends')) # Add backends to sys.path
 
 from main_utils import config
+from main_utils.orion_logger import setup_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 DATABASES_DIR = PROJECT_ROOT / 'databases' # Databases are in root/databases
@@ -100,7 +104,7 @@ def perform_hot_backup(src_db_path, dest_backup_path):
         src_conn.close()
         return True
     except Exception as e:
-        print(f"Error during hot backup of {src_db_path}: {e}")
+        logger.error(f"Error during hot backup of {src_db_path}: {e}")
         # Try to print more info about the file
         try:
              import os
@@ -128,7 +132,7 @@ def run_backup(backup_type='manual'):
     Main entry point for running the backup programmatically.
     Returns the number of files uploaded.
     """
-    print(f"--- Starting {backup_type.upper()} Backup ---")
+    logger.info(f"--- Starting {backup_type.upper()} Backup ---")
     
     # 1. Authenticate
     try:
@@ -172,11 +176,29 @@ def run_backup(backup_type='manual'):
                 
                 # Smart Change Detection (Auto Only)
                 current_hash = calculate_file_hash(db_file)
-                last_hash = backup_state.get(persona_name, {}).get('last_hash')
+                last_backup_state = backup_state.get(persona_name, {})
+                last_hash = last_backup_state.get('last_hash')
+                last_time_str = last_backup_state.get('last_backup_time')
                 
-                if backup_type == 'auto' and current_hash == last_hash:
-                    print(f"  -> Skipped (No changes detected since last backup).")
-                    continue
+                if backup_type == 'auto':
+                    # 1. TIME GATE: Check if 12 hours have passed
+                    if last_time_str:
+                        try:
+                            last_time = datetime.datetime.strptime(last_time_str, "%Y-%m-%d_%H-%M-%S")
+                            time_diff = datetime.datetime.now() - last_time
+                            interval_seconds = config.AUTO_BACKUP_INTERVAL_HOURS * 3600
+                            if time_diff.total_seconds() < interval_seconds:
+                                # Less than configured hours passed
+                                # logger.info(f"  -> Skipped (Not due yet. Next check in {(interval_seconds - time_diff.total_seconds())/3600:.1f}h).")
+                                continue
+                        except ValueError:
+                            # Format error, force backup check
+                            pass
+
+                    # 2. DATA CHECK: Only if time gate passed (or first run)
+                    if current_hash == last_hash:
+                        print(f"  -> Skipped (No changes detected since last backup).")
+                        continue
                 
                 files_to_upload.append((persona_name, db_file, current_hash))
 
@@ -229,4 +251,5 @@ def main():
     run_backup(args.type)
 
 if __name__ == '__main__':
+    setup_logging("BackupDB", config.DATA_DIR / "logs" / "system_utils.log")
     main()

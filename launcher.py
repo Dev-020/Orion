@@ -1,4 +1,3 @@
-# --- IMPORTS ---
 import sys
 import os
 import time
@@ -10,10 +9,14 @@ from pathlib import Path
 from datetime import datetime
 import msvcrt # Windows specific
 import atexit
+import urllib.request
+import urllib.error
+import json
 
 # Add backends to path to get config
 sys.path.append(str(Path(__file__).resolve().parent / "backends"))
 from main_utils import config
+from main_utils.orion_logger import setup_logging
 
 # RICH Imports
 from rich.console import Console
@@ -26,10 +29,15 @@ from rich.align import Align
 from rich import box
 
 # --- CONFIG ---
+# Launcher has its own log too
 LOG_DIR = config.DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR = LOG_DIR / "archive"
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Standardized Logger for Launcher itself (e.g. process management errors)
+# We disable console output for the launcher logger itself to avoid conflicting with TUI
+LOGGER = setup_logging("Launcher", LOG_DIR / "launcher.log", level=logging.INFO, console_output=False)
 
 PROCESSES = {
     "server": {
@@ -69,7 +77,7 @@ class LogManager:
             shutil.move(str(file_path), str(destination))
         except Exception as e:
             # Fallback if file is locked (shouldn't happen if processes are dead)
-            print(f"Failed to archive {file_path}: {e}")
+            LOGGER.error(f"Failed to archive {file_path}: {e}")
 
     @staticmethod
     def cleanup_all_logs():
@@ -81,6 +89,7 @@ class LogManager:
 class ProcessManager:
     def __init__(self):
         self.procs = {}
+        self.start_times = {} # Track startup time for health heuristics
         # Initialize statuses for all known processes to prevent KeyError in UI
         self.statuses = {k: "STOPPED" for k in PROCESSES.keys()}
         # Ensure subprocesses use UTF-8 for IO to prevent 'charmap' errors on Windows
@@ -112,34 +121,61 @@ class ProcessManager:
             return
 
         try:
-            # SESSION LOGGING: Append ("a") mode. Archiving only happens on Launcher startup.
-            f = open(log_path, "a", encoding='utf-8')
-            f.write(f"\n--- [RESTARTING SERVICE: {key} @ {datetime.now()}] ---\n")
+            # STATUS: Transition
+            self.statuses[key] = "STARTING..."
+            self.start_times[key] = time.time() # Track start time for heuristics
+            
+            # SESSION LOGGING:
+            err_path = LOG_DIR / f"{key}.err.log"
+            f_err = open(err_path, "a", encoding="utf-8")
             
             p = subprocess.Popen(
                 cmd, 
-                stdout=f, 
-                stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL, 
+                stderr=f_err,             
                 cwd=str(Path(__file__).parent),
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
                 env=self.env
             )
+            f_err.close() 
+
             self.procs[key] = p
-            self.statuses[key] = "RUNNING"
-            PROCESSES[key]["log"] = log_path # Update path just in case
+            PROCESSES[key]["log"] = log_path
         except Exception as e:
             self.statuses[key] = f"ERROR: {e}"
 
-    def stop_process(self, key):
+    def stop_process(self, key, persist=False):
         if key in self.procs:
             p = self.procs[key]
+            
+            # 1. Graceful Shutdown Attempt
+            self.statuses[key] = "STOPPING..."
+            
+            if key == "server" and p.poll() is None:
+                try:
+                    # Append persist flag to URL
+                    url = f"http://127.0.0.1:8000/management/shutdown?persist={'true' if persist else 'false'}"
+                    req = urllib.request.Request(url, method="POST")
+                    with urllib.request.urlopen(req, timeout=2) as response: # Bump timeout slightly for DB save
+                        pass
+                except:
+                    # If API is dead, we fallback to kill
+                    pass
+
+            # 2. Polling Wait
+            start_wait = time.time()
+            while p.poll() is None and (time.time() - start_wait) < 5:
+                time.sleep(0.1)
+
+            # 3. Force Kill Fallback
             if p.poll() is None:
                 p.terminate()
                 try:
                     p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     p.kill()
+                    
             del self.procs[key]
             self.statuses[key] = "STOPPED"
 
@@ -156,17 +192,45 @@ class ProcessManager:
     def check_health(self):
         for key, p in list(self.procs.items()):
             ret = p.poll()
+            
+            # DEAD PROCESS
             if ret is not None:
-                # SUPERVISOR PATTERN: Exit Code 5 = Request Restart
                 if ret == 5:
                     self.statuses[key] = f"RESTARTING..."
                     del self.procs[key]
-                    # Brief delay to allow port release or cleanup
                     time.sleep(1)
                     self.start_process(key)
                 else:
                     self.statuses[key] = f"EXITED ({ret})"
                     del self.procs[key] 
+                continue
+
+            # LIVE PROCESS - HEALTH CHECKS
+            if key == "server":
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=0.5) as response:
+                        if response.status == 200:
+                            data = json.loads(response.read().decode())
+                            # Map Backend status to UI status
+                            # status: "initializing" | "healthy"
+                            if data.get("status") == "healthy":
+                                self.statuses[key] = "RUNNING [OK]"
+                            else:
+                                self.statuses[key] = "INITIALIZING..."
+                except Exception:
+                    # If we can't connect, but process is alive:
+                    # 1. Maybe it's still starting up? (Give it 10s grace period)
+                    if time.time() - self.start_times.get(key, 0) < 15:
+                         self.statuses[key] = "STARTING..."
+                    else:
+                         self.statuses[key] = "UNRESPONSIVE" # Frozen detection!
+            
+            else:
+                # Bot/GUI: Simple timeout heuristic
+                if time.time() - self.start_times.get(key, 0) < 5:
+                    self.statuses[key] = "STARTING..."
+                else:
+                    self.statuses[key] = "RUNNING" 
 
 # --- LAUNCHER LOGGING ---
 # Logs for the orchestrator itself (commands run, errors, etc)
@@ -198,33 +262,81 @@ def get_log_view_height():
         # Total height - Header(3) - Footer(3) - Panel Borders(2) = roughly -8
         # We allow a larger buffer AND a safety factor for wrapping (long lines take >1 row)
         available_height = max(10, console.size.height - 10)
-        return int(available_height * 0.75) # Safety factor for wrapped lines
+        return int(available_height) # Maximized height
     except:
         return 20
 
+import textwrap
+
 def tail_logs(key, offset=0):
-    """Reads the last N lines of the selected log file."""
+    """
+    Reads logs and handles VISUAL wrapping to prevent TUI lag.
+    """
     log_path = PROCESSES[key]["log"]
     if not log_path.exists():
         return [f"[grey]Waiting for logs...[/]"]
     
     try:
+        # 1. Calculate width of the log panel (approx 3/4 screen - borders)
+        # We need this to know how many visual lines 1 actual line takes.
+        panel_width = int(console.size.width * 0.75) - 4
+        if panel_width < 10: panel_width = 10 # Safety
+        
         with open(log_path, "r", encoding='utf-8', errors='ignore') as f:
+            # OPTIMIZATION: Read only last 4KB to approximate last ~50-100 lines
+            # instead of reading whole file (which is slow for large logs).
+            # But simple readlines is safer for now for correctness.
             lines = f.readlines()
             if not lines: return []
+            
+            # Read a healthy buffer (e.g., last 200 lines) to account for wrapping
+            # If we only read 'view_height' file lines, wrapping might expand them to 
+            # 2*view_height visual lines, pushing old stuff off screen, which is fine, 
+            # but we want to maximize filling the screen.
+            raw_lines = lines[-200:] 
+            
+            visual_lines = []
+            for line in raw_lines:
+                clean_line = line.rstrip()
+                if not clean_line: continue
+                
+                # Dynamic Coloring based on Content (Since file is plain text)
+                style_tag = ""
+                if "ERROR" in clean_line: style_tag = "[red]"
+                elif "WARNING" in clean_line: style_tag = "[yellow]"
+                elif "INFO" in clean_line: style_tag = "[cyan]"
+                elif "DEBUG" in clean_line: style_tag = "[grey50]"
+                elif "CRITICAL" in clean_line: style_tag = "[bold red]"
+                
+                # Wrap based on panel width
+                wrapped = textwrap.wrap(clean_line, width=panel_width)
+                if not wrapped: # Handle empty/whitespace
+                    visual_lines.append("\n")
+                else:
+                    # Append \n to each wrapped line AND apply style
+                    for w in wrapped:
+                        if style_tag:
+                            visual_lines.append(f"{style_tag}{w}[/]\n")
+                        else:
+                            visual_lines.append(w + "\n")
             
             view_height = get_log_view_height()
             
             if offset == 0:
-                return lines[-view_height:]
+                return visual_lines[-view_height:]
             else:
                 end_index = -offset
                 start_index = -(view_height + offset)
-                # Handle out of bounds
-                if abs(start_index) > len(lines):
-                    start_index = 0
-                    end_index = view_height
-                return lines[start_index:end_index]
+                
+                # Boundaries
+                if abs(end_index) > len(visual_lines):
+                    return [] # Scrolled past top
+                    
+                if abs(start_index) > len(visual_lines):
+                    start_index = 0 # Cap at top
+                    
+                return visual_lines[start_index:end_index]
+
     except Exception as e:
         return [f"[red]Error reading log: {e}[/]"]
 
@@ -296,7 +408,8 @@ def render_main():
     offset = APP_STATE.get("scroll_offset", 0)
     
     logs = tail_logs(key, offset)
-    log_text = Text.from_ansi("".join(logs)) 
+    # Use from_markup to interpret the tags we added in tail_logs
+    log_text = Text.from_markup("".join(logs)) 
     header_text = f"Live Logs: [bold yellow]{PROCESSES[key]['name']}[/bold yellow] (Path: {PROCESSES[key]['log']})"
     if offset > 0:
         header_text += f" [bold red](SCROLLING: {offset})[/bold red]"
@@ -318,7 +431,7 @@ def process_command(cmd: str):
     if not parts: return
     action = parts[0]
     
-    logging.info(f"Command executed: {cmd}") 
+    LOGGER.info(f"Command executed: {cmd}") 
 
     feedback = ""
 
@@ -354,12 +467,14 @@ def process_command(cmd: str):
                     pm.stop_process(t)
                     feedback = f"Stopped {t}..."
                 elif action == "restart":
-                    pm.stop_process(t)
+                    # PASS PERSIST FLAG HERE
+                    pm.stop_process(t, persist=True)
                     time.sleep(0.5)
                     pm.start_process(t)
-                    feedback = f"Restarted {t}..."
+                    feedback = f"Restarted {t} (Persistence Active)..."
             else:
                 feedback = f"Unknown service: {t}"
+                
                 
     elif action == "logs":
         if len(parts) < 2:

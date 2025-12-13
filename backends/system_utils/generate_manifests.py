@@ -13,6 +13,10 @@ import os
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 from main_utils import config, main_functions as functions
+from main_utils.orion_logger import setup_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 # These will be initialized in main() from the config module.
 DB_FILE = None
@@ -25,7 +29,7 @@ def get_db_connection(db_file_path):
         db_uri = f"file:{db_file_path}?mode=ro"
         conn = sqlite3.connect(db_uri, uri=True)
         conn.row_factory = sqlite3.Row # Makes rows accessible by column name.
-        print(f"Successfully connected to database '{db_file_path}' in read-only mode.")
+        logger.info(f"Successfully connected to database '{db_file_path}' in read-only mode.")
         return conn
     except sqlite3.Error as e:
         print(f"FATAL: Database connection failed: {e}")
@@ -325,4 +329,5 @@ def main():
 if __name__ == "__main__":
     # --- PATH INITIALIZATION ---
     functions.initialize_persona()  # Ensure persona is set for any function dependencies.
+    setup_logging("GenerateManifests", config.DATA_DIR / "logs" / "system_utils.log")
     main()

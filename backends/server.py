@@ -17,33 +17,31 @@ sys.path.append(str(BACKEND_ROOT))
 
 # Imports from our existing modules
 from main_utils import config
+from main_utils.orion_logger import setup_logging
+# Import Backup System
+try:
+    from system_utils import backup_db
+except ImportError:
+    backup_db = None
+
 try:
     from orion_core import OrionCore
 except ImportError:
-    print("WARNING: Could not import OrionCore.")
     pass
 
 try:
     from orion_core_lite import OrionLiteCore 
 except ImportError:
-    print("WARNING: Could not import OrionLiteCore.")
     pass
 
 # --- LOGGING SETUP ---
-# We want server logs to go to a file, not stdout (to keep TUI clean)
+# Server logs go to file primarily, with console output for debugging/TUI.
+# Standard log location: logs/server.log
 LOG_DIR = config.DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "server.log"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        # minimal console output for critical startup errors before redirection
-    ]
-)
-logger = logging.getLogger("server")
+logger = setup_logging("Server", LOG_FILE, level=logging.INFO)
 
 # --- GLOBAL STATE ---
 core_instance = None
@@ -95,6 +93,22 @@ async def lifespan(app: FastAPI):
     # Startup
     global core_instance, core_lock
     logger.info("Server starting up...")
+    
+    # --- AUTO BACKUP SCHEDULER ---
+    async def auto_backup_scheduler():
+        """Runs auto-backup check every 15 minutes."""
+        if not backup_db: return
+        logger.info("Auto-Backup Scheduler Started (Interval: 15m)")
+        while True:
+            try:
+                # Run in executor to avoid blocking async loop
+                # backup_db.run_backup handles the 12h gate and hash check logic internally
+                await asyncio.to_thread(backup_db.run_backup, 'auto')
+            except Exception as e:
+                logger.error(f"Auto-Backup Scheduler Error: {e}")
+            
+            await asyncio.sleep(15 * 60) # 15 minutes
+            
     try:
         # Initialize the Brain
         if config.BACKEND == "ollama":
@@ -106,6 +120,13 @@ async def lifespan(app: FastAPI):
              core_instance = OrionCore()
              logger.info("OrionCore Initialized Successfully.")
 
+        # Launch Backup Scheduler
+        if backup_db:
+            # Run one check immediately on startup (non-blocking)
+            asyncio.create_task(asyncio.to_thread(backup_db.run_backup, 'auto'))
+            # Start loop
+            asyncio.create_task(auto_backup_scheduler())
+
     except Exception as e:
         logger.critical(f"Failed to init OrionCore: {e}")
         # We might want to exit, but let's keep server alive to report health=bad
@@ -114,7 +135,20 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Server shutting down...")
-    pass
+    if core_instance:
+        logger.info("Shutting down OrionCore...")
+        core_instance.shutdown()
+        
+    # Final Backup Check
+    if backup_db:
+        logger.info("Performing final auto-backup check...")
+        try:
+            # We use a synchronous call here since we are shutting down
+            # but wrapping in to_thread might be safer if event loop still running?
+            # Actually, just run it. If it takes time, so be it, safety first.
+            backup_db.run_backup('auto')
+        except Exception as e:
+            logger.error(f"Final Backup Failed: {e}")
 
 app = FastAPI(lifespan=lifespan)
 # app = FastAPI() # Fallback if no lifespan needed, but we need it for Core init
@@ -194,7 +228,7 @@ async def process_prompt(request: PromptRequest):
     logger.info(f"Request from {request.username} ({request.session_id})")
     
     # Reconstruct file objects for Core
-    reconstructed_files = [StartableFile(f.dict()) for f in request.files]
+    reconstructed_files = [StartableFile(f.model_dump()) for f in request.files]
 
     async def response_generator():
         async with core_lock:
@@ -253,14 +287,43 @@ async def refresh_instructions_endpoint(request: dict):
         status = core_instance.trigger_instruction_refresh(full_restart=request.get("restart", False))
         return {"status": status}
 
-@app.get("/history")
-async def get_history(session_id: str, limit: int = 10):
-    async with core_lock:
-        # Fetch history from core's in-memory session store
-        hist = core_instance.sessions.get(session_id, [])
-        # We might need to serialize complex objects if hist contains them
-        # For now assuming dicts or serializable
-        return {"history": hist[-limit:]}
+import signal
+import os
+
+@app.post("/management/shutdown")
+async def shutdown_endpoint(persist: bool = False):
+    """Generic endpoint to trigger graceful shutdown from Launcher."""
+    if persist and core_instance:
+        logger.info("Persist flag received. Saving state before shutdown...")
+        # Check for method (Lite vs Pro compatibility)
+        if hasattr(core_instance, 'save_state_for_restart'):
+            core_instance.save_state_for_restart()
+        elif hasattr(core_instance, 'chat') and hasattr(core_instance.chat, 'save_state_for_restart'):
+            core_instance.chat.save_state_for_restart()
+            
+    logger.warning("Remote shutdown requested via API.")
+    # Simulate CTRL+C to trigger Uvicorn's graceful exit
+    # We schedule it slightly in future to allow response to return? 
+    # Actually os.kill is instant, but Uvicorn might handle it.
+    # Better: use BackgroundTasks to kill after return
+    
+    def kill_self():
+        import time
+        time.sleep(1) # Give time for response to flush
+        os.kill(os.getpid(), signal.SIGINT)
+        
+    background = BackgroundTasks()
+    background.add_task(kill_self)
+    
+    # We can't return background tasks directly in simple dict returns usually unless using return Response
+    # But we can just spawn a task in asyncio loop.
+    asyncio.create_task(shutdown_helper())
+    return {"status": "shutting_down"}
+
+async def shutdown_helper():
+    await asyncio.sleep(0.5)
+    logger.info("Triggering SIGINT...")
+    os.kill(os.getpid(), signal.SIGINT)
 
 if __name__ == "__main__":
     # HOST on localhost, Port 8000

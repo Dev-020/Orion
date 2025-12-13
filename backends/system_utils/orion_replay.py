@@ -29,6 +29,10 @@ from watchdog.events import FileSystemEventHandler
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from main_utils import config
+from main_utils.orion_logger import setup_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 dotenv.load_dotenv()
 
@@ -110,7 +114,7 @@ def trigger_replay_save():
 
 def _auto_replay_loop():
     """The main loop for the automatic replay saving thread."""
-    print("[Vision] Auto-replay thread started.")
+    logger.info("[Vision] Auto-replay thread started.")
     while not stop_auto_replay_event.is_set():
         # Wait for 30 seconds, but check for the stop event every second
         # This makes the thread more responsive to shutdown commands.
@@ -349,6 +353,7 @@ def main(file_processor_callback):
 # --- 7. NEW: EXAMPLE USAGE BLOCK ---
 
 if __name__ == "__main__":
+    setup_logging("OrionReplay", config.DATA_DIR / "logs" / "system_utils.log")
     # --- This block runs when you execute this script *directly* ---
     # --- It's an example of how your LLM script will use it ---
     

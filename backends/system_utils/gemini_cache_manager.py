@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from typing import Optional
 from google import genai
 from google.genai import types
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiCacheManager:
@@ -55,7 +58,7 @@ class GeminiCacheManager:
         # Ensure cache metadata table exists
         self._ensure_cache_table()
         
-        print(f"[Cache Manager] Initialized for persona '{persona}', model '{model_name}'")
+        logger.info(f"[Cache Manager] Initialized for persona '{persona}', model '{model_name}'")
 
     
     def _ensure_cache_table(self):
@@ -284,5 +287,5 @@ class GeminiCacheManager:
         Returns:
             New CachedContent object
         """
-        print("[Cache Manager] Invalidating current cache and recreating...")
+        logger.info("[Cache Manager] Invalidating current cache and recreating...")
         return self._create_new_cache()

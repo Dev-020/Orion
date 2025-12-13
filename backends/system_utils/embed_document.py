@@ -10,9 +10,10 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from main_utils import config as cfg
+from main_utils.orion_logger import setup_logging
 
 # --- CONFIGURATION ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 # --- CORE FUNCTIONS ---
@@ -184,5 +185,7 @@ if __name__ == "__main__":
     # This ensures that the config variables are set correctly.
     from main_utils.main_functions import initialize_persona
     initialize_persona(args.persona)
+    
+    setup_logging("EmbedDocument", cfg.DATA_DIR / "logs" / "system_utils.log")
 
     run_embedding_sync(args.file_path)

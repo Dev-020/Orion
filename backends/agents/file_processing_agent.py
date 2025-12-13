@@ -20,6 +20,9 @@ try:
 except ImportError:
     fitz = None
 
+import logging
+logger = logging.getLogger(__name__)
+
 dotenv.load_dotenv()
 
 class FileProcessingAgent:
@@ -83,7 +86,7 @@ Your role is to act as a **Specialized File Processing Unit**.
         """
         Executes the agent's primary task using the active backend.
         """
-        print(f"--- File Processing Agent: Activated for {len(file_handles)} file(s) (Backend: {self.backend}) ---")
+        logger.info(f"--- File Processing Agent: Activated for {len(file_handles)} file(s) (Backend: {self.backend}) ---")
 
         # 1. Prepare User Prompt
         active_context = context if context else self.core.current_turn_context
@@ -119,7 +122,7 @@ Your role is to act as a **Specialized File Processing Unit**.
             return response.candidates[0].content.parts[0].text if response.candidates else "No analysis generated."
 
         except Exception as e:
-            print(f"FileAgent [API] Error: {e}")
+            logger.error(f"FileAgent [API] Error: {e}")
             return f"Error executing analysis: {e}"
 
     def _run_ollama(self, file_handles: list, prompt_text: str) -> str:
@@ -144,7 +147,7 @@ Your role is to act as a **Specialized File Processing Unit**.
                     ext = os.path.splitext(f.local_path)[1].lower()
                     if fitz and ext in ['.pdf', '.xps', '.epub', '.mobi', '.fb2', '.cbz']:
                          try:
-                             print(f"  - [FileAgent] Rendering '{getattr(f, 'display_name', 'doc')}' to images via PyMuPDF...")
+                             logger.info(f"  - [FileAgent] Rendering '{getattr(f, 'display_name', 'doc')}' to images via PyMuPDF...")
                              doc = fitz.open(f.local_path)
                              # Cap at 3 pages
                              max_pages = min(3, len(doc))
@@ -164,7 +167,7 @@ Your role is to act as a **Specialized File Processing Unit**.
                              
                              doc.close()
                          except Exception as e:
-                             print(f"  - [FileAgent] Error rendering document: {e}")
+                             logger.error(f"  - [FileAgent] Error rendering document: {e}")
                              final_prompt += f"\n\n[System: Error rendering document '{getattr(f, 'display_name', '')}'. Fallback: {e}]"
                     else:
                          # Unsupported or PyMuPDF missing
@@ -180,7 +183,7 @@ Your role is to act as a **Specialized File Processing Unit**.
             if images_list:
                 messages[1]["images"] = images_list
             
-            print(f"  - Sending request to Ollama ({self.model_name})...")
+            logger.info(f"  - Sending request to Ollama ({self.model_name})...")
             response = self.client.chat(
                 model=self.model_name,
                 messages=messages
@@ -189,5 +192,5 @@ Your role is to act as a **Specialized File Processing Unit**.
             return response['message']['content']
 
         except Exception as e:
-            print(f"FileAgent [Ollama] Error: {e}")
+            logger.error(f"FileAgent [Ollama] Error: {e}")
             return f"Error executing local analysis: {e}"

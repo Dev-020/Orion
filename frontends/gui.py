@@ -25,7 +25,12 @@ load_dotenv()
 
 from orion_client import OrionClient
 from main_utils import config
+from main_utils.orion_logger import setup_logging
 from gui_modules import constants as C
+
+# --- LOGGING SETUP ---
+LOG_FILE = config.DATA_DIR / "logs" / "gui.log"
+logger = setup_logging("GUI", LOG_FILE, level=logging.INFO)
 from gui_modules import chat_components as Chat
 from gui_modules import tab_builders as Tabs
 from gui_modules import file_utils as FileUtils
@@ -161,7 +166,7 @@ class OrionGUI:
             self.current_user_var.set(selected_user_string)
             self.current_user_label.configure(text=f"User Management (Current: {name})")
         except Exception as e:
-            print(f"ERROR: Could not parse user string: {e}")
+            logger.error(f"ERROR: Could not parse user string: {e}")
 
     def _on_create_new_session(self):
         new_id = f"gui_session_{int(datetime.now(timezone.utc).timestamp())}"
@@ -453,10 +458,10 @@ if __name__ == "__main__":
     
     try:
         if True: # Always use Client
-            print("--- GUI starting in Client Mode ---")
+            logger.info("--- GUI starting in Client Mode ---")
             main_core = OrionClient(base_url="http://127.0.0.1:8000")
 
         app = OrionGUI(core=main_core)
         app.run()
     except Exception as e:
-        print(f"FATAL ERROR: {e}")
+        logger.critical(f"FATAL ERROR: {e}")

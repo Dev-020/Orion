@@ -4,16 +4,14 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional, Generator
-import logging
+from main_utils.orion_logger import setup_logging, get_orion_logger
+from main_utils import config
 
-# Configure logger (libraries shouldn't usually do basicConfig, but this ensures output in our setup)
-logger = logging.getLogger("OrionClient")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter('%(asctime)s - [OrionClient] - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+# Configure logger
+# We don't want to setup_logging globally here as it might be imported by Server which has its own setup.
+# In Client usage (standalone script or Bot), the caller (bot.py) usually sets up logging.
+# But for the library's internal logs, we just get the logger.
+logger = get_orion_logger("OrionClient")
 
 class OrionClient:
     """
@@ -22,7 +20,6 @@ class OrionClient:
     def __init__(self, base_url: str = "http://127.0.0.1:8000"):
         self.base_url = base_url.rstrip("/")
         logger.info(f"OrionClient initialized with Server URL: {self.base_url}")
-        # Verify connection immediately? No, let it fail gracefully on first request or handled by Launcher.
     
     def process_prompt(
         self, 
@@ -91,6 +88,116 @@ class OrionClient:
             logger.error(f"[System Error] Client exception: {e}")
             yield {"type": "token", "content": f"[System Error] Client exception: {e}"}
 
+    async def async_upload_file(self, file_path: str = None, mime_type: str = None, file_obj=None, display_name=None):
+        """
+        Async version of upload_file using httpx.
+        PREVENTS BLOCKING the Discord Bot event loop.
+        """
+        url = f"{self.base_url}/upload_file" 
+        
+        try:
+            import httpx
+            
+            files = {}
+            data = {"mime_type": mime_type}
+            
+            if file_path:
+                path = Path(file_path)
+                if not path.exists():
+                    logger.error(f"File not found: {file_path}")
+                    return None
+                files = {"file": (path.name, open(file_path, 'rb'), mime_type)}
+                data["display_name"] = path.name
+                
+            elif file_obj:
+                # Handle bytes or file-like
+                import io
+                if isinstance(file_obj, bytes):
+                    f_stream = io.BytesIO(file_obj)
+                else:
+                    f_stream = file_obj
+                    
+                filename = display_name or "uploaded_file"
+                files = {"file": (filename, f_stream, mime_type)}
+                data["display_name"] = filename
+            else:
+                logger.error("upload_file requires either file_path or file_obj")
+                return None
+
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                resp = await client.post(url, files=files, data=data)
+            
+            if resp.status_code == 200:
+                logger.info("Async File upload successful.")
+                data_json = resp.json()
+                from types import SimpleNamespace
+                return SimpleNamespace(**data_json)
+            else:
+                logger.error(f"Async File upload failed [URL: {url}]: {resp.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Async Error during file upload [URL: {url}]: {e}")
+            return None
+
+    async def async_process_prompt(
+        self, 
+        session_id: str,
+        user_prompt: str,
+        file_check: list, 
+        user_id: str,
+        user_name: str,
+        stream: bool = True
+    ):
+        """
+        Async generator for streaming response.
+        """
+        url = f"{self.base_url}/process_prompt"
+        logger.info(f"Async Sending prompt to {url} | User: {user_name}")
+
+        # Serialize file objects
+        files_payload = []
+        for f in file_check:
+            if isinstance(f, dict): files_payload.append(f)
+            else:
+                files_payload.append({
+                    "name": getattr(f, 'name', None),
+                    "uri": getattr(f, 'uri', None), 
+                    "display_name": getattr(f, 'display_name', None),
+                    "mime_type": getattr(f, 'mime_type', None),
+                    "size_bytes": getattr(f, 'size_bytes', 0),
+                    "text_content": getattr(f, 'text_content', None)
+                })
+
+        payload = {
+            "prompt": user_prompt,
+            "session_id": session_id,
+            "user_id": str(user_id),
+            "username": user_name,
+            "files": files_payload,
+            "stream": stream
+        }
+        
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    if response.status_code != 200:
+                        yield {"type": "token", "content": f"[Error: Server returned {response.status_code}]"}
+                        return
+
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                chunk = json.loads(line)
+                                yield chunk
+                            except json.JSONDecodeError:
+                                pass
+            logger.info("Async Response stream completed.")
+
+        except Exception as e:
+            logger.error(f"Async Error processing prompt: {e}")
+            yield {"type": "token", "content": f"[System Error] {e}"}
+
     def upload_file(self, file_path: str = None, mime_type: str = None, file_obj=None, display_name=None):
         """
         Uploads a file to the server.
@@ -129,7 +236,8 @@ class OrionClient:
                 logger.error("upload_file requires either file_path or file_obj")
                 return None
 
-            resp = requests.post(url, files=files, data=data, timeout=60)
+            # INCREASED TIMEOUT to 300s
+            resp = requests.post(url, files=files, data=data, timeout=300)
             
             if resp.status_code == 200:
                 logger.info("File upload successful.")
@@ -158,7 +266,6 @@ class OrionClient:
         In Client-Server, if Bot terminates, Launcher might restart it.
         """
         logger.info("Client requested restart. Exiting process...")
-        print("Client requested restart. Exiting process...")
         sys.exit(0) # Launcher should handle the restart if configured.
     # --- Session Management ---
     def list_sessions(self) -> list:

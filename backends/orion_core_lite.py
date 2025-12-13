@@ -36,6 +36,9 @@ INSTRUCTIONS_FILES = [
 # --- Paths ---
 INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
 
+import logging
+logger = logging.getLogger(__name__)
+
 class OrionLiteCore:
     
     def __init__(self, model_name: str = config.AI_MODEL, persona: str = "default"):
@@ -44,9 +47,9 @@ class OrionLiteCore:
         Architecture mimics OrionCore (Pro) line-for-line where applicable.
         """
         if config.BACKEND == "api":
-            print(f"--- [Lite Core] Initializing for model: {model_name} (Backend: {config.BACKEND})     ---")
+            logger.info(f"--- [Lite Core] Initializing for model: {model_name} (Backend: {config.BACKEND})     ---")
         else:
-            print(f"--- [Lite Core] Initializing for model: {config.LOCAL_MODEL} (Backend: {config.BACKEND}) ---")
+            logger.info(f"--- [Lite Core] Initializing for model: {config.LOCAL_MODEL} (Backend: {config.BACKEND}) ---")
             
         self.restart_pending = False
         
@@ -65,7 +68,7 @@ class OrionLiteCore:
         # Vision System (Optional)
         self.vision_attachments = {}
         if config.VISION:
-            print("--- [Lite Core] Vision Module Activated ---")
+            logger.info("--- [Lite Core] Vision Module Activated ---")
             orion_replay.launch_obs_hidden()
             if orion_replay.connect_to_obs():
                  orion_replay.start_replay_watcher(orion_replay.REPLAY_SAVE_PATH, self._vision_file_handler)
@@ -74,10 +77,10 @@ class OrionLiteCore:
         # TTS System (Optional)
         if config.VOICE:
             orion_tts.start_tts_thread()
-            print("--- [Lite Core] TTS Module Activated ---")
+            logger.info("--- [Lite Core] TTS Module Activated ---")
             
         # Refreshing Core Instructions (Simplified)
-        print("--- Syncing Core Instructions... ---")
+        logger.info("--- Syncing Core Instructions... ---")
         self.current_instructions = self._read_all_instructions()
         if not self.current_instructions:
             self.current_instructions = "You are Orion, a helpful AI assistant."
@@ -93,7 +96,11 @@ class OrionLiteCore:
         if not self.chat.load_state_on_restart():
              pass 
         
-        print(f"--- [Lite Core] Online. Managing {len(self.chat.sessions)} session(s). ---")
+        # Load persisted state via ChatObject
+        if not self.chat.load_state_on_restart():
+             pass 
+        
+        logger.info(f"--- [Lite Core] Online. Managing {len(self.chat.sessions)} session(s). ---")
 
     def _setup_client(self):
         """Initializes the appropriate API client."""
@@ -108,13 +115,13 @@ class OrionLiteCore:
 
             
             if config.OLLAMA_CLOUD:
-                print(f"--- [Lite Core] Using Ollama Cloud: {self.local_model} ---")
+                logger.info(f"--- [Lite Core] Using Ollama Cloud: {self.local_model} ---")
                 self.client = ollama.Client(
                     host="https://ollama.com",
                     headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')}
                 )
             else:
-                print(f"--- [Lite Core] Using Local Ollama: {self.local_model} ---")
+                logger.info(f"--- [Lite Core] Using Local Ollama: {self.local_model} ---")
                 self.client = ollama.Client()
             
         # --- File Processing Agent Initialization (VLM) ---
@@ -138,7 +145,7 @@ class OrionLiteCore:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     prompt_parts.append(f.read())
             except FileNotFoundError:
-                print(f"WARNING: File not found: {filepath}")
+                logger.warning(f"WARNING: File not found: {filepath}")
         return "\n\n".join(prompt_parts)
 
     def _vision_file_handler(self, file_path: str):
@@ -146,9 +153,9 @@ class OrionLiteCore:
         try:
              with open(file_path, 'rb') as f:
                 self.vision_attachments = {"video_bytes": f.read(), "display_name": os.path.basename(file_path)}
-             print(f"[Vision] Captured {self.vision_attachments['display_name']}")
+             logger.debug(f"[Vision] Captured {self.vision_attachments['display_name']}")
         except Exception as e:
-            print(f"[Vision Error] {e}")
+            logger.error(f"[Vision Error] {e}")
 
     def _get_session(self, session_id: str) -> list:
         return self.chat.get_session(session_id)
@@ -195,7 +202,7 @@ class OrionLiteCore:
         Internal helper: Prepares all data, context, and file attachments.
         Returns the standard 5-tuple used in OrionCore.
         """
-        print(f"----- Processing prompt for session {session_id} and user {user_name} -----")
+        logger.info(f"----- Processing prompt for session {session_id} and user {user_name} -----")
         chat_session = self._get_session(session_id)
         timestamp_utc_iso = datetime.now(timezone.utc).isoformat()
         
@@ -266,7 +273,7 @@ class OrionLiteCore:
         file_injections = []
         
         # Separation: Text Injections vs Real Attachments
-        print(file_check)
+        #logger.debug(file_check)
         if file_check:
              for f in file_check:
                  # Check for Text Extraction or Analysis
@@ -313,10 +320,11 @@ class OrionLiteCore:
                         "file_ref": ref,
                         "file_name": getattr(f, 'display_name', 'unknown'),
                         "mime_type": getattr(f, 'mime_type', 'unknown'),
-                        "size_bytes": getattr(f, 'size_bytes', 0)
+                        "size_bytes": getattr(f, 'size_bytes', 0),
+                        "text_content": getattr(f, 'text_content', None) 
                     })
                 except Exception as e:
-                    print(f"Warning: Could not extract metadata from file handle: {e}")
+                    logger.warning(f"Warning: Could not extract metadata from file handle: {e}")
             
             data_envelope["system_notifications"].append(f"[System: User attached {len(file_check)} file(s)]")
             
@@ -353,7 +361,7 @@ class OrionLiteCore:
                             p = types.Part.from_bytes(data=img_bytes, mime_type=f.mime_type)
                             ollama_parts.append(p)
                         except Exception as e:
-                            print(f"Error creating image part: {e}")
+                            logger.error(f"Error creating image part: {e}")
                         
                 final_part = ollama_parts
 
@@ -373,7 +381,7 @@ class OrionLiteCore:
         """
         Internal helper: Handles streaming generation.
         """
-        print(f"----- Sending Prompt to Orion Lite ({config.BACKEND}) . . . -----")
+        logger.info(f"----- Sending Prompt to Orion Lite ({config.BACKEND}) . . . -----")
         
         full_response_text = ""
         token_count = 0
@@ -443,7 +451,7 @@ class OrionLiteCore:
                                     b64_img = base64.b64encode(p.inline_data.data).decode('utf-8')
                                     images_list.append(b64_img)
                                 except Exception as e:
-                                    print(f"Error extracting image for Ollama: {e}")
+                                    logger.error(f"Error extracting image for Ollama: {e}")
                                 
                     full_text = "\n".join(text_parts)
                     
@@ -508,15 +516,29 @@ class OrionLiteCore:
                              # Access dictionary keys safely    
                             msg = chunk.get('message', {})
                             
-                            # 1. Handle Thinking (Terminal Only + Yield)
+
+                            # 1. Handle Thinking (Buffered LOGGING)
                             if msg.get('thinking'):
                                 think_text = msg['thinking']
-                                print(f"\033[90m{think_text}\033[0m", end='', flush=True)
+                                
+                                # Buffer the thought text
+                                if 'thought_buffer' not in locals():
+                                    locals()['thought_buffer'] = []
+                                    logger.debug("[Thinking Process Started...]")
+                                
+                                locals()['thought_buffer'].append(think_text)
                                 yield {"type": "thought", "content": think_text}
                             
                             # 2. Handle Content (Yield to Discord)
                             content = msg.get('content')
                             if content:
+                                # End Thought Block if it was active
+                                if 'thought_buffer' in locals():
+                                    full_thought = "".join(locals()['thought_buffer'])
+                                    logger.debug(f"[Detailed Thought Process]: {full_thought}")
+                                    logger.debug("[Thinking Process Complete]")
+                                    del locals()['thought_buffer']
+
                                 yield {"type": "token", "content": content}
                                 full_response_text += content
                                 if config.VOICE: orion_tts.process_stream_chunk(content)
@@ -527,8 +549,8 @@ class OrionLiteCore:
                     except Exception as e:
                         # Check if error is due to 'think' parameter (Status 400 / "does not support thinking")
                         if "does not support thinking" in str(e):
-                            print(f"--- Model does not support Thinking. Retrying without it. (Error: {e}) ---")
-                            print(f"--- Disabling Thinking Mode for this session to improve performance. ---")
+                            logger.warning(f"Model does not support Thinking. Retrying without it. (Error: {e}) ---")
+                            logger.warning(f"Disabling Thinking Mode for this session to improve performance. ---")
                             config.THINKING_SUPPORT = False # Persist flag change for this runtime
                             continue # Retry loop
                         else:
@@ -540,7 +562,7 @@ class OrionLiteCore:
                 # End of Stream Loop  
         
         except Exception as e:
-            print(f"Error in generation: {e}")
+            logger.error(f"Error in generation: {e}")
             yield {"type": "token", "content": f"[Error: {e}]"}
             return
 
@@ -576,13 +598,14 @@ class OrionLiteCore:
             tool_calls_list=new_tool_turns
         )
         
-        print(f"----- Response Generated ({token_count} tokens) -----")
+        logger.info(f"----- Response Generated ({token_count} tokens) -----")
         return False
 
-    def process_prompt(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str, stream: bool = False) -> Generator:
+    def process_prompt(self, session_id: str, user_prompt: str, file_check: list = None, user_id: str = None, user_name: str = "User", stream: bool = False) -> Generator:
         """
         Orchestrator: Identical to Pro.
         """
+        file_check = file_check or [] # Robustness fix
         try:
             yield {"type": "status", "content": "Initializing Request..."}
             
@@ -604,7 +627,7 @@ class OrionLiteCore:
             for item in generator: yield item
 
         except Exception as e:
-            print(f"Error in process_prompt: {e}")
+            logger.error(f"Error in process_prompt: {e}")
             yield {"type": "token", "content": f"[System Error: {e}]"}
 
     # --- Proxy Methods for Compatibility with GUI/Bot ---
@@ -628,7 +651,7 @@ class OrionLiteCore:
 
     def trigger_instruction_refresh(self, full_restart: bool = False):
         if full_restart:
-            print("WARNING: 'full_restart' flag ignored in Client-Server mode.")
+            logger.warning("WARNING: 'full_restart' flag ignored in Client-Server mode.")
             return "[System Note]: Full restart ignored in Client-Server mode. Use TUI to restart Server."
         
         self.current_instructions = self._read_all_instructions()
@@ -636,22 +659,22 @@ class OrionLiteCore:
 
     def shutdown(self):
         """Performs a clean shutdown."""
-        print("--- Orion Core shutting down. ---")
+        logger.info("--- Orion Core shutting down. ---")
         # --- NEW: Stop the TTS thread on shutdown ---
         if config.VOICE:
             orion_tts.stop_tts_thread()
         if config.VISION:
             orion_replay.shutdown_obs()
-        print("--- Orion is now offline. ---")
+        logger.info("--- Orion is now offline. ---")
 
     def execute_restart(self):
         """
         Executes the final step of the restart by shutting down gracefully
         and then replacing the current process.
         """
-        print("  - State saved. Performing graceful shutdown before restart...")
+        logger.info("  - State saved. Performing graceful shutdown before restart...")
         self.shutdown() # <-- CRITICAL: Call the shutdown method here.
-        print("  - Shutdown complete. Executing process replacement...")
+        logger.info("  - Shutdown complete. Executing process replacement...")
         os.execv(sys.executable, ['python'] + sys.argv)
 
     def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str):

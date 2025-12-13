@@ -28,6 +28,9 @@ from typing import Optional, List, Any
 import sqlite3
 from pathlib import Path
 from . import config
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- CONSTANTS ---
 DAILY_SEARCH_QUOTA = 10000
@@ -41,7 +44,7 @@ def manage_character_resource(user_id: str, operation: str, resource_name: Optio
     'add'/'subtract' modifies the current_value (using 'value') and/or the max_value (using 'max_value').
     'view' returns the current and max value of a specific resource, or all resources if no name is provided.
     """
-    print(f"--- RESOURCE MGMT --- User: {user_id}, Resource: {resource_name or 'ALL'}, Op: {operation}, Val: {value}, Max: {max_value}")
+    logger.info(f"--- RESOURCE MGMT --- User: {user_id}, Resource: {resource_name or 'ALL'}, Op: {operation}, Val: {value}, Max: {max_value}")
 
     # --- Input Validation ---
     valid_ops = ['set', 'add', 'subtract', 'create', 'view']
@@ -131,7 +134,7 @@ def manage_character_status(user_id: str, operation: str, effect_name: Optional[
     'update' modifies the details or duration of an existing status effect.
     'view' returns the details of a specific effect, or all effects if no name is provided.
     """ 
-    print(f"--- STATUS MGMT --- User: {user_id}, Effect: {effect_name or 'ALL'}, Op: {operation}")
+    logger.info(f"--- STATUS MGMT --- User: {user_id}, Effect: {effect_name or 'ALL'}, Op: {operation}")
 
     valid_ops = ['add', 'remove', 'update', 'view']
     if operation.lower() not in valid_ops:
@@ -196,7 +199,7 @@ def manage_character_status(user_id: str, operation: str, effect_name: Optional[
         return return_message
 
     except sqlite3.Error as e:
-        print(f"ERROR: A database error occurred in manage_character_status: {e}")
+        logger.error(f"ERROR: A database error occurred in manage_character_status: {e}")
         return f"An unexpected database error occurred: {e}"
 
 def roll_dice(dice_notation: str) -> str:
@@ -204,7 +207,7 @@ def roll_dice(dice_notation: str) -> str:
     Rolls one or more dice based on standard D&D notation (e.g., '1d20', '3d6+4, 1d8', '2d8-1 and 1d4').
     Returns a JSON object with a list of individual roll results and a grand total.
     """
-    print(f"--- Rolling Dice: {dice_notation} ---")
+    logger.info(f"--- Rolling Dice: {dice_notation} ---")
     # This pattern finds all instances of 'XdY' with an optional modifier like '+Z' or '-Z'
     pattern = re.compile(r'(\d+)d(\d+)([+\-]\d+)?')
     matches = pattern.findall(dice_notation.lower().strip())
@@ -254,7 +257,7 @@ def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None,
     - 'full' mode requires a specific 'id' and returns the complete data for that single item.
     - 'data_query' can be a dictionary (e.g., {'metadata.is_official': True}) to filter results based on the content of the 'data' JSON column.
     """
-    print(f"--- DB Knowledge Search. Mode: {mode.upper()}. Query: '{query or id}' ---")
+    logger.info(f"--- DB Knowledge Search. Mode: {mode.upper()}. Query: '{query or id}' ---")
 
     if mode == 'full' and not id:
         return "Error: 'full' mode requires a specific 'id'. Please perform a 'summary' search first to get the ID."
@@ -310,7 +313,7 @@ def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None,
             else:
                 return f"Source: Local Database\n---\nNo full data entry found for the given id."
         except (json.JSONDecodeError, IndexError, KeyError) as e:
-            print(f"ERROR: Failed to parse full data in search_knowledge_base: {e}")
+            logger.error(f"ERROR: Failed to parse full data in search_knowledge_base: {e}")
             return "Error: Could not parse or find the full data entry. The record may be malformed."
     
     return result_json
@@ -319,7 +322,7 @@ def update_character_from_web() -> str:
     """
     Downloads the character sheet JSON from D&D Beyond and generates its schema.
     """
-    print("--- ACTION: Updating character sheet from D&D Beyond ---")
+    logger.info("--- ACTION: Updating character sheet from D&D Beyond ---")
     character_url = "https://character-service.dndbeyond.com/character/v5/character/151586987?includeCustomItems=true"
     base_dir = os.path.dirname(os.path.abspath(__file__))
     character_dir, instructions_dir = os.path.join(base_dir, 'character'), os.path.join(base_dir, 'instructions')
@@ -359,7 +362,7 @@ def search_dnd_rules(query: str, num_results: int = 5) -> str:
         if tracker.get("date") != today: tracker = {"date": today, "count": 0}
         if tracker.get("count", 0) >= DAILY_SEARCH_QUOTA:
             return "Error: Daily search quota has been reached."
-        print(f"--- Performing web search for URLs about: '{query}' (Query {tracker.get('count', 0) + 1}/{DAILY_SEARCH_QUOTA}) ---")
+        logger.info(f"--- Performing web search for URLs about: '{query}' (Query {tracker.get('count', 0) + 1}/{DAILY_SEARCH_QUOTA}) ---")
         try:
             search_engine_id = os.getenv("SEARCH_ENGINE_ID")
             credentials, _ = google.auth.default()
@@ -376,7 +379,7 @@ def search_dnd_rules(query: str, num_results: int = 5) -> str:
 
 def browse_website(url: str) -> str:
     """Reads the text content of a single webpage."""
-    print(f"--- Browsing website: {url} ---")
+    logger.info(f"--- Browsing website: {url} ---")
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
@@ -391,7 +394,7 @@ def lookup_character_data(query: str) -> str:
     """
     Retrieves a specific piece of data from the local character sheet file.
     """
-    print(f"--- ACTION: Looking up character data with query: '{query}' ---")
+    logger.info(f"--- ACTION: Looking up character data with query: '{query}' ---")
     raw_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'character', 'character_sheet_raw.json')
     try:
         with open(raw_file_path, 'r', encoding='utf-8') as f: data = json.load(f)

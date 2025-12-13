@@ -17,6 +17,10 @@ except ImportError:
 # Add project root to be able to import main_utils
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from main_utils import config
+from main_utils.orion_logger import setup_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- PATH CONFIGURATION ---
 INSTRUCTIONS_DIR = config.OUTPUT_DIR # Already a Path
@@ -52,7 +56,7 @@ def get_doc_as_markdown(service, doc_id):
         done = False
         while not done:
             status, done = downloader.next_chunk()
-            print(f"  -> Download progress: {int(status.progress() * 100)}%")
+            logger.info(f"  -> Download progress: {int(status.progress() * 100)}%")
             
         # Decode the downloaded bytes into a string
         fh.seek(0)
@@ -115,4 +119,5 @@ def sync_instructions():
         f.truncate()
     
 if __name__ == '__main__':
+    setup_logging("SyncDocs", config.DATA_DIR / "logs" / "system_utils.log")
     sync_instructions()

@@ -13,6 +13,10 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from main_utils import config
+from main_utils.orion_logger import setup_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- 1. CONFIGURATION ---
 MODEL_PATH = config.DATA_DIR / "piper_models" / "firefly" / "en_US-fireflyv2-medium.onnx"
@@ -34,7 +38,7 @@ if not os.path.exists(MODEL_PATH) or not os.path.exists(CONFIG_PATH):
 
 # --- NEW: Create the log folder if it doesn't exist ---
 os.makedirs(LOG_FOLDER, exist_ok=True)
-print(f"Audio logs will be saved to: {os.path.abspath(LOG_FOLDER)}")
+logger.info(f"Audio logs will be saved to: {os.path.abspath(LOG_FOLDER)}")
 # ---
 
 # --- 3. LOAD THE MODEL (RUNS ONLY ONCE) ---
@@ -42,7 +46,7 @@ print("Loading Piper model (this will take a moment)...")
 try:
     voice = PiperVoice.load(MODEL_PATH, config_path=CONFIG_PATH, use_cuda=False)
     sample_rate = voice.config.sample_rate
-    print(f"Model loaded! Sample rate: {sample_rate} Hz")
+    logger.info(f"Model loaded! Sample rate: {sample_rate} Hz")
     
 except Exception as e:
     print(f"Error loading model: {e}")
@@ -72,8 +76,8 @@ def _get_physical_audio_device():
         
         # Fallback to default if not found
         default_device = sd.query_devices(kind='output')
-        print(f"[TTS] WARNING: Physical device '{TTS_OUTPUT_DEVICE_NAME}' not found")
-        print(f"[TTS] Using default output device: {default_device['name']}")
+        logger.warning(f"[TTS] WARNING: Physical device '{TTS_OUTPUT_DEVICE_NAME}' not found")
+        logger.info(f"[TTS] Using default output device: {default_device['name']}")
         return None, default_device['name']
         
     except Exception as e:

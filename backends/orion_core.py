@@ -14,6 +14,7 @@ import io
 from dotenv import load_dotenv
 import json
 import pickle
+import logging
 from main_utils import config, main_functions as functions
 from main_utils.chat_object import ChatObject
 from main_utils.file_manager import UploadFile
@@ -39,6 +40,8 @@ load_dotenv() # Load environment variables from .env file for other modules
 
 # --- Paths ---
 INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
+
+logger = logging.getLogger(__name__)
 
 class OrionCore:
     
@@ -80,10 +83,10 @@ class OrionCore:
         if self.discord_id:
             functions.manual_sync_instructions(self.discord_id)
         generate_manifests.main()
-        print("--- Core Instructions Successfully synced.... ---")
+        logger.info("--- Core Instructions Successfully synced.... ---")
         
         # Initializes Orion AI
-        print("--- Initializing Orion Core (Unified Model) ---")
+        logger.info("--- Initializing Orion Core (Unified Model) ---")
         self.model_name = model_name
         if config.VERTEX:
             self.client = genai.Client(vertexai=True, project=os.getenv("GOOGLE_CLOUD_PROJECT_ID"), location="global")
@@ -383,7 +386,7 @@ class OrionCore:
         
         # --- Vision Module Notification ---
         if config.VISION and self.vision_attachments:
-            print(f"  - Attaching {self.vision_attachments['display_name']} queued vision captures...")
+            logger.info(f"  - Attaching {self.vision_attachments['display_name']} queued vision captures...")
             uploaded_file = self.upload_file(
                 self.vision_attachments["video_bytes"], 
                 self.vision_attachments["display_name"],
