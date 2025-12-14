@@ -54,6 +54,11 @@ PROCESSES = {
         "cmd": [sys.executable, "-u", "frontends/gui.py"], 
         "log": LOG_DIR / "gui.log",
         "name": "GUI (Tkinter)"
+    },
+    "web": {
+        "cmd": [sys.executable, "-u", "frontends/web_server.py"],
+        "log": LOG_DIR / "web.log",
+        "name": "Web Frontend"
     }
 }
 
@@ -106,19 +111,12 @@ class ProcessManager:
         if key in self.procs:
             if self.procs[key].poll() is None: return # Already running
             
-        # Re-construct command based on key
-        cmd = [sys.executable, "-u"]
-        if key == "server":
-            cmd.append("backends/server.py")
-            log_path = LOG_DIR / "server.log"
-        elif key == "bot":
-            cmd.append("frontends/bot.py")
-            log_path = LOG_DIR / "bot.log"
-        elif key == "gui":
-            cmd.append("frontends/gui.py")
-            log_path = LOG_DIR / "gui.log"
-        else:
+        # Generic lookup from PROCESSES (Fixed to support 'web' and others dynamically)
+        if key not in PROCESSES:
             return
+
+        cmd = PROCESSES[key]["cmd"]
+        log_path = PROCESSES[key]["log"]
 
         try:
             # STATUS: Transition
@@ -359,7 +357,7 @@ def generate_layout():
 
 def render_header():
     return Panel(
-        Align.center("[bold cyan]ORION COMMAND CENTER[/bold cyan] | [green]Phase 2: Client-Server[/green]"),
+        Align.center("[bold cyan]ORION COMMAND CENTER[/bold cyan] | [green]Phase 2: Client-Server[/green] | [bold yellow]WEB: http://localhost:8000[/bold yellow]"),
         box=box.ROUNDED, style="white on blue"
     )
 
@@ -436,7 +434,7 @@ def process_command(cmd: str):
     feedback = ""
 
     if action == "help":
-        feedback = "Commands: start <all|server|bot|gui>, stop <...>, restart <...>, logs <server|bot|gui>, quit"
+        feedback = "Commands: start <all|server|web|bot|gui>, stop <...>, restart <...>, logs <server|web|bot|gui>, quit"
         
     elif action == "quit":
         pm.stop_all()
@@ -509,11 +507,14 @@ def main():
     parser.add_argument("--server", action="store_true")
     parser.add_argument("--bot", action="store_true")
     parser.add_argument("--gui", action="store_true")
+    parser.add_argument("--web", action="store_true")
     args = parser.parse_args()
 
     if args.server or args.all:
         pm.start_process("server")
         time.sleep(1) 
+    if args.web or args.all:
+        pm.start_process("web")
     if args.bot or args.all:
         pm.start_process("bot")
     if args.gui or args.all:
