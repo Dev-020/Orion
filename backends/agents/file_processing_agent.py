@@ -28,7 +28,7 @@ dotenv.load_dotenv()
 class FileProcessingAgent:
     """
     An AI agent specializing in processing file content returned by tools.
-    Supports both Google GenAI (Vertex/Studio) and Local Ollama backends.
+    Supports both Google GenAI (Vertex/Studio) and Local Ollama backends.a
     """
 
     def __init__(self, orion_core):
