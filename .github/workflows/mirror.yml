@@ -1,0 +1,21 @@
+name: Mirror to Codeberg
+
+on:
+  push:
+    branches: [ "**" ]  # Run on all branch pushes
+  delete:               # Run when a branch/tag is deleted
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # vital for mirroring all history
+
+      - name: Mirror to Codeberg
+        uses: pixta-dev/repository-mirroring-action@v1
+        with:
+          target_repo_url: "git@codeberg.org:Dev-5-4/Orion.git" # REPLACE THIS
+          ssh_private_key: ${{ secrets.CODEBERG_SSH_KEY }}
