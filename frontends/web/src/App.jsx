@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { MessageSquare, Settings, User, LogOut } from 'lucide-react'
-import { BrowserRouter as Router, Routes, Route, useNavigate, Outlet, useLocation } from 'react-router-dom'
+import { HashRouter as Router, Routes, Route, useNavigate, Outlet, useLocation } from 'react-router-dom'
 import ChatInterface from './ChatInterface'
 import ProfilePage from './ProfilePage'
 import { AuthProvider, useAuth } from './context/AuthContext'
