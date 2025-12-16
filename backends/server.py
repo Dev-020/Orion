@@ -302,6 +302,15 @@ async def upload_avatar(
         raw_filename = f"raw_{user_id}_{timestamp}.{original_ext}"
         raw_path = AVATAR_DIR / raw_filename
         
+        # --- CLEANUP OLD AVATARS ---
+        # Find and remove any existing avatar file for this user to save space
+        for existing_file in AVATAR_DIR.glob(f"*_{user_id}_*"):
+            try:
+                os.remove(existing_file)
+                logger.info(f"Deleted old avatar: {existing_file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to delete old avatar {existing_file.name}: {e}")
+                
         # Write Raw File
         with open(raw_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -338,8 +347,11 @@ async def upload_avatar(
                 if result.returncode == 0:
                     logger.info("Conversion successful")
                     final_filename = webm_filename
-                    # Optional: Delete raw gif to save space?
-                    # os.remove(raw_path) 
+                    # Delete raw gif to save space
+                    try:
+                        os.remove(raw_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete temp raw file: {e}") 
                 else:
                     logger.error(f"FFmpeg failed: {result.stderr}")
                     # Fallback to raw GIF if conversion fails

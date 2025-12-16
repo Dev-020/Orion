@@ -5,6 +5,7 @@ import ChatInterface from './ChatInterface'
 import ProfilePage from './ProfilePage'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import ProtectedRoute from './ProtectedRoute'
+import UserAvatar from './components/UserAvatar'
 import './index.css'
 
 // Inner component to access AuthContext for Logout button if needed
@@ -94,9 +95,7 @@ const Dashboard = () => {
                 display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer',
                 border: showProfileMenu ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent'
             }} onClick={() => setShowProfileMenu(!showProfileMenu)} title="Click to open menu">
-import UserAvatar from './components/UserAvatar';
-
-// ...
+                {/* User Avatar */}
 
                 <UserAvatar 
                     avatarUrl={user?.avatar_url} 

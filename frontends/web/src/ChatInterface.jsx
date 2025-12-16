@@ -8,6 +8,7 @@ import 'katex/dist/katex.min.css'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useAuth } from './context/AuthContext'
+import UserAvatar from './components/UserAvatar'
 
 // Log helper
 const logToServer = async (level, message) => {
@@ -222,9 +223,7 @@ const MessageItem = React.memo(({ msg, userAvatar }) => {
                     )}
                 </div>
 
-import UserAvatar from './components/UserAvatar';
 
-// ...
 
                 {/* User Avatar */}
                 {msg.role === 'user' && (

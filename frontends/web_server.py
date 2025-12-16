@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import subprocess
 
 # --- PATH HACK ---
 # Enable importing from backends (for logger/config)
@@ -46,6 +47,62 @@ async def receive_log(request: LogRequest):
     else:
         logger.info(msg)
     return {"status": "ok"}
+
+# --- BUILD SYSTEM ---
+def build_frontend_if_needed():
+    """
+    Checks if the frontend needs rebuilding by comparing source file timestamps
+    to the build output timestamp.
+    """
+    web_dir = Path(__file__).parent / "web"
+    dist_dir = web_dir / "dist"
+    index_html = dist_dir / "index.html"
+    
+    # 1. Source files to check for changes
+    # We want to check everything in src/, plus package.json and vite config
+    source_patterns = [
+        "src/**/*",
+        "package.json",
+        "vite.config.*",
+        "index.html" # The public index.html (source)
+    ]
+    
+    latest_src_mtime = 0.0
+    
+    for pattern in source_patterns:
+        for f in web_dir.glob(pattern):
+            if f.is_file():
+                try:
+                    mtime = f.stat().st_mtime
+                    if mtime > latest_src_mtime:
+                        latest_src_mtime = mtime
+                except OSError:
+                    pass
+
+    # 2. Check existing build
+    last_build_mtime = 0.0
+    if index_html.exists():
+        last_build_mtime = index_html.stat().st_mtime
+
+    # 3. Decision
+    # Epsilon for safety, though direct comparison usually fine locally
+    if latest_src_mtime > last_build_mtime:
+        logger.info("Frontend changes detected or build missing. Running 'npm run build'...")
+        try:
+            # shell=True is often required on Windows to find 'npm' (which is a batch file)
+            subprocess.run(["npm", "run", "build"], cwd=str(web_dir), shell=True, check=True)
+            logger.info("Frontend build completed successfully.")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Frontend build failed: {e}")
+            # We don't raise here because maybe an old build exists and is usable? 
+            # Or we just let the 404 handler deal with it.
+            pass
+    else:
+        logger.info("Frontend is up to date. Skipping build.")
+
+
+# Run smart build before mounting
+build_frontend_if_needed()
 
 # --- STATIC FILES ---
 # Serve the Vite build output

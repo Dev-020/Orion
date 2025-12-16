@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import Cropper from 'react-easy-crop'
 import getCroppedImg from './utils/cropUtils'
+import UserAvatar from './components/UserAvatar'
 
 // Constants
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -11,7 +12,7 @@ const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const API_BASE = 'http://localhost:8000'; // Make sure this matches your backend
 
 export default function ProfilePage() {
-    const { user, login } = useAuth() 
+    const { user, login, refreshUser } = useAuth() 
     const navigate = useNavigate()
     const token = localStorage.getItem('orion_auth_token');
     
@@ -341,9 +342,7 @@ export default function ProfilePage() {
                             onChange={onFileSelect}
                         />
                         
-import UserAvatar from './components/UserAvatar';
 
-// ...
 
                         <div style={{position: 'relative'}}>
                             <UserAvatar
