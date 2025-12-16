@@ -16,7 +16,8 @@ __all__ = [
     "execute_vdb_read",
     "execute_vdb_write",
     "execute_write",
-    "create_git_commit_proposal"
+    "create_git_commit_proposal",
+    "search_web"
 ]
 
 import hashlib
@@ -25,7 +26,6 @@ import os
 import json
 import mimetypes
 import requests
-from bs4 import BeautifulSoup
 from google.genai import types
 from googleapiclient.discovery import build
 from datetime import date
@@ -40,8 +40,15 @@ import chromadb
 from chromadb.types import Metadata
 from pathlib import Path
 from system_utils import sync_docs, generate_manifests
+from system_utils import sync_docs, generate_manifests
 from . import config
 import logging
+import ollama
+import numpy as np
+from ollama import Client
+import trafilatura
+from dotenv import load_dotenv
+from .embedding_utils import LocalEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -720,18 +727,115 @@ def rebuild_manifests(manifest_names: list[str]) -> str:
         summary += f" Invalid names provided: {sorted(invalid_names)}."
     return json.dumps({"status": bool(rebuilt_successfully), "summary": summary})
 
-def browse_website(url: str) -> str:
-    """Reads the text content of a single webpage."""
-    logger.info(f"--- Browsing website: {url} ---")
+# Initialize Embedder (Shared instance)
+embedder = LocalEmbedder()
+
+def browse_website(url: Union[str, List[str]], query: str = None) -> str:
+    """
+    WHAT (Purpose): Reads... one or more webpages...
+    WHEN (Query): Add 'query' to enable RAG filtering (Saves Tokens!).
+    """
+    urls = [url] if isinstance(url, str) else url
+    logger.info(f"--- Browsing {len(urls)} website(s) (RAG Mode: {query is not None}) ---")
+    
+    combined_output = []
+    
+    def process_single_url(target_url: str) -> str:
+        content = None
+        source_type = "Unknown"
+        
+        # 1. Fetch (Ollama Native)
+        try:
+            load_dotenv()
+            key = os.getenv("OLLAMA_API_KEY")
+            if key:
+                client = Client(headers={'Authorization': f'Bearer {key}'})
+                result = client.web_fetch(url=target_url)
+                if isinstance(result, dict): content = result.get('content')
+                elif hasattr(result, 'content'): content = result.content
+                if content: source_type = "Ollama Native"
+        except Exception: pass
+
+        # 2. Fallback (Trafilatura)
+        if not content:
+            try:
+                downloaded = trafilatura.fetch_url(target_url)
+                if downloaded:
+                    content = trafilatura.extract(downloaded)
+                    if content: source_type = "Trafilatura"
+            except Exception: pass
+
+        if not content: return f"Source: {target_url} (Failed)"
+
+        # 3. RAG vs Full Logic
+        if query:
+            # New Refactored Logic
+            chunks = embedder.chunk_text(content)
+            filtered_content = embedder.rag_filter(chunks, query)
+            return f"Source: {target_url} ({source_type})\n---\n{filtered_content}"
+        else:
+            MAX_CHARS = 15000 
+            if len(content) > MAX_CHARS:
+                content = content[:MAX_CHARS] + "\n\n[SYSTEM: Content truncated.]"
+            return f"Source: {target_url} ({source_type})\n---\n{content}"
+
+    for u in urls: combined_output.append(process_single_url(u))
+    return "\n\n".join(combined_output)
+
+def search_web(query: str, smart_filter: bool = True) -> str:
+    """
+    WHAT: Live web search.
+    PARAMS: 
+      - query: Your search terms.
+      - smart_filter: If True (default), filters results using RAG to return only relevant snippets.
+    """
+    logger.info(f"--- Searching Web: '{query}' (Smart Filter: {smart_filter}) ---")
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        content = "\n".join([p.get_text() for p in soup.find_all('p')])
-        if not content: return f"Source: Live Web Browse ({url})\n---\nCould not extract text."
-        return f"Source: Live Web Browse ({url})\n---\n{content}"
+        load_dotenv()
+        key = os.getenv("OLLAMA_API_KEY")
+        if not key: return "Error: No OLLAMA_API_KEY."
+        
+        client = Client(headers={'Authorization': f'Bearer {key}'})
+        # max_results=5 passed to API if supported, or just sliced later
+        response = client.web_search(query=query, max_results=5) 
+        
+        # Normalize Results
+        results = []
+        raw = response.get('results', []) if isinstance(response, dict) else getattr(response, 'results', [])
+        
+        for res in raw:
+            item = {
+                'title': res.get('title') if isinstance(res, dict) else getattr(res, 'title', ''),
+                'url': res.get('url') if isinstance(res, dict) else getattr(res, 'url', ''),
+                'content': res.get('content') if isinstance(res, dict) else getattr(res, 'content', '')
+            }
+            results.append(item)
+
+        if not results: return f"No results for '{query}'."
+
+        if smart_filter:
+            # Aggregate content from the Top 5 results only (Optimization)
+            all_content_chunks = []
+            
+            for r in results:
+                # OPTIMIZATION: Truncate content to max 4000 chars per result.
+                safe_content = r['content'][:4000]
+                full_text = f"[{r['title']}] {safe_content}"
+                all_content_chunks.extend(embedder.chunk_text(full_text, chunk_size=300))
+            
+            # Filter
+            return embedder.rag_filter(all_content_chunks, query, top_k=10)
+        
+        else:
+            # Standard List
+            out = [f"Search Results for '{query}':\n"]
+            for i, r in enumerate(results):
+                out.append(f"{i+1}. [{r['title']}]({r['url']})\n   {r['content'][:4000]}...\n")
+            return "\n".join(out)
+
     except Exception as e:
-        return f"Source: Live Web Browse\n---\nAn error occurred: {e}"
+        logger.error(f"Search failed: {e}")
+        return f"Error: {e}"
 
 def list_project_files(subdirectory: str = ".") -> str:
     """
