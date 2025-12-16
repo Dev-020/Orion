@@ -22,7 +22,7 @@ logger = setup_logging("WebFrontend", LOG_FILE)
 app = FastAPI()
 
 # Enable CORS to allow the frontend to talk to the Backend API (Port 8000)
-# even though they are now on different ports (8001 vs 8000).
+# even though they are now on different ports (8001 vs 8000).#
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
