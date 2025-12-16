@@ -377,7 +377,10 @@ export default function ChatInterface({ session }) {
   // WebSocket Connection
   useEffect(() => {
     // Connect to WebSocket
-    const wsUrl = `${WS_BASE}/ws/${user?.id || 'guest'}`;
+    // Fix: Backend expects /ws?token=XYZ, not /ws/user_id
+    const wsUrl = token 
+        ? `${WS_BASE}/ws?token=${token}` 
+        : `${WS_BASE}/ws`;
     console.log('Connecting to WebSocket:', wsUrl)
     
     logToServer('info', `Initializing WebSocket connection to ${wsUrl}...`)

@@ -60,25 +60,32 @@ ALLOWED_ORIGINS = [
 
 """
 LIST OF LOCAL MODELS THAT RUN ON THE LAPTOP:
-WITH PAST MEMORY SUPPORT
-llama3.2:3b-instruct-q4_1
-smallthinker:3b-preview-q4_K_M
+    WITH PAST MEMORY SUPPORT
+        llama3.2:3b-instruct-q4_1
+        smallthinker:3b-preview-q4_K_M
 
-NO PAST MEMORY SUPPORT
-ibm/granite3.3:2b-instruct-q6_K
-ibm/granite3.3:2b-instruct-q4_K_M
-qwen3:1.7b-q8_0
+    NO PAST MEMORY SUPPORT
+        ibm/granite3.3:2b-instruct-q6_K
+        ibm/granite3.3:2b-instruct-q4_K_M
+        qwen3:1.7b-q8_0
 
-Gemma Models:
-models/gemma-3-27b-it
-models/gemma-3-12b-it
-models/gemma-3-4b-it
-models/gemma-3-1b-it
+    Gemma Models:
+        models/gemma-3-27b-it
+        models/gemma-3-12b-it
+        models/gemma-3-4b-it
+        models/gemma-3-1b-it
 
-Gemini Models:
-gemini-2.5-flash
+    Gemini Models:
+        gemini-2.5-flash
 
-Ollama Cloud Models:
-qwen3-vl:235b-instruct-cloud
-deepseek-v3.1:671b-cloud
+    Ollama Cloud Models:
+        qwen3-vl:235b-instruct-cloud
+        deepseek-v3.1:671b-cloud
+"""
+
+"""
+LIST OF WEBSITES:
+    "http://localhost:5173", # Local Development
+    "http://localhost:8001", # Local Web Server
+    "https://dev-020.github.io" # Production Frontend
 """

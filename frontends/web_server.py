@@ -109,19 +109,31 @@ build_frontend_if_needed()
 FRONTEND_BUILD_DIR = Path(__file__).parent / "web" / "dist"
 
 if FRONTEND_BUILD_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_BUILD_DIR), html=True), name="static")
-    logger.info(f"Serving Web Frontend from: {FRONTEND_BUILD_DIR}")
+    # Mount at /Orion to match vite.config.js base
+    app.mount("/Orion", StaticFiles(directory=str(FRONTEND_BUILD_DIR), html=True), name="static_orion")
+    # Also mount at / for direct access? No, that causes confusion if assets are /Orion/...
+    # But files inside dist don't have Orion prefix. 
+    # If app requests /Orion/assets/foo.js, StaticFiles at /Orion will look for dist/assets/foo.js. Correct.
+    logger.info(f"Serving Web Frontend from: {FRONTEND_BUILD_DIR} at /Orion")
 else:
     logger.error(f"Build not found at {FRONTEND_BUILD_DIR}. Please run 'npm run build' in frontends/web")
 
 # --- SPA ROUTING ---
 # Ensure that any 404 route returns index.html so React Router can handle it.
+from fastapi.responses import RedirectResponse
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/Orion/")
+
+# --- SPA ROUTING ---
+# Ensure that any 404 route returns index.html so React Router can handle it.
 @app.exception_handler(404)
 async def spa_404_handler(request, exc):
-    # Only serve index.html for GET requests that are not API calls
-    # (API calls usually start with /api or /log, which generic 404 is fine)
-    # But since this server ONLY serves frontend, practically everything is frontend.
-    return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+    # If request starts with /Orion but not found, serve index.html (client-side routing)
+    if request.url.path.startswith("/Orion"):
+         return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+    return JSONResponse(status_code=404, content={"message": "Not Found"})
 
 if __name__ == "__main__":
     logger.info("Starting Web Frontend Server on Port 8001...")
