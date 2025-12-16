@@ -16,6 +16,10 @@ class UploadFile:
     """
     Centralized file ingestion class.
     Handles file type detection, text extraction, and backend-specific uploading.
+    
+    OUTPUT: Returns a SimpleNamespace that MUST be compatible with the 
+    'UnifiedFile' schema in server.py.
+    Fields: uri, display_name, mime_type, size_bytes, text_content, base64_data, local_path.
     """
     def __init__(self, core_backend: str, client: object = None, file_processing_agent = None):
         """

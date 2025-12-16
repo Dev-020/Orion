@@ -163,6 +163,7 @@ const LoginPage = () => {
 
                     {/* Submit Button */}
                     <button 
+                        className="interactive-btn"
                         type="submit" 
                         disabled={loading}
                         style={{

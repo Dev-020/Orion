@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # --- PATH HACK ---
@@ -55,6 +56,15 @@ if FRONTEND_BUILD_DIR.exists():
     logger.info(f"Serving Web Frontend from: {FRONTEND_BUILD_DIR}")
 else:
     logger.error(f"Build not found at {FRONTEND_BUILD_DIR}. Please run 'npm run build' in frontends/web")
+
+# --- SPA ROUTING ---
+# Ensure that any 404 route returns index.html so React Router can handle it.
+@app.exception_handler(404)
+async def spa_404_handler(request, exc):
+    # Only serve index.html for GET requests that are not API calls
+    # (API calls usually start with /api or /log, which generic 404 is fine)
+    # But since this server ONLY serves frontend, practically everything is frontend.
+    return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 if __name__ == "__main__":
     logger.info("Starting Web Frontend Server on Port 8001...")

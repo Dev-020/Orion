@@ -518,9 +518,6 @@ async def on_message(message: discord.Message):
         # We await the consumer, which iterates the generator.
         should_restart = await consume_generator_async(generator, response_msg)
         
-        # 5. Consume (Streams updates to response_msg)
-        should_restart = await consume_generator_async(generator, response_msg)
-        
         # 6. Restart if needed
         if should_restart:
              logger.info("--- RESTART TRIGGERED BY CHAT ---")

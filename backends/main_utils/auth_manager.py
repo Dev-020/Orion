@@ -4,12 +4,13 @@ import bcrypt
 import jwt
 import datetime
 import os
+import json
 from typing import Optional, Dict, Any
 
 class AuthManager:
     def __init__(self, db_path: str = "databases/users.db", secret_key: str = "CHANGE_ME_IN_PROD_SECRET"):
         """
-        Manages user authentication, registration, and session tokens.
+        Manages user authentication, registration, session tokens, and User Profiles.
         
         Args:
             db_path (str): Path to the SQLite database file.
@@ -27,22 +28,28 @@ class AuthManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # User Table: UUID (Primary), Username (Unique), Password (Hashed), CreatedAt, TokenVersion
+        # User Table: UUID (Primary), Username (Unique), Password (Hashed), CreatedAt, TokenVersion, ProfileData (JSON)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            token_version INTEGER DEFAULT 0
+            token_version INTEGER DEFAULT 0,
+            profile_data TEXT DEFAULT '{}'
         )
         ''')
         
-        # Try to add column for existing DBs
+        # Migrations for existing DBs
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
-            pass # Column likely exists
+            pass 
+
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN profile_data TEXT DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
             
         conn.commit()
         conn.close()
@@ -62,7 +69,7 @@ class AuthManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO users (user_id, username, password_hash, token_version) VALUES (?, ?, ?, 0)",
+                "INSERT INTO users (user_id, username, password_hash, token_version, profile_data) VALUES (?, ?, ?, 0, '{}')",
                 (user_id, username, hashed_pw)
             )
             conn.commit()
@@ -181,3 +188,75 @@ class AuthManager:
         except Exception as e:
             print(f"[AuthManager] Password update failed: {e}")
             return False
+
+    # --- Profile Management ---
+
+    def get_user_profile(self, user_id: str) -> Dict[str, Any]:
+        """Fetches the user profile (Username + Dynamic Data)."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT username, profile_data FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                return {}
+
+            username = row['username']
+            profile_json = row['profile_data']
+            
+            profile = {}
+            if profile_json:
+                try:
+                    profile = json.loads(profile_json)
+                except json.JSONDecodeError:
+                    profile = {}
+            
+            # Ensure base fields
+            profile['user_id'] = user_id
+            profile['username'] = username
+            
+            return profile
+        except Exception as e:
+            print(f"[AuthManager] Get Profile Error: {e}")
+            return {}
+
+    def update_user_profile(self, user_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Updates the dynamic profile data. 
+        Merges 'updates' into existing data.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 1. Fetch existing
+            cursor.execute("SELECT profile_data FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return False
+
+            existing_json = row[0]
+            current_data = {}
+            if existing_json:
+                try:
+                    current_data = json.loads(existing_json)
+                except:
+                    current_data = {}
+            
+            # 2. Merge
+            current_data.update(updates)
+            
+            # 3. Save
+            new_json = json.dumps(current_data)
+            cursor.execute("UPDATE users SET profile_data = ? WHERE user_id = ?", (new_json, user_id))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"[AuthManager] Update Profile Error: {e}")
+            return False
+

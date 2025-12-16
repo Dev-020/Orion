@@ -8,30 +8,55 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true); 
   const [error, setError] = useState(null);
 
+  const refreshUser = async () => {
+    const token = localStorage.getItem('orion_auth_token');
+    if (!token) return;
+    try {
+        const res = await fetch('http://localhost:8000/api/profile', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+            const profile = await res.json();
+            setUser(profile);
+            localStorage.setItem('orion_user', JSON.stringify(profile));
+        }
+    } catch (e) {
+        console.error("Failed to refresh profile", e);
+    }
+  };
+
   useEffect(() => {
     // Check local storage for token on mount
     const token = localStorage.getItem('orion_auth_token');
     const storedUser = localStorage.getItem('orion_user');
     
-    if (token && storedUser) {
-        // Optimistically set user
-        setUser(JSON.parse(storedUser));
-        
-        // Verify token with backend to ensure it hasn't been revoked (e.g. password reset)
-        fetch('http://localhost:8000/api/auth/me', {
+    if (token) {
+        if (storedUser) {
+           setUser(JSON.parse(storedUser));
+        }
+
+        // Verify token AND get latest profile data
+        fetch('http://localhost:8000/api/profile', {
             headers: { 'Authorization': `Bearer ${token}` }
         })
         .then(res => {
-            if (!res.ok) {
-                // Token invalid or revoked -> Logout
-                console.warn("Session expired or revoked. Logging out.");
-                logout();
+            if (res.ok) {
+                return res.json();
+            } else {
+                throw new Error("Session invalid");
             }
+        })
+        .then(profile => {
+             setUser(profile);
+             localStorage.setItem('orion_user', JSON.stringify(profile));
         })
         .catch(err => {
             console.error("Session verification failed:", err);
-            // Optional: logout on network error? Probably not, keeping offline access might be better
-            // but for security, maybe we should warn. For now, keep session if just network error.
+            // If API refuses token (401), we should probably logout
+            // But strict 401 check is better. For now, if profile fetch fails, 
+            // we assume token is bad if it's a 4xx.
+            // Simplified:
+            if (err.message === "Session invalid") logout();
         })
         .finally(() => setLoading(false));
     } else {
@@ -53,11 +78,28 @@ export const AuthProvider = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        // Save to state
-        setUser(data.user);
-        // Save to local storage
+        // We have the token. Now fetch the full profile immediately.
         localStorage.setItem('orion_auth_token', data.token);
-        localStorage.setItem('orion_user', JSON.stringify(data.user));
+        
+        // Fetch Profile
+        try {
+            const profileRes = await fetch('http://localhost:8000/api/profile', {
+                headers: { 'Authorization': `Bearer ${data.token}` }
+            });
+            if (profileRes.ok) {
+                const profile = await profileRes.json();
+                setUser(profile);
+                localStorage.setItem('orion_user', JSON.stringify(profile));
+            } else {
+                 // Fallback to basic user info from login
+                 setUser(data.user);
+                 localStorage.setItem('orion_user', JSON.stringify(data.user));
+            }
+        } catch (e) {
+            setUser(data.user);
+            localStorage.setItem('orion_user', JSON.stringify(data.user));
+        }
+        
         return true;
       } else {
         setError(data.error || 'Login failed');
@@ -82,8 +124,6 @@ export const AuthProvider = ({ children }) => {
         const data = await response.json();
         
         if (data.success) {
-            // Auto login after register? Or just return success?
-            // Let's just return success and let user login
             return { success: true };
         } else {
              return { success: false, error: data.detail || data.error };
@@ -100,7 +140,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, register, loading, error }}>
+    <AuthContext.Provider value={{ user, login, logout, register, loading, error, refreshUser }}>
       {!loading && children}
     </AuthContext.Provider>
   );

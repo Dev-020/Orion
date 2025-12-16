@@ -146,35 +146,38 @@ class ProcessManager:
     def stop_process(self, key, persist=False):
         if key in self.procs:
             p = self.procs[key]
-            
-            # 1. Graceful Shutdown Attempt
             self.statuses[key] = "STOPPING..."
-            
+
+            # 1. Graceful Shutdown (Server Custom Logic)
             if key == "server" and p.poll() is None:
                 try:
                     # Append persist flag to URL
                     url = f"http://127.0.0.1:8000/management/shutdown?persist={'true' if persist else 'false'}"
                     req = urllib.request.Request(url, method="POST")
-                    with urllib.request.urlopen(req, timeout=2) as response: # Bump timeout slightly for DB save
+                    with urllib.request.urlopen(req, timeout=2) as response:
                         pass
                 except:
-                    # If API is dead, we fallback to kill
                     pass
 
-            # 2. Polling Wait
-            start_wait = time.time()
-            while p.poll() is None and (time.time() - start_wait) < 5:
-                time.sleep(0.1)
-
-            # 3. Force Kill Fallback
+            # 2. Standard Termination Request
             if p.poll() is None:
                 p.terminate()
-                try:
-                    p.wait(timeout=2)
-                except subprocess.TimeoutExpired:
+
+            # 3. Wait for Exit (Timeout: 5 seconds)
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # 4. Force Kill Fallback
+                LOGGER.warning(f"Process {key} hung. Forcing shutdown...")
+                if os.name == 'nt':
+                    # /F = Force, /T = Tree (Kill child processes too, important for Bot)
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], 
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
                     p.kill()
-                    
-            del self.procs[key]
+            
+            # Cleanup
+            if key in self.procs: del self.procs[key]
             self.statuses[key] = "STOPPED"
 
     def start_all(self):

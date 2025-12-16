@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react'
-import { Send, Paperclip } from 'lucide-react'
+import { Send, Archive, Inbox, X, Plus, FileText, User } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -23,6 +23,286 @@ const logToServer = async (level, message) => {
   }
 }
 
+
+// Helper to format timestamps
+const formatTimestamp = (ts) => {
+    if (!ts) return ''
+    if (ts.length < 10 && ts.includes(':')) return ts
+    
+    try {
+        const date = new Date(ts)
+        if (isNaN(date.getTime())) return ts
+        return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+    } catch (e) {
+        return ts
+    }
+}
+
+// Regex to normalize LaTeX math to Markdown math
+const preprocessContent = (content) => {
+    if (!content) return "";
+    return content
+        .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$') // \[ ... \] -> $$ ... $$
+        .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')     // \( ... \) -> $ ... $
+}
+
+// Memoized Message Component to prevent re-renders (Typing Lag Fix)
+const MessageItem = React.memo(({ msg, userAvatar }) => {
+    // Local state for Accordion
+    const [isExpanded, setIsExpanded] = React.useState(msg.isThinking);
+
+    // Sync with msg.isThinking if it changes (e.g. while streaming)
+    React.useEffect(() => {
+        setIsExpanded(!!msg.isThinking);
+    }, [msg.isThinking]);
+
+    return (
+        <div className={`message-appear ${msg.role === 'user' ? 'user-msg' : 'ai-msg'}`} 
+            style={{
+                alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                maxWidth: '80%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem'
+            }}
+        >
+            {/* Metadata Header */}
+            <div style={{
+                display:'flex', gap:'0.75rem', 
+                justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                alignItems: 'center',
+                fontSize: '0.8rem',
+                opacity: 0.7,
+                padding: '0 0.5rem'
+            }}>
+                <span style={{fontWeight:'bold'}}>{msg.username}</span>
+                <span style={{fontSize:'0.75rem', opacity:0.6}}>{formatTimestamp(msg.timestamp)}</span>
+            </div>
+
+            {/* Thought Bubble (assistant) - Accordion Version */}
+            {msg.role === 'assistant' && msg.thought && (
+            <div className="thought-block">
+                <div className="thought-header" onClick={() => setIsExpanded(!isExpanded)}>
+                    Thinking Process
+                </div>
+                <div className={`thought-accordion ${isExpanded ? 'open' : ''}`}>
+                    <div className="thought-inner">
+                        <div className="thought-content">
+                            <ReactMarkdown 
+                                remarkPlugins={[remarkMath]}
+                                rehypePlugins={[rehypeKatex]}
+                                components={{
+                                    code({node, inline, className, children, ...props}) {
+                                        const match = /language-(\w+)/.exec(className || '')
+                                        return !inline && match ? (
+                                            <div style={{borderRadius: '8px', overflow: 'hidden', margin: '0.5rem 0'}}>
+                                                <div style={{
+                                                    background: '#1e1e1e', 
+                                                    padding: '0.25rem 0.75rem', 
+                                                    fontSize: '0.75rem', 
+                                                    color: '#a1a1aa',
+                                                    borderBottom: '1px solid #333',
+                                                    display: 'flex', justifyContent: 'space-between'
+                                                }}>
+                                                    <span>{match[1]}</span>
+                                                    <span>Copy</span>
+                                                </div>
+                                                <SyntaxHighlighter
+                                                    style={vscDarkPlus}
+                                                    language={match[1]}
+                                                    PreTag="div"
+                                                    customStyle={{margin: 0, borderRadius: 0}}
+                                                    {...props}
+                                                >
+                                                    {String(children).replace(/\n$/, '')}
+                                                </SyntaxHighlighter>
+                                            </div>
+                                        ) : (
+                                            <code className={className} style={{
+                                                background: 'rgba(255,255,255,0.1)', 
+                                                padding: '0.2rem 0.4rem', 
+                                                borderRadius: '4px',
+                                                fontSize: '0.9em'
+                                            }} {...props}>
+                                                {children}
+                                            </code>
+                                        )
+                                    }
+                                }}
+                            >
+                                {preprocessContent(msg.thought)}
+                            </ReactMarkdown>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            )}
+
+            <div style={{
+            display: 'flex',
+            gap: '1rem',
+            justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'
+            }}>
+                {msg.role === 'assistant' && (
+                <div style={{
+                     // Container style handled generally, but we can override
+                     marginRight: '0'
+                }}>
+                    <UserAvatar 
+                        avatarUrl="/orion_avatar.png" // Change to .webm for video!
+                        size={32}
+                    />
+                </div>
+                )}
+                
+                <div style={{
+                background: msg.role === 'user' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                border: msg.role === 'user' ? '1px solid rgba(99, 102, 241, 0.3)' : '1px solid rgba(255, 255, 255, 0.1)',
+                padding: '1rem 1.5rem',
+                borderRadius: '12px',
+                borderTopLeftRadius: msg.role === 'assistant' ? '2px' : '12px',
+                borderTopRightRadius: msg.role === 'user' ? '2px' : '12px',
+                lineHeight: '1.6',
+                width: '100%',
+                position: 'relative',
+                boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                }}>
+                    {msg.role === 'system' ? (
+                        <span style={{color: '#ef4444'}}>{msg.content}</span>
+                    ) : (
+                        <>
+                        {!msg.content && msg.isThinking && (
+                            <span style={{opacity: 0.5, letterSpacing: '2px'}} className="animate-pulse">...</span>
+                        )}
+                        <ReactMarkdown 
+                            remarkPlugins={[remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                            components={{
+                                code({node, inline, className, children, ...props}) {
+                                    const match = /language-(\w+)/.exec(className || '')
+                                    return !inline && match ? (
+                                        <div style={{borderRadius: '8px', overflow: 'hidden', margin: '0.5rem 0'}}>
+                                            <div style={{
+                                                background: '#1e1e1e', 
+                                                padding: '0.25rem 0.75rem', 
+                                                fontSize: '0.75rem', 
+                                                color: '#a1a1aa',
+                                                borderBottom: '1px solid #333',
+                                                display: 'flex', justifyContent: 'space-between'
+                                            }}>
+                                                <span>{match[1]}</span>
+                                                <span>Copy</span>
+                                            </div>
+                                            <SyntaxHighlighter
+                                                style={vscDarkPlus}
+                                                language={match[1]}
+                                                PreTag="div"
+                                                customStyle={{margin: 0, borderRadius: 0}}
+                                                {...props}
+                                            >
+                                                {String(children).replace(/\n$/, '')}
+                                            </SyntaxHighlighter>
+                                        </div>
+                                    ) : (
+                                        <code className={className} style={{
+                                            background: 'rgba(255,255,255,0.1)', 
+                                            padding: '0.2rem 0.4rem', 
+                                            borderRadius: '4px',
+                                            fontSize: '0.9em'
+                                        }} {...props}>
+                                            {children}
+                                        </code>
+                                    )
+                                }
+                            }}
+                        >
+                            {preprocessContent(msg.content)}
+                        </ReactMarkdown>
+                        </>
+                    )}
+                </div>
+
+import UserAvatar from './components/UserAvatar';
+
+// ...
+
+                {/* User Avatar */}
+                {msg.role === 'user' && (
+                    <div style={{
+                        marginTop: '0', marginLeft: '0.75rem' // Margin for alignment
+                    }}>
+                         <UserAvatar 
+                            avatarUrl={userAvatar} 
+                            size={32} 
+                         />
+                    </div>
+                )}
+            </div>
+        </div>
+    )
+})
+
+// File Grid Item for Popup
+const FileGridItem = ({ file, onRemove }) => {
+    const [isHovered, setIsHovered] = useState(false);
+    return (
+        <div 
+            style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem',
+                position: 'relative',
+                width: '100%',
+                cursor: 'default'
+            }}
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+            title={file.display_name} // Tooltip
+        >
+            {/* Icon Container */}
+            <div style={{
+                position: 'relative',
+                width: '48px', height: '48px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'rgba(255,255,255,0.05)',
+                borderRadius: '8px',
+                overflow: 'hidden',
+                // Pulse if pending
+                animation: file.isPending ? 'pulse-glow 1.5s infinite ease-in-out' : 'none'
+            }}>
+                <FileText size={24} color="#a1a1aa" style={{
+                    filter: isHovered || file.isPending ? 'blur(2px)' : 'none', // Also blur if pending? Or just pulse. User said "pulse as well". Maybe blur too.
+                    transition: 'filter 0.2s'
+                }}/>
+                
+                {/* Red X Overlay - Allow removing even if pending? Yes. */}
+                <div className="interactive-btn" style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'rgba(0,0,0,0.4)',
+                    opacity: isHovered ? 1 : 0,
+                    transition: 'opacity 0.2s',
+                    cursor: 'pointer'
+                }} onClick={onRemove}>
+                   <X size={20} color="#ef4444" />
+                </div>
+            </div>
+            
+            {/* Filename */}
+            <span style={{
+                fontSize: '0.75rem', 
+                color: '#d4d4d8', 
+                maxWidth: '100%', 
+                whiteSpace: 'nowrap', 
+                overflow: 'hidden', 
+                textOverflow: 'ellipsis',
+                textAlign: 'center'
+            }}>
+                {file.display_name}
+            </span>
+        </div>
+    )
+}
+
 export default function ChatInterface({ session }) {
   const { user } = useAuth(); // Get user from context
   const token = localStorage.getItem('orion_auth_token'); // Get raw token for WS
@@ -32,7 +312,12 @@ export default function ChatInterface({ session }) {
   ])
   const [input, setInput] = useState('')
   const [isConnected, setIsConnected] = useState(false)
+  const [files, setFiles] = useState([])
+  const [isUploading, setIsUploading] = useState(false)
+  const [showFilePopup, setShowFilePopup] = useState(false)
+  const [isHoveringBucket, setIsHoveringBucket] = useState(false)
   const ws = useRef(null)
+  const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
   const lastLoggedType = useRef(null) // For log throttling
 
@@ -155,87 +440,14 @@ export default function ChatInterface({ session }) {
          
          const data = await res.json()
          const history = data.history || []
+
+         logToServer('info', `History loaded: ${history.length} messages`)
          
          if (history.length > 0) {
-            const formattedMessages = []
-            
-            history.forEach((exchange, index) => {
-               // --- Helper to extract text from complex objects ---
-               const extractText = (content) => {
-                   if (!content) return "";
-                   
-                   // 1. If it's literally an object with user_prompt
-                   if (typeof content === 'object' && content !== null) {
-                       if (content.user_prompt) return content.user_prompt;
-                       if (content.parts && Array.isArray(content.parts)) {
-                           return content.parts.map(p => p.text).join('');
-                       }
-                       // If tool calls exist, maybe show a summary?
-                       if (content.tool_calls) return `[Used Tools: ${content.tool_calls.length}]`;
-                       
-                       // Fallback for objects: try to look for prompt/text keys
-                       if (content.prompt) return content.prompt;
-                       if (content.text) return content.text;
-                   }
-                   
-                   // 2. If it's a string, try strictly parsing, then Regex
-                   if (typeof content === 'string') {
-                       // A. Try JSON Parse
-                       try {
-                           if (content.trim().startsWith('{')) {
-                               const parsed = JSON.parse(content);
-                               if (parsed.user_prompt) return parsed.user_prompt;
-                               if (parsed.text) return parsed.text;
-                               if (parsed.prompt) return parsed.prompt;
-                           }
-                       } catch (e) { 
-                           // Ignore parse error, proceed to Regex
-                       }
-
-                       // B. Regex Extraction (Handles Python dict strings or JSON)
-                       // Look for "user_prompt": "..." OR 'user_prompt': '...'
-                       const doubleQuoteMatch = content.match(/"user_prompt"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-                       if (doubleQuoteMatch) return doubleQuoteMatch[1];
-                       
-                       const singleQuoteMatch = content.match(/'user_prompt'\s*:\s*'((?:[^'\\]|\\.)*)'/);
-                       if (singleQuoteMatch) return singleQuoteMatch[1];
-                       
-                       // C. Cleanup if it looks like just a quoted string?
-                       if (content.startsWith('"') && content.endsWith('"')) {
-                           try { return JSON.parse(content); } catch (e) {}
-                       }
-                       
-                       return content;
-                   }
-
-                   return JSON.stringify(content);
-               }
-
-               const userText = extractText(exchange.user_content);
-               const modelText = extractText(exchange.model_content);
-               
-               // Extract timestamp if available
-               const timestamp = exchange.timestamp_utc || new Date().toISOString();
-               // Formatter
-               const timeStr = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-
-               formattedMessages.push({ 
-                   role: 'user', 
-                   content: userText, 
-                   id: `hist-user-${index}`,
-                   timestamp: timeStr,
-                   username: exchange.user_name || 'User'
-               })
-               formattedMessages.push({ 
-                   role: 'assistant', 
-                   content: modelText, 
-                   id: `hist-ai-${index}`,
-                   timestamp: timeStr,
-                   username: 'Orion'
-               })
-            })
-            
-            setMessages(formattedMessages)
+            // The backend now returns CLEAN history via sanitize_history_for_client
+            // Structure: { role, content, username, timestamp, id }
+            // So we can use it directly!
+            setMessages(history)
          }
        } catch (e) {
          console.error("History Load Error:", e)
@@ -313,12 +525,147 @@ export default function ChatInterface({ session }) {
     }
   }
 
+
+
+  // Ref to track active upload controllers for cancellation
+  const activeUploads = useRef({})
+
+  // File Upload Logic
+  const handleFileSelect = async (e) => {
+      if (!e.target.files.length) return
+      
+      const MAX_SIZE = 25 * 1024 * 1024; // 25MB
+      const selectedFiles = Array.from(e.target.files)
+      
+      const validFiles = []
+      const invalidFiles = []
+
+      if (files.length >= 6) {
+          alert("You can only attach up to 6 files.");
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          return;
+      }
+
+      const remainingSlots = 6 - files.length;
+      
+      selectedFiles.forEach(file => {
+          if (file.size > MAX_SIZE) {
+              invalidFiles.push(file.name)
+          } else {
+              validFiles.push(file)
+          }
+      })
+      
+      if (validFiles.length > remainingSlots) {
+          alert(`Only the first ${remainingSlots} file(s) will be added due to the 6-file limit.`);
+          validFiles.length = remainingSlots; 
+      }
+      
+      if (invalidFiles.length > 0) {
+          alert(`The following files are too large (>25MB) and will not be uploaded:\n- ${invalidFiles.join('\n- ')}`)
+          if (validFiles.length === 0) {
+              if (fileInputRef.current) fileInputRef.current.value = ''
+              return; 
+          }
+      }
+
+      // 1. Create Staged Pending Files
+      const pendingFiles = validFiles.map(f => ({
+          display_name: f.name,
+          isPending: true, // Marker for UI pulse
+          tempId: Math.random().toString(36).substr(2, 9) // temporary ID for tracking
+      }))
+
+      // 2. Add to UI immediately and Open Popup
+      setFiles(prev => [...prev, ...pendingFiles])
+      setShowFilePopup(true) 
+      
+      // 3. Upload Background Process
+      setIsUploading(true)
+      logToServer('file_upload_start', `Starting upload of ${validFiles.length} files`)
+
+      try {
+          const uploadPromises = validFiles.map((file, index) => {
+              const formData = new FormData()
+              formData.append('file', file)
+              formData.append('display_name', file.name)
+              formData.append('mime_type', file.type || 'application/octet-stream')
+              
+              const myTempId = pendingFiles[index].tempId;
+              
+              // Create AbortController
+              const controller = new AbortController();
+              activeUploads.current[myTempId] = controller;
+
+              return fetch('http://localhost:8000/upload_file', {
+                  method: 'POST',
+                  body: formData,
+                  signal: controller.signal
+              })
+              .then(res => {
+                  if (!res.ok) throw new Error('Upload failed')
+                  return res.json()
+              })
+              .then(data => {
+                  // Swap pending for real upon completion
+                  setFiles(prev => prev.map(f => {
+                      if (f.tempId === myTempId) {
+                          return data // The real StartableFile object from server
+                      }
+                      return f
+                  }))
+                  return data
+              })
+              .finally(() => {
+                  // Cleanup controller
+                  delete activeUploads.current[myTempId];
+              })
+          })
+
+          const results = await Promise.all(uploadPromises)
+          logToServer('file_upload_success', `Uploaded ${results.length} files`)
+          
+      } catch (error) {
+          if (error.name === 'AbortError') {
+              console.log("Upload aborted by user")
+          } else {
+              console.error("Upload failed:", error)
+              logToServer('error', `Upload Failed: ${error}`)
+              alert("Failed to upload one or more files.")
+          }
+          
+          // Cleanup any stuck pending files (that aren't aborted but failed otherwise)
+          setFiles(prev => prev.filter(p => !p.isPending))
+      } finally {
+          setIsUploading(false)
+          if (fileInputRef.current) fileInputRef.current.value = ''
+      }
+  }
+
+  const removeFile = (index) => {
+      setFiles(prev => {
+        const fileToRemove = prev[index];
+        logToServer('file_remove', `Removing file ${fileToRemove ? fileToRemove.display_name : 'unknown'}`)
+        
+        // Cancel upload if pending
+        if (fileToRemove.isPending && fileToRemove.tempId && activeUploads.current[fileToRemove.tempId]) {
+            console.log(`Aborting upload for ${fileToRemove.display_name}`);
+            activeUploads.current[fileToRemove.tempId].abort();
+            delete activeUploads.current[fileToRemove.tempId];
+        }
+
+        const newFiles = [...prev];
+        newFiles.splice(index, 1);
+        return newFiles;
+      })
+  }
+
   const textareaRef = useRef(null)
 
   const sendMessage = () => {
-    if (!input.trim() || !ws.current) return
+    if ((!input.trim() && files.length === 0) || !ws.current || isUploading) return
 
-    logToServer('info', `User sending prompt: "${input.substring(0, 50)}..."`)
+    logToServer('info', `User sending prompt: "${input.substring(0, 50)}..." [Files: ${files.length}]`)
 
     // Reset height manually
     if (textareaRef.current) {
@@ -331,7 +678,8 @@ export default function ChatInterface({ session }) {
         content: input, 
         id: Date.now(),
         timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-        username: user?.username || 'User' 
+        username: user?.username || 'User',
+        files: files // Store locally for display if we update message item later
     }
     setMessages(prev => [...prev, userMsg])
 
@@ -342,10 +690,12 @@ export default function ChatInterface({ session }) {
       type: 'prompt',
       prompt: input,
       session_id: session, 
-      username: user?.username || 'WebUser'
+      username: user?.username || 'WebUser',
+      files: files
     }))
 
     setInput('')
+    setFiles([])
   }
 
   const handleKeyDown = (e) => {
@@ -373,16 +723,18 @@ export default function ChatInterface({ session }) {
       target.style.height = `${target.scrollHeight}px`;
   }
 
+
+
   return (
     <div style={{display: 'flex', flexDirection: 'column', height: '100%'}}>
+      <input type="file" multiple ref={fileInputRef} style={{display:'none'}} onChange={handleFileSelect} />
       {/* Header */}
       <div style={{
         padding: '1rem 2rem', 
-        // borderBottom: 'var(--glass-border)', // Removed to seamless look
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        background: 'transparent' // Seamless with main background
+        background: 'transparent'
       }}>
         <span style={{fontWeight: 600}}>Current Session</span>
         <div style={{display:'flex', alignItems:'center', gap:'0.5rem', fontSize:'0.8rem'}}>
@@ -394,6 +746,18 @@ export default function ChatInterface({ session }) {
           {isConnected ? 'Online' : 'Disconnected'}
         </div>
       </div>
+
+      {/* Styles for Animations */}
+      <style>{`
+        @keyframes pulse-glow {
+          0%, 100% { opacity: 1; filter: drop-shadow(0 0 5px rgba(99, 102, 241, 0.5)); }
+          50% { opacity: 0.6; filter: drop-shadow(0 0 12px rgba(99, 102, 241, 0.8)); }
+        }
+        @keyframes shadow-pulse {
+          0%, 100% { box-shadow: 0px 5px 10px -2px rgba(99, 102, 241, 0.3); } 
+          50% { box-shadow: 0px 10px 20px -2px rgba(99, 102, 241, 0.8); border-color: rgba(99, 102, 241, 0.6); }
+        }
+      `}</style>
 
       {/* Messages Area */}
       <div style={{
@@ -407,151 +771,162 @@ export default function ChatInterface({ session }) {
         WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 5%, black 95%, transparent 100%)'
       }}>
         {messages.map((msg, idx) => (
-          // ... (Messages Content Omitted - Unchanged) ...
-          // Just referencing lines to be safe, but actually I need to Replace the Whole Block or specific chunks?
-          // The instruction says "Update textarea styles...".
-          // I will target the Input Area specifically to key modifications.
-          <div key={idx} className={`message-appear ${msg.role === 'user' ? 'user-msg' : 'ai-msg'}`} 
-            style={{
-                alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                maxWidth: '80%',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.5rem'
-            }}
-          >
-             {/* ... */}
-             {/* Metadata Header */}
-             <div style={{
-                 display:'flex', gap:'0.75rem', 
-                 justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                 alignItems: 'center',
-                 fontSize: '0.8rem',
-                 opacity: 0.7,
-                 padding: '0 0.5rem'
-             }}>
-                 <span style={{fontWeight:'bold'}}>{msg.username}</span>
-                 <span style={{fontSize:'0.75rem', opacity:0.6}}>{msg.timestamp}</span>
-             </div>
-
-             {/* Thought Bubble (assistant) */}
-             {msg.role === 'assistant' && msg.thought && (
-               <details className="thought-details" open={msg.isThinking}>
-                 <summary>Thinking Process</summary>
-                 <div className="thought-content">{msg.thought}</div>
-               </details>
-             )}
-
-             <div style={{
-               display: 'flex',
-               gap: '1rem',
-               justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'
-             }}>
-                 {msg.role === 'assistant' && (
-                   <div style={{
-                     minWidth: '32px', height: '32px', borderRadius: '8px', 
-                     background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                     fontSize: '0.8rem', fontWeight: 'bold'
-                   }}>
-                     AI
-                   </div>
-                 )}
-                 
-                 <div style={{
-                   background: msg.role === 'user' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                   border: msg.role === 'user' ? '1px solid rgba(99, 102, 241, 0.3)' : '1px solid rgba(255, 255, 255, 0.1)',
-                   padding: '1rem 1.5rem',
-                   borderRadius: '12px',
-                   borderTopLeftRadius: msg.role === 'assistant' ? '2px' : '12px',
-                   borderTopRightRadius: msg.role === 'user' ? '2px' : '12px',
-                   lineHeight: '1.6',
-                   width: '100%',
-                   position: 'relative',
-                   boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-                 }}>
-                    {msg.role === 'system' ? (
-                      <span style={{color: '#ef4444'}}>{msg.content}</span>
-                    ) : (
-                      <>
-                        {!msg.content && msg.isThinking && (
-                           <span style={{opacity: 0.5, letterSpacing: '2px'}} className="animate-pulse">...</span>
-                        )}
-                        <ReactMarkdown 
-                            remarkPlugins={[remarkMath]}
-                            rehypePlugins={[rehypeKatex]}
-                            components={{
-                                code({node, inline, className, children, ...props}) {
-                                    const match = /language-(\w+)/.exec(className || '')
-                                    return !inline && match ? (
-                                        <div style={{borderRadius: '8px', overflow: 'hidden', margin: '0.5rem 0'}}>
-                                            <div style={{
-                                                background: '#1e1e1e', 
-                                                padding: '0.25rem 0.75rem', 
-                                                fontSize: '0.75rem', 
-                                                color: '#a1a1aa',
-                                                borderBottom: '1px solid #333',
-                                                display: 'flex', justifyContent: 'space-between'
-                                            }}>
-                                                <span>{match[1]}</span>
-                                                <span>Copy</span>
-                                            </div>
-                                            <SyntaxHighlighter
-                                                style={vscDarkPlus}
-                                                language={match[1]}
-                                                PreTag="div"
-                                                customStyle={{margin: 0, borderRadius: 0}}
-                                                {...props}
-                                            >
-                                                {String(children).replace(/\n$/, '')}
-                                            </SyntaxHighlighter>
-                                        </div>
-                                    ) : (
-                                        <code className={className} style={{
-                                            background: 'rgba(255,255,255,0.1)', 
-                                            padding: '0.2rem 0.4rem', 
-                                            borderRadius: '4px',
-                                            fontSize: '0.9em'
-                                        }} {...props}>
-                                            {children}
-                                        </code>
-                                    )
-                                }
-                            }}
-                        >
-                          {msg.content}
-                        </ReactMarkdown>
-                      </>
-                    )}
-                 </div>
-             </div>
-          </div>
+             <MessageItem key={idx} msg={msg} userAvatar={user?.avatar_url} />
         ))}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input Area */}
       <div style={{padding: '0 2rem 2rem 2rem', maxWidth: '900px', width: '100%', margin: '0 auto'}}>
+        
         <div style={{
           display: 'flex',
           alignItems: 'flex-end',
           gap: '1rem',
         }}>
-          {/* Attach Button */}
-          <button style={{
-             padding: '0.75rem', 
-             color: '#a1a1aa', 
-             background: 'rgba(255,255,255,0.05)', 
-             border: '1px solid rgba(255,255,255,0.1)', 
-             borderRadius: '12px',
-             cursor: 'pointer',
-             height: '44px', 
-             width: '44px',
-             display: 'flex', alignItems: 'center', justifyContent: 'center',
-             marginBottom: '1px' // Align deeply
-           }}>
-            <Paperclip size={20} />
-          </button>
+          {/* Bucket Button */}
+          <div style={{position: 'relative', marginBottom: '1px'}}>
+              {/* Tooltip */}
+              {isHoveringBucket && !showFilePopup && (
+                  <div style={{
+                      position: 'absolute',
+                      bottom: '120%',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      background: 'rgba(0,0,0,0.8)',
+                      padding: '0.4rem 0.6rem',
+                      borderRadius: '6px',
+                      fontSize: '0.75rem',
+                      whiteSpace: 'nowrap',
+                      pointerEvents: 'none',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      zIndex: 20
+                  }}>
+                      {files.length === 0 ? "Click to attach files" : `${files.length} file(s) attached`}
+                  </div>
+              )}
+
+              {/* Popup Manager */}
+              {showFilePopup && (
+                  <>
+                    <div 
+                        style={{position: 'fixed', inset: 0, zIndex: 40}} 
+                        onClick={() => setShowFilePopup(false)}
+                    />
+                    <div style={{
+                        position: 'absolute',
+                        bottom: '120%',
+                        left: '0',
+                        // Explicit width based on columns to ensure tight fit without overflow
+                        width: (files.length + (files.length < 6 ? 1 : 0)) >= 3 ? '300px' : 
+                               (files.length + (files.length < 6 ? 1 : 0)) === 2 ? '210px' : '110px',
+                        background: 'rgba(30, 30, 35, 0.6)', 
+                        backdropFilter: 'blur(16px)', 
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '12px',
+                        padding: '0.75rem',
+                        boxShadow: '0 10px 25px -5px rgba(0,0,0,0.5)',
+                        zIndex: 50,
+                        display: 'flex', flexDirection: 'column', gap: '0.5rem'
+                    }}>
+                        {/* Header Row */}
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                            <span style={{fontWeight:600, color:'#f4f4f5'}}>({files.length}/6)</span>
+                            <button onClick={() => setShowFilePopup(false)} className="interactive-btn" style={{
+                                background:'none', border:'none', cursor:'pointer', color:'#a1a1aa'
+                            }}>
+                                <X size={18} />
+                            </button>
+                        </div>
+                        {/* Grid Layout */}
+                        <div style={{
+                            display: 'grid', 
+                            // minmax(0, 1fr) is CRITICAL for text truncation in grids
+                            gridTemplateColumns: `repeat(${Math.min(files.length + (files.length < 6 ? 1 : 0), 3)}, minmax(0, 1fr))`, 
+                            gap: '0.5rem', 
+                        }}>
+                            {files.map((f, i) => (
+                                <FileGridItem key={i} file={f} onRemove={() => removeFile(i)} />
+                            ))}
+                            
+                            {/* Add More Ghost Button */}
+                            {files.length < 6 && (
+                                <div style={{
+                                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem',
+                                    width: '100%',
+                                    cursor: 'default'
+                                }}>
+                                    <button
+                                        onClick={() => fileInputRef.current?.click()}
+                                        style={{
+                                            width: '48px', height: '48px',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            background: 'transparent',
+                                            border: '2px dashed rgba(255,255,255,0.2)',
+                                            borderRadius: '8px',
+                                            color: 'rgba(255,255,255,0.3)',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s',
+                                            padding: 0
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.borderColor = 'rgba(99, 102, 241, 0.5)';
+                                            e.currentTarget.style.color = 'rgba(99, 102, 241, 0.8)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)';
+                                            e.currentTarget.style.color = 'rgba(255,255,255,0.3)';
+                                        }}
+                                    >
+                                        <Plus size={24} />
+                                    </button>
+                                    <span style={{fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)'}}>Add</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                  </>
+              )}
+
+              {/* Main Button */}
+              <button 
+                className="interactive-btn"
+                onClick={() => {
+                    if (files.length === 0) {
+                        fileInputRef.current?.click()
+                    } else {
+                        setShowFilePopup(!showFilePopup)
+                    }
+                }}
+                onMouseEnter={() => setIsHoveringBucket(true)}
+                onMouseLeave={() => setIsHoveringBucket(false)}
+                // Removed disabled={isUploading} to allow checking progress
+                style={{
+                    padding: '0.75rem', 
+                    // Matches Send Button Glow logic
+                    color: (isUploading || files.length > 0) ? '#fff' : '#a1a1aa', 
+                    background: (isUploading || files.length > 0) ? '#6366f1' : 'rgba(255,255,255,0.05)', 
+                    border: (isUploading || files.length > 0) ? 'none' : '1px solid rgba(255,255,255,0.1)', 
+                    borderRadius: '12px',
+                    cursor: isUploading ? 'not-allowed' : 'pointer',
+                    height: '44px', 
+                    width: '44px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'all 0.2s',
+                    opacity: 1, // Full opacity to show glow clearly
+                    // Add pulsing shadow if uploading, static glow if active
+                    animation: isUploading ? 'shadow-pulse 1.5s infinite ease-in-out' : 'none',
+                    boxShadow: (!isUploading && files.length > 0) ? '0 0 10px rgba(99, 102, 241, 0.3)' : 'none'
+                }}>
+                    {isUploading ? (
+                        <div style={{animation: 'pulse-glow 1.5s infinite ease-in-out'}}>
+                           <Archive size={20} style={{filter: 'blur(1px)'}} />
+                        </div>
+                    ) : (
+                        <Archive size={20} />
+                    )}
+              </button>
+          </div>
           
           {/* Text Area Container */}
           <div style={{
@@ -601,15 +976,16 @@ export default function ChatInterface({ session }) {
 
           {/* Send Button */}
           <button 
+            className="interactive-btn"
             onClick={sendMessage}
-            disabled={!input.trim()}
+            disabled={(!input.trim() && files.length === 0)}
             style={{
               padding: '0.75rem', 
-              background: input.trim() ? '#6366f1' : 'rgba(255,255,255,0.05)', 
-              color: input.trim() ? '#fff' : 'rgba(255,255,255,0.3)',
-              border: input.trim() ? 'none' : '1px solid rgba(255,255,255,0.1)', 
+              background: (input.trim() || files.length > 0) ? '#6366f1' : 'rgba(255,255,255,0.05)', 
+              color: (input.trim() || files.length > 0) ? '#fff' : 'rgba(255,255,255,0.3)',
+              border: (input.trim() || files.length > 0) ? 'none' : '1px solid rgba(255,255,255,0.1)', 
               borderRadius: '12px', 
-              cursor: input.trim() ? 'pointer' : 'default',
+              cursor: (input.trim() || files.length > 0) ? 'pointer' : 'default',
               transition: 'all 0.2s',
               height: '44px',
               width: '44px',

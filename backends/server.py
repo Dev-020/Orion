@@ -4,7 +4,8 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends, Header
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ import json
 import uvicorn
 import contextlib
 import signal
+import shutil
 import os
 
 # --- LOG FILTERING ---
@@ -71,9 +73,20 @@ except ImportError as e:
 class FileMetadata(BaseModel):
     name: str
     path: str
-    type: str  # 'file' or 'directory'
-    size: Optional[int] = None
-    modification_time: Optional[float] = None
+class UnifiedFile(BaseModel):
+    """
+    Standardized payload for file objects across Frontend -> Server -> Core.
+    Unifies 'File API' style objects and local/base64 objects.
+    """
+    name: Optional[str] = None # Internal/API Name (Uri)
+    uri: Optional[str] = None  # URI (file://, https://, or internal id)
+    display_name: Optional[str] = None # Human readable filename
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = 0
+    text_content: Optional[str] = None # For injected text/code/analysis
+    base64_data: Optional[str] = None  # For small images/local usage
+    local_path: Optional[str] = None   # For local file references
+    is_analysis: Optional[bool] = False # Flag if this is a text analysis of a file
 
 class UserRegister(BaseModel):
     username: str
@@ -82,16 +95,13 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     username: str
     password: str
-    mime_type: Optional[str] = None
-    size_bytes: Optional[int] = 0
-    text_content: Optional[str] = None # CRITICAL: Allow analysis text to pass through validation
 
 class PromptRequest(BaseModel):
     prompt: str
     session_id: str
     user_id: str
     username: str
-    files: List[FileMetadata] = [] # Replaces simple image_path
+    files: List[UnifiedFile] = [] 
     stream: bool = True
 
 class ModeRequest(BaseModel):
@@ -105,14 +115,15 @@ class HistoryRequest(BaseModel):
 # --- HELPER: Mock Object for Core ---
 class StartableFile:
     def __init__(self, data: Dict):
+        # Maps UnifiedFile fields to Core's expected attributes
         self.name = data.get("name")
         self.uri = data.get("uri")
         self.display_name = data.get("display_name")
         self.mime_type = data.get("mime_type")
         self.size_bytes = data.get("size_bytes")
-        # Ensure we pass the analysis text if present (for VLM results)
         self.text_content = data.get("text_content")
-        # Add any other attrs Core expects access to
+        self.base64_data = data.get("base64_data") # Support Local/Ollama images
+        self.local_path = data.get("local_path")   # Support Local Docs
 
 # --- WEBSOCKET MANAGER ---
 class ConnectionManager:
@@ -222,6 +233,140 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- STATIC FILES FOR AVATARS ---
+AVATAR_DIR = config.DATA_DIR / "avatars"
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=str(AVATAR_DIR)), name="avatars")
+
+# --- AUTH HELPERS ---
+async def verify_auth_header(authorization: Optional[str] = Header(None)):
+    if not auth_manager:
+        return None 
+    
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization Header")
+    
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid Authentication Scheme")
+    
+    user_payload = auth_manager.verify_token(token)
+    if not user_payload:
+        raise HTTPException(status_code=401, detail="Invalid or Expired Token")
+        
+    return user_payload
+
+# --- PROFILE ENDPOINTS ---
+
+@app.get("/api/profile")
+async def get_profile(user: Dict = Depends(verify_auth_header)):
+    """Get current user profile"""
+    if not auth_manager:
+        raise HTTPException(503, "Auth disabled")
+    profile = auth_manager.get_user_profile(user['user_id'])
+    return profile
+
+@app.post("/api/profile")
+async def update_profile(updates: Dict[str, Any], user: Dict = Depends(verify_auth_header)):
+    """Update arbitrary profile fields"""
+    if not auth_manager:
+        raise HTTPException(503, "Auth disabled")
+        
+    success = auth_manager.update_user_profile(user['user_id'], updates)
+    if success:
+        return {"status": "success", "profile": auth_manager.get_user_profile(user['user_id'])}
+    raise HTTPException(status_code=500, detail="Failed to update profile")
+
+@app.post("/api/profile/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...), 
+    user: Dict = Depends(verify_auth_header)
+):
+    """Upload avatar image. Auto-converts GIFs to WebM."""
+    try:
+        if not auth_manager:
+            raise HTTPException(503, "Auth disabled")
+
+        if not file.content_type.startswith("image/"):
+            raise HTTPException(400, "File must be an image")
+
+        import time
+        import subprocess
+        
+        # Determine extension
+        original_ext = file.filename.split('.')[-1] if '.' in file.filename else "png"
+        timestamp = int(time.time())
+        user_id = user['user_id']
+        
+        # Paths
+        raw_filename = f"raw_{user_id}_{timestamp}.{original_ext}"
+        raw_path = AVATAR_DIR / raw_filename
+        
+        # Write Raw File
+        with open(raw_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        final_filename = raw_filename
+        
+        # GIF -> WebM Conversion
+        if file.content_type == "image/gif":
+            webm_filename = f"avatar_{user_id}_{timestamp}.webm"
+            webm_path = AVATAR_DIR / webm_filename
+            
+            # FFmpeg Command:
+            # -i input
+            # -c:v libvpx-vp9 (Modern WebM codec)
+            # -b:v 0 -crf 40 (Constant Quality, efficient)
+            # -vf scale=256:256:force_original_aspect_ratio=decrease (Resize to max 256x256)
+            # -an (Remove Audio)
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(raw_path),
+                "-c:v", "libvpx-vp9",
+                "-b:v", "0", "-crf", "40",
+                "-vf", "scale=256:256:force_original_aspect_ratio=decrease",
+                "-an",
+                str(webm_path)
+            ]
+            
+            logger.info(f"Converting GIF to WebM: {' '.join(cmd)}")
+            
+            # Run conversion in thread to avoid blocking event loop
+            try:
+                result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    logger.info("Conversion successful")
+                    final_filename = webm_filename
+                    # Optional: Delete raw gif to save space?
+                    # os.remove(raw_path) 
+                else:
+                    logger.error(f"FFmpeg failed: {result.stderr}")
+                    # Fallback to raw GIF if conversion fails
+                    final_filename = raw_filename
+            except Exception as e:
+                logger.error(f"Conversion Exception: {e}")
+                final_filename = raw_filename
+        else:
+            # For non-GIFs, just rename/keep the raw file as the official avatar
+            # Maybe enforce resize for PNGs too? For now, we trust the Cropper.
+            pass
+
+        # Update Profile with URL
+        avatar_url = f"http://localhost:8000/avatars/{final_filename}" 
+        
+        success = auth_manager.update_user_profile(user['user_id'], {"avatar_url": avatar_url})
+        
+        if success:
+            return {"status": "success", "avatar_url": avatar_url}
+        else:
+            raise HTTPException(500, "Failed to save avatar reference")
+            
+    except Exception as e:
+        logger.error(f"Avatar Upload Error: {e}")
+        raise HTTPException(500, str(e))
+
+
 # app = FastAPI() # Fallback if no lifespan needed, but we need it for Core init
 
 @app.get("/health")
@@ -255,24 +400,7 @@ async def login(user: UserLogin):
         
     return result
 
-from fastapi import Depends, Header
 
-async def verify_auth_header(authorization: Optional[str] = Header(None)):
-    if not auth_manager:
-        return None # Auth disabled, proceed as anonymous or fail? For now, allow?
-    
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization Header")
-    
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Invalid Authentication Scheme")
-    
-    user_payload = auth_manager.verify_token(token)
-    if not user_payload:
-        raise HTTPException(status_code=401, detail="Invalid or Expired Token")
-        
-    return user_payload
 
 @app.get("/api/auth/me")
 async def get_me(user: dict = Depends(verify_auth_header)):
@@ -308,30 +436,30 @@ async def upload_file_endpoint(
         try:
             logger.info(f"Received file upload: {display_name} ({mime_type})")
             
-            # Read bytes to memory (assuming manageable size) or stream to temp
+            # Read bytes
             content = await file.read()
             
-            # Call Core.upload_file(bytes, display_name, mime_type)
-            # This returns a Gemini File Object (or similar)
+            # Call Core.upload_file (Delegates to FileManager)
+            # Returns: SimpleNamespace(uri, display_name, mime_type, size_bytes, [text_content], [base64_data])
+            # OR types.File payload
             uploaded_obj = core_instance.upload_file(content, display_name, mime_type)
             
             if not uploaded_obj:
                 raise HTTPException(status_code=500, detail="Core refused upload")
 
             # Serialize the object to JSON compatible dict
-            # We assume the object has attributes like .name, .uri, etc.
             result_data = {
                 "name": getattr(uploaded_obj, 'name', None),
                 "uri": getattr(uploaded_obj, 'uri', None),
-                "display_name": display_name, # Fallback
-                "mime_type": mime_type,
-                "size_bytes": getattr(uploaded_obj, 'size_bytes', len(content))
+                "display_name": getattr(uploaded_obj, 'display_name', display_name),
+                "mime_type": getattr(uploaded_obj, 'mime_type', mime_type),
+                "size_bytes": getattr(uploaded_obj, 'size_bytes', len(content)),
+                "text_content": getattr(uploaded_obj, 'text_content', None),
+                "base64_data": getattr(uploaded_obj, 'base64_data', None),
+                "local_path": getattr(uploaded_obj, 'local_path', None)
             }
-            # Add specific 'text_content' if it's an analyzed file
-            if hasattr(uploaded_obj, 'text_content'):
-                result_data['text_content'] = uploaded_obj.text_content
             
-            logger.info(f"Upload processed: {result_data.get('uri')}")
+            logger.info(f"Upload processed: {result_data.get('display_name')}")
             
             return result_data
             
@@ -414,17 +542,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
                      # For now, enforce session_id = user_id to prevent snooping
                      
                      user_prompt = message_data.get("prompt", "")
+                     files_data = message_data.get("files", []) # Extract files list
                      
                      async with core_lock:
                         if not core_instance:
                              await websocket.send_text(json.dumps({"type": "error", "content": "Core not initialized"}))
                              continue
 
+                        # Convert dicts to StartableFile objects
+                        file_objects = [StartableFile(f) for f in files_data]
+
                         # Process Prompt
                         iterator = core_instance.process_prompt(
                             session_id=session_id, # Enforce User's specific session
                             user_prompt=user_prompt,
-                            file_check=[], 
+                            file_check=file_objects, # Pass files here
                             user_id=user_id,
                             user_name=username,
                             stream=True
@@ -457,74 +589,27 @@ async def get_mode_endpoint(session_id: str):
         return {"mode": mode}
 
 @app.get("/get_history")
-async def get_history_endpoint(user: dict = Depends(verify_auth_header)):
+async def get_history_endpoint(authorization: Optional[str] = Header(None)):
     """
     Retrieves the chat history for the authenticated user (session_id = user_id).
     """
+    user = await verify_auth_header(authorization)
     session_id = user['user_id']
     
     async with core_lock:
+        # Use centralized sanitization if available (Standard/Lite)
+        if hasattr(core_instance, 'chat') and hasattr(core_instance.chat, 'sanitize_history_for_client'):
+             return {"history": core_instance.chat.sanitize_history_for_client(session_id)}
+        
+        # Fallback for legacy cores (unlikely but safe)
         history = []
-        # Check if core has 'chat' attribute (Pro/Lite compatibility)
         if hasattr(core_instance, 'chat'):
              history = core_instance.chat.get_session(session_id)
-        # Fallback if core itself tracks history (unlikely but safe)
         elif hasattr(core_instance, 'get_session_history'):
              history = core_instance.get_session_history(session_id)
-             
-        # Helper to clean/parse history items
-        clean_history = []
-        for exchange in history:
-            clean_ex = exchange.copy()
-            
-            # 1. Parse User Content
-            u_content = clean_ex.get('user_content')
-            # Handle String (Legacy/Error case)
-            if isinstance(u_content, str):
-                try:
-                    if u_content.strip().startswith('{'):
-                        clean_ex['user_content'] = json.loads(u_content)
-                except: pass
-            
-            # Handle Dict/Object (Standard UserContent)
-            # The 'text' inside parts is often a JSON string envelope. We want to unwrap it.
-            elif u_content: # Object or Dict
-                try:
-                    # Generic access to 'parts' (obj or dict)
-                    parts = getattr(u_content, 'parts', None)
-                    if parts is None and isinstance(u_content, dict):
-                        parts = u_content.get('parts')
-                    
-                    if parts:
-                        # Taking first part's text
-                        first_part = parts[0]
-                        text = getattr(first_part, 'text', None)
-                        if text is None and isinstance(first_part, dict):
-                            text = first_part.get('text')
-                        
-                        # If that text looks like JSON, parse it
-                        if text and isinstance(text, str) and text.strip().startswith('{'):
-                            try:
-                                payload = json.loads(text)
-                                if 'user_prompt' in payload:
-                                    clean_ex['user_content'] = payload['user_prompt'] # Simplified to just text
-                            except:
-                                clean_ex['user_content'] = text # Fallback to raw text
-                except Exception as e:
-                    pass
-            
-            # 2. Parse Model Content (if it happens to be structured)
-            m_content = clean_ex.get('model_content')
-            if isinstance(m_content, str):
-                try:
-                    if m_content.strip().startswith('{'):
-                         clean_ex['model_content'] = json.loads(m_content)
-                except:
-                    pass
-
-            clean_history.append(clean_ex)
-
-        return {"history": clean_history}
+        
+        # We return raw history if sanitization is missing, though frontend might struggle.
+        return {"history": history}
 
 @app.post("/truncate_history")
 async def truncate_history_endpoint(request: dict):

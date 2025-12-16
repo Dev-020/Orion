@@ -5,6 +5,7 @@ import pickle
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Union
 from main_utils import config, main_functions as functions
+import logging
 
 # Type alias matching the structure used in Cores
 # UserContent/ModelContent are typically objects, but here we treat them generically or use dicts from Lite
@@ -165,6 +166,112 @@ class ChatObject:
         
         self.get_session(session_id).append(new_exchange)
         return new_db_id
+
+    def flatten_history(self, session_id: str) -> list:
+        """
+        Takes a session ID, retrieves the custom ExchangeDict history, and flattens
+        it into the format required by the GenAI API (list[Content]).
+        """
+        chat_session = self.get_session(session_id)
+        contents_to_send = []
+        
+        for exchange in chat_session:
+            if exchange.get("user_content"):
+                contents_to_send.append(exchange["user_content"])
+            
+            # Handle Tool Calls (Pro/Function Mode)
+            if exchange.get("tool_calls"):
+                 # Assuming tool_calls is a list of FunctionCall objects or dicts
+                 # API expects ModelContent with parts=[FunctionCall...]
+                 # But in our structure, tool_calls are usually separate or attached to model content?
+                 # If separate, we need to convert them to ModelContent with function call parts
+                 # For now, simplistic appending if they match the API object type
+                 # If they are just dicts/list, we might need conversion.
+                 pass
+                 
+            if exchange.get("model_content"):
+                contents_to_send.append(exchange["model_content"])
+        return contents_to_send
+
+    def sanitize_history_for_client(self, session_id: str) -> List[Dict]:
+        """
+        Parses the complex UserContent/ModelContent objects into a clean format for the frontend.
+        """
+        raw_history = self.get_session(session_id)
+        clean_history = []
+        
+        for idx, exchange in enumerate(raw_history):
+            # --- User Content ---
+            user_content = exchange.get("user_content")
+            parsed_user = {}
+            if user_content:
+                prompt_text = "[User prompt not found]"
+                user_name = "User"
+                file_text = ""
+
+                for part in user_content.parts:
+                    # Check if it's a file part
+                    if hasattr(part, 'display_name'):
+                        file_text += f"[File: {part.display_name}]\n"
+                    # Check if it's a text part containing our JSON envelope
+                    elif hasattr(part, 'text') and part.text:
+                        try:
+                            user_data = json.loads(part.text)
+                            prompt_text = user_data.get("user_prompt", "[User prompt]")
+                            timestamp_utc = user_data.get("timestamp_utc", None)
+                            user_name = user_data.get("auth", {}).get("user_name", "User")
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                parsed_user = {
+                    "text": prompt_text,
+                    "name": user_name,
+                    "time": timestamp_utc
+                }
+            
+            # --- Tool Calls ---
+            tool_info = ""
+            raw_tools = exchange.get("tool_calls", [])
+            if raw_tools:
+                # If list of objects (Pro) or dicts (Lite)
+                count = len(raw_tools)
+                names = []
+                for t in raw_tools:
+                    if isinstance(t, dict): names.append(t.get('name', 'unknown'))
+                    elif hasattr(t, 'name'): names.append(t.name)
+                
+                if names:
+                    tool_info = f"\n\n*Used Tools: {', '.join(names)}*"
+                else:
+                    tool_info = f"\n\n*Used {count} Tool(s)*"
+
+            # --- Model Content ---
+            model_content = exchange.get("model_content")
+            model_text = ""
+            if hasattr(model_content, 'parts'):
+                 try: model_text = model_content.parts[0].text
+                 except: pass
+            
+            # Append User Message
+            clean_history.append({
+                "role": "user",
+                "content": parsed_user["text"],
+                "username": parsed_user["name"],
+                "timestamp": parsed_user["time"],
+                "id": f"hist-{idx}-user"
+            })
+            
+            # Append AI Message (with Tool Info if present)
+            clean_history.append({
+                "role": "assistant",
+                "content": model_text + tool_info,
+                "username": "Orion",
+                "timestamp": parsed_user["time"],
+                "id": f"hist-{idx}-ai"
+            })
+            
+        #logging.info(f"--- [ChatObject] Clean history: {clean_history}")
+
+        return clean_history
 
     # --- Persistence ---
     def save_state_for_restart(self) -> bool:

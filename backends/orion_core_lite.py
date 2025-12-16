@@ -160,26 +160,6 @@ class OrionLiteCore:
     def _get_session(self, session_id: str) -> list:
         return self.chat.get_session(session_id)
 
-    def flatten_history(self, session_id: str) -> list:
-        """
-        Takes a session ID, retrieves the custom ExchangeDict history, and flattens
-        it into the format required by the GenAI API (list[Content]).
-        For Ollama, we do a different flattening in _generate, or we assume this is just for API usage.
-        """
-        chat_session = self.chat.get_session(session_id)
-        contents_to_send = []
-        
-        # PRO History Structure: List of objects/dicts. 
-        # We assume consistent keys "user_content", "model_content"
-        
-        for exchange in chat_session:
-            if exchange.get("user_content"):
-                contents_to_send.append(exchange["user_content"])
-            # Lite has no tools, so skip tool_calls check or keep for compatibility
-            if exchange.get("model_content"):
-                contents_to_send.append(exchange["model_content"])
-        return contents_to_send
-
     def _format_vdb_results_for_context(self, raw_json: str, source_name: str) -> str:
         """
         Parses VDB results. Identical logic to Pro.
@@ -348,7 +328,8 @@ class OrionLiteCore:
                 
                 ollama_parts = [final_text_part]
                 for f in file_check:
-                    if hasattr(f, 'base64_data'):
+                    # Check if base64_data exists AND is not None
+                    if getattr(f, 'base64_data', None):
                         # Attach as a "proxy" part or just raw object?
                         # The `_generate` loop iterates parts.
                         # We can attach a custom object if we want.
@@ -362,7 +343,7 @@ class OrionLiteCore:
                             ollama_parts.append(p)
                         except Exception as e:
                             logger.error(f"Error creating image part: {e}")
-                        
+                            
                 final_part = ollama_parts
 
         else:
@@ -372,7 +353,7 @@ class OrionLiteCore:
         final_content = types.UserContent(parts=final_part) # This is the object for the API
 
         # History
-        contents_to_send = self.flatten_history(session_id)
+        contents_to_send = self.chat.flatten_history(session_id)
         contents_to_send.append(final_content)
         
         return (contents_to_send, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db)

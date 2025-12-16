@@ -16,15 +16,51 @@
   --glass-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
 }
 
-.thought-details .thought-content {
-  padding: 1rem;
-  color: #71717a; /* Zinc-500 - much dimmer/grayer */
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  font-family: monospace;
-  white-space: pre-wrap;
-  line-height: 1.5;
-  background: rgba(0, 0, 0, 0.2);
-  font-size: 0.85rem;
+/* Thought Accordion Styles */
+.thought-block {
+    margin-bottom: 0.5rem;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.thought-header {
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #a1a1aa;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+}
+
+.thought-header:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.thought-accordion {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.3s ease-out;
+}
+
+.thought-accordion.open {
+    grid-template-rows: 1fr;
+}
+
+.thought-inner {
+    overflow: hidden;
+}
+
+.thought-content {
+    padding: 1rem;
+    color: #a1a1aa; 
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    line-height: 1.6;
+    font-size: 0.9rem;
+    overflow-x: auto;
 }
 
 body {
@@ -83,4 +119,19 @@ body {
 
 .message-appear {
   animation: fadeIn 0.3s ease-out forwards;
+}
+
+/* Global Interactive Button Animation */
+.interactive-btn {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.2s ease, background-color 0.2s;
+    cursor: pointer;
+}
+
+.interactive-btn:hover:not(:disabled) {
+    transform: scale(1.05);
+    filter: brightness(1.2);
+}
+
+.interactive-btn:active:not(:disabled) {
+    transform: scale(0.95);
 }
