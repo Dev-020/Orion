@@ -1,4 +1,5 @@
 import os
+import base64
 import json
 import sqlite3
 import pickle
@@ -316,3 +317,85 @@ class ChatObject:
         except Exception as e:
             print(f"  - ERROR Loading State: {e}")
             return False
+
+    def convert_history_to_ollama(self, contents_to_send, current_instructions) -> list:
+        """
+        Public Helper: Converts Google GenAI content objects into Ollama's message format.
+        Now supports standard text/images AND 'tool' roles for agentic history.
+        """
+        ollama_messages = []
+        
+        # System Prompt
+        lite_directive = (
+            "\n\n[SYSTEM NOTE: You are running on a lightweight local backend. "
+            "Input metadata is provided in headers (e.g., [Metadata:...]). "
+            "Do NOT analyze the data structure. Do NOT mention JSON. "
+            "Respond naturally as the persona defined above.]"
+        )
+        ollama_messages.append({"role": "system", "content": current_instructions + lite_directive})
+        
+        for content in contents_to_send:
+            # Handle user/model roles
+            role = "user" if content.role == "user" else "assistant"
+            
+            # --- Case A: Tool Results (from History) ---
+            if isinstance(content, dict) and content.get("role") == "tool":
+                 ollama_messages.append(content)
+                 continue
+
+            # --- Case B: Standard Text/Image Content ---
+            text_parts = []
+            images_list = []
+            
+            if content.parts:
+                for p in content.parts:
+                    if hasattr(p, 'text') and p.text:
+                        text_parts.append(p.text)
+                    
+                    # Handle Standard GenAI Image Part (Blob)
+                    if hasattr(p, 'inline_data') and p.inline_data:
+                        try:
+                            # Convert bytes back to Base64 String for Ollama
+                            b64_img = base64.b64encode(p.inline_data.data).decode('utf-8')
+                            images_list.append(b64_img)
+                        except Exception as e:
+                            logging.error(f"Error extracting image for Ollama: {e}")
+            
+            full_text = "\n".join(text_parts)
+            
+            # --- UNWRAP JSON ENVELOPE FOR OLLAMA (User Only) ---
+            if role == "user":
+                try:
+                    data = json.loads(full_text)
+                    if "user_prompt" in data:
+                        clean_prompt = data["user_prompt"]
+                        # Prepend System Notifications
+                        if "system_notifications" in data and data["system_notifications"]:
+                            notes = "\n".join(data["system_notifications"])
+                            clean_prompt = f"{notes}\n\n{clean_prompt}"
+                        
+                        # Prepend Vector Context
+                        if "vdb_context" in data and data["vdb_context"]:
+                            clean_prompt = f"{data['vdb_context']}\n\n{clean_prompt}"
+                            
+                        # Prepend Metadata
+                        meta_header = ""
+                        if "auth" in data:
+                            auth = data["auth"]
+                            u_name = auth.get("user_name", "Unknown")
+                            u_id = auth.get("user_id", "?")
+                            ts = data.get("timestamp_utc", "")
+                            meta_header = f"[Metadata: User='{u_name}' (ID: {u_id}) | Time='{ts}']\n"
+                        
+                        clean_prompt = f"{meta_header}{clean_prompt}"
+                        full_text = clean_prompt
+                except:
+                    pass
+
+            ollama_msg = {"role": role, "content": full_text}
+            if images_list:
+                ollama_msg["images"] = images_list
+                
+            ollama_messages.append(ollama_msg)
+            
+        return ollama_messages

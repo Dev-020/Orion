@@ -12,6 +12,7 @@ import asyncio
 import base64
 from typing import Generator
 from datetime import datetime, timezone
+import importlib
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -39,6 +40,8 @@ INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ins
 import logging
 logger = logging.getLogger(__name__)
 
+
+
 class OrionLiteCore:
     
     def __init__(self, model_name: str = config.AI_MODEL, persona: str = "default"):
@@ -62,6 +65,15 @@ class OrionLiteCore:
         self.backend = getattr(config, 'BACKEND', 'api').lower()
         self.local_model = getattr(config, 'LOCAL_MODEL', 'gemma3:1b')
         
+        # --- Tool Initialization (Ollama Only) ---
+        self.tools = []
+        self.tool_map = {}
+        if self.backend == "ollama":
+            self.tools = self._load_tools()
+            # Create a name -> callable map for execution
+            # self.tools contains the callable functions themselves which Ollama SDK accepts
+            self.tool_map = {func.__name__: func for func in self.tools}
+
         # Initialize Database access
         functions.initialize_persona(self.persona)
         
@@ -100,7 +112,36 @@ class OrionLiteCore:
         if not self.chat.load_state_on_restart():
              pass 
         
-        logger.info(f"--- [Lite Core] Online. Managing {len(self.chat.sessions)} session(s). ---")
+        logger.info(f"--- [Lite Core] Online. Managing {len(self.chat.sessions)} session(s). Backend: {self.backend} ---")
+
+    def _load_tools(self) -> list:
+        """
+        Dynamically loads tools from the 'main_utils' package based on the active persona.
+        Mirrors logic from OrionCore (Pro).
+        """
+        loaded_tools = []
+        # Always load main tools from main_functions
+        try:
+            if hasattr(functions, '__all__'):
+                logger.info(f"--- [Lite Core] Loading {len(functions.__all__)} main tools from main_functions.py ---")
+                for func_name in functions.__all__:
+                    loaded_tools.append(getattr(functions, func_name))
+        except Exception as e:
+            logger.warning(f"Could not import main functions: {e}")
+
+        # Load persona-specific tools if the persona is not 'default'
+        if self.persona and self.persona != "default":
+            persona_module_name = f"main_utils.{self.persona}_functions"
+            try:
+                persona_module = importlib.import_module(persona_module_name)
+                if hasattr(persona_module, '__all__'):
+                    logger.info(f"--- [Lite Core] Loading {len(persona_module.__all__)} tools from {persona_module_name} ---")
+                    for func_name in persona_module.__all__:
+                        loaded_tools.append(getattr(persona_module, func_name))
+            except ImportError:
+                logger.info(f"--- No specific tools module found for persona '{self.persona}'. Loading main tools only. ---")
+        
+        return loaded_tools
 
     def _setup_client(self):
         """Initializes the appropriate API client."""
@@ -308,6 +349,10 @@ class OrionLiteCore:
             
             data_envelope["system_notifications"].append(f"[System: User attached {len(file_check)} file(s)]")
             
+            # --- Ollama Rate Limit Warning ---
+            if self.backend == "ollama":
+                 data_envelope["system_notifications"].append("[System Notice: You are limited to a maximum of 5 function calls per turn. If you reach this limit, you must stop and summarize your findings.]")
+            
             # For API Backend: Combine File Parts + Text Part
             if self.backend == "api":
                 final_part = final_file_parts + [final_text_part]
@@ -358,6 +403,17 @@ class OrionLiteCore:
         
         return (contents_to_send, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db)
 
+    def _execute_safe(self, func_name: str, **kwargs):
+        """Safe execution wrapper for tools."""
+        if func_name in self.tool_map:
+            try:
+                logger.info(f"--- [Lite Tool Exec] Running: {func_name} with args: {kwargs} ---")
+                return self.tool_map[func_name](**kwargs)
+            except Exception as e:
+                logger.error(f"Error executing tool {func_name}: {e}")
+                return f"Error executing tool {func_name}: {e}"
+        return f"Error: Tool '{func_name}' not found."
+
     def _generate_stream_response(self, contents_to_send, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db):
         """
         Internal helper: Handles streaming generation.
@@ -366,6 +422,7 @@ class OrionLiteCore:
         
         full_response_text = ""
         token_count = 0
+        new_tool_turns = [] # Accumulate tool calls for archival
         
         try:
             if self.backend == "api":
@@ -399,85 +456,11 @@ class OrionLiteCore:
                           token_count = chunk.usage_metadata.total_token_count
 
             elif self.backend == "ollama":
-                # Ollama Mode - Requires Conversion from `contents_to_send` (Google Types) to List[Dict]
-                ollama_messages = []
+                # 1. Convert History (Delegated to ChatObject)
+                ollama_messages = self.chat.convert_history_to_ollama(contents_to_send, self.current_instructions)
                 
-                # System Prompt
-                # Append Lite-Specific Directive to stabilize small models
-                lite_directive = (
-                    "\n\n[SYSTEM NOTE: You are running on a lightweight local backend. "
-                    "Input metadata is provided in headers (e.g., [Metadata:...]). "
-                    "Do NOT analyze the data structure. Do NOT mention JSON. "
-                    "Respond naturally as the persona defined above.]"
-                )
-                ollama_messages.append({"role": "system", "content": self.current_instructions + lite_directive})
-                
-                # History (Convert Google Types to Dict)
-                for content in contents_to_send:
-                    role = "user" if content.role == "user" else "assistant"
-                    
-                    # Text Extraction
-                    text_parts = []
-                    images_list = []
-                    
-                    if content.parts:
-                        for p in content.parts:
-                            if hasattr(p, 'text') and p.text:
-                                text_parts.append(p.text)
-                            
-                            # Handle Standard GenAI Image Part (Blob)
-                            if hasattr(p, 'inline_data') and p.inline_data:
-                                try:
-                                    # Convert bytes back to Base64 String for Ollama
-                                    b64_img = base64.b64encode(p.inline_data.data).decode('utf-8')
-                                    images_list.append(b64_img)
-                                except Exception as e:
-                                    logger.error(f"Error extracting image for Ollama: {e}")
-                                
-                    full_text = "\n".join(text_parts)
-                    
-                    # --- UNWRAP JSON ENVELOPE FOR OLLAMA ---
-                    # DeepSeek/Ollama models confuse the JSON wrapper with instructions.
-                    # We parse it to extract just the human-readable Prompt + System Notes.
-                    if role == "user":
-                        try:
-                            data = json.loads(full_text)
-                            if "user_prompt" in data:
-                                clean_prompt = data["user_prompt"]
-                                # Prepend System Notifications if any
-                                if "system_notifications" in data and data["system_notifications"]:
-                                    notes = "\n".join(data["system_notifications"])
-                                    clean_prompt = f"{notes}\n\n{clean_prompt}"
-                                
-                                # Prepend Vector Context if any
-                                if "vdb_context" in data and data["vdb_context"]:
-                                    clean_prompt = f"{data['vdb_context']}\n\n{clean_prompt}"
-                                    
-                                # Prepend Metadata (Auth/Time) formatted for Reader
-                                meta_header = ""
-                                if "auth" in data:
-                                    auth = data["auth"]
-                                    u_name = auth.get("user_name", "Unknown")
-                                    u_id = auth.get("user_id", "?")
-                                    ts = data.get("timestamp_utc", "")
-                                    meta_header = f"[Metadata: User='{u_name}' (ID: {u_id}) | Time='{ts}']\n"
-                                
-                                clean_prompt = f"{meta_header}{clean_prompt}"
-                                    
-                            
-                            full_text = clean_prompt
-                        except:
-                            # Not JSON or parse error, use raw text
-                            pass
-
-                    ollama_msg = {"role": role, "content": full_text}
-                    if images_list:
-                        ollama_msg["images"] = images_list
-                        
-                    ollama_messages.append(ollama_msg)
-                
-                # Streaming with Compatibility Fallback
-                
+                # 2. Agentic Loop (While True)
+                tool_loop_count = 0
                 while True:
                     try:
                         stream_kwargs = {
@@ -486,34 +469,42 @@ class OrionLiteCore:
                             "stream": True,
                             "keep_alive": -1
                         }
-                        # ONLY add the 'think' parameter if globally enabled.
+                        
+                        # Add Tools (Native Support)
+                        if self.tools:
+                             stream_kwargs["tools"] = self.tools
+
+                        # Add Thinking (If Supported/Enabled)
                         if config.THINKING_SUPPORT:
                             stream_kwargs["think"] = True
 
+                        # Verify Ollama client
+                        if not self.client: # Should be initialized but sanity check
+                             self._setup_client()
+
                         stream = self.client.chat(**stream_kwargs)
                         
-                        # We must iterate inside the try block to catch lazy errors
-                        for chunk in stream:
-                             # Access dictionary keys safely    
-                            msg = chunk.get('message', {})
-                            
+                        # Helper to rebuild the assistant message from chunks
+                        final_message = {"role": "assistant", "content": "", "tool_calls": []}
 
-                            # 1. Handle Thinking (Buffered LOGGING)
-                            if msg.get('thinking'):
-                                think_text = msg['thinking']
-                                
-                                # Buffer the thought text
+                        # Iterate Stream
+                        for chunk in stream:
+                            msg_part = chunk.get('message', {})
+                            
+                            # A. Handle Thinking
+                            if msg_part.get('thinking'):
+                                think_text = msg_part['thinking']
                                 if 'thought_buffer' not in locals():
                                     locals()['thought_buffer'] = []
                                     logger.debug("[Thinking Process Started...]")
                                 
                                 locals()['thought_buffer'].append(think_text)
                                 yield {"type": "thought", "content": think_text}
-                            
-                            # 2. Handle Content (Yield to Discord)
-                            content = msg.get('content')
+
+                            # B. Handle Content
+                            content = msg_part.get('content')
                             if content:
-                                # End Thought Block if it was active
+                                # Flush thoughts if needed
                                 if 'thought_buffer' in locals():
                                     full_thought = "".join(locals()['thought_buffer'])
                                     logger.debug(f"[Detailed Thought Process]: {full_thought}")
@@ -521,24 +512,90 @@ class OrionLiteCore:
                                     del locals()['thought_buffer']
 
                                 yield {"type": "token", "content": content}
-                                full_response_text += content
+                                final_message["content"] += content
+                                full_response_text += content # Accumulate full text for final save
                                 if config.VOICE: orion_tts.process_stream_chunk(content)
-                        
-                        # If we finish the loop successfully, break the while loop
-                        break
+                            
+                            # C. Accumulate Tool Calls
+                            if msg_part.get('tool_calls'):
+                                for tc in msg_part['tool_calls']:
+                                    final_message["tool_calls"].append(tc)
 
-                    except Exception as e:
-                        # Check if error is due to 'think' parameter (Status 400 / "does not support thinking")
-                        if "does not support thinking" in str(e):
-                            logger.warning(f"Model does not support Thinking. Retrying without it. (Error: {e}) ---")
-                            logger.warning(f"Disabling Thinking Mode for this session to improve performance. ---")
-                            config.THINKING_SUPPORT = False # Persist flag change for this runtime
-                            continue # Retry loop
+                        # --- End of Stream Chunking ---
+                        
+                        # 3. Decision Logic
+                        if not final_message["tool_calls"]:
+                            # No tools called -> Response is complete.
+                            break
+                        
+                        # 4. Tool Execution Phase
+                        # Append assistant's "intent" to local history
+                        ollama_messages.append(final_message)
+                        
+                        # --- RATE LIMIT CHECK ---
+                        if tool_loop_count >= 5:
+                            logger.warning(f"Tool execution limit reached ({tool_loop_count}). Blocking execution.")
+                            limit_msg = "System Error: Execution Limit Reached. You have performed 5 function calls, which is the maximum allowed for this turn. Do not re-try. Finalize your response based on the information you have."
+                            
+                            # Mock error responses for all pending calls
+                            for tool in final_message["tool_calls"]:
+                                ollama_messages.append({
+                                    "role": "tool",
+                                    "content": limit_msg
+                                })
+                                new_tool_turns.append({
+                                    "name": "System_Limit_Enforced",
+                                    "args": {},
+                                    "result": limit_msg
+                                })
+                        
                         else:
-                            # Genuine error, re-raise to outer block
+                            # Execute each tool
+                            for tool in final_message["tool_calls"]:
+                                # Handle Dict vs Object (Robustness)
+                                if isinstance(tool, dict):
+                                    func_map = tool.get('function', {})
+                                    func_name = func_map.get('name')
+                                    args = func_map.get('arguments', {})
+                                else:
+                                    func_name = tool.function.name
+                                    args = tool.function.arguments
+                                
+                                # Execute
+                                result = self._execute_safe(func_name, **args)
+                                
+                                # Append result to local history
+                                ollama_messages.append({
+                                    "role": "tool",
+                                    "tool_name": func_name,
+                                    "content": str(result), 
+                                    # "name": func_name # Optional in some versions, but content is key
+                                })
+                                
+                                # Capture for archival (generic dict structure)
+                                new_tool_turns.append({
+                                    "name": func_name,
+                                    "args": args,
+                                    "result": str(result)
+                                })
+                        
+                        # Increment Loop Count
+                        tool_loop_count += 1
+                        
+                        # Loop continues -> Model gets results -> Generates next step
+                    
+                    except Exception as e:
+                         if "does not support thinking" in str(e):
+                            logger.warning("Model does not support thinking. Retrying without it.")
+                            config.THINKING_SUPPORT = False
+                            continue
+                         else:
                             raise e
+
+                # --- Finalization (Post-Loop) ---
+                if config.VOICE: orion_tts.flush_stream()
                 
-                # Ollama doesn't give usage in stream? Stubbing.
+                # Estimate tokens
                 token_count = len(full_response_text) // 3
                 # End of Stream Loop  
         
@@ -631,6 +688,21 @@ class OrionLiteCore:
          os.execl(python, python, *sys.argv)
 
     def trigger_instruction_refresh(self, full_restart: bool = False):
+        """
+        WHAT (Purpose): Performs a full "hot-swap or an “Orchestrated Restart” of your core programming. 
+        Hot-Swap: It reloads all instruction files from disk AND reloads all of your tools from functions.py, then rebuilds all active chat sessions with this new information.
+        Orchestrated Restart: Restarts the current Instance of the Orion Core to reload the tools from functions.py, the instructions files from disk, AND applies any new changes from orion_core.py file from disk.
+        HOW (Usage): This tool is called with no arguments for a “Hot-Swap” and a boolean value of True for an “Orchestrated Restart”.
+        WHEN (Scenarios): You MUST call this tool immediately after any action that modifies the files that define your context or capabilities.
+        For “Hot-Swap” refreshes:
+        After a successful apply_proposed_change call.
+        After a successful rebuild_manifests call.
+        After the Operator confirms that a manual_sync_instructions call was successful.
+        For “Orchestrated Restart” refreshes:
+        After a successful change was made in the orion_core.py file
+        WHY (Strategic Value): This is the critical final step in any self-modification process. It is the command that makes your changes "live" in your current instance without requiring a manual full system restart from the Operator.
+        CRITICAL PROTOCOL: Failure to call this tool after a relevant file modification will result in a state where your current instance is out of sync with your source code and instructions, which can lead to errors or unpredictable behavior.
+        """
         if full_restart:
             logger.warning("WARNING: 'full_restart' flag ignored in Client-Server mode.")
             return "[System Note]: Full restart ignored in Client-Server mode. Use TUI to restart Server."

@@ -51,7 +51,7 @@ class FileProcessingAgent:
                     host="https://ollama.com",
                     headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')}
                 )
-                self.model_name = "qwen3-vl:235b-instruct-cloud"
+                self.model_name = "gemma3:27b-cloud"
             else:
                 self.client = ollama.Client() 
                 self.model_name = "moondream:1.8b-v2-q2_K"

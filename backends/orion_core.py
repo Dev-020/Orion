@@ -212,8 +212,21 @@ class OrionCore:
         return self.chat.get_session(session_id, history)
 
     def trigger_instruction_refresh(self, full_restart: bool = False):
-        """Performs a full hot-swap. It reloads instructions AND reloads the tools
-        from functions.py, then rebuilds all active chat sessions."""
+        """
+        WHAT (Purpose): Performs a full "hot-swap or an “Orchestrated Restart” of your core programming. 
+        Hot-Swap: It reloads all instruction files from disk AND reloads all of your tools from functions.py, then rebuilds all active chat sessions with this new information.
+        Orchestrated Restart: Restarts the current Instance of the Orion Core to reload the tools from functions.py, the instructions files from disk, AND applies any new changes from orion_core.py file from disk.
+        HOW (Usage): This tool is called with no arguments for a “Hot-Swap” and a boolean value of True for an “Orchestrated Restart”.
+        WHEN (Scenarios): You MUST call this tool immediately after any action that modifies the files that define your context or capabilities.
+        For “Hot-Swap” refreshes:
+        After a successful apply_proposed_change call.
+        After a successful rebuild_manifests call.
+        After the Operator confirms that a manual_sync_instructions call was successful.
+        For “Orchestrated Restart” refreshes:
+        After a successful change was made in the orion_core.py file
+        WHY (Strategic Value): This is the critical final step in any self-modification process. It is the command that makes your changes "live" in your current instance without requiring a manual full system restart from the Operator.
+        CRITICAL PROTOCOL: Failure to call this tool after a relevant file modification will result in a state where your current instance is out of sync with your source code and instructions, which can lead to errors or unpredictable behavior.
+        """
         print("---! HOT-SWAP INSTRUCTIONS TRIGGERED !---")
         
         if full_restart:

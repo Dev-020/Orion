@@ -97,8 +97,11 @@ def _sanitize_metadata(metadata: Metadata) -> Metadata:
 
 def execute_write(table: str, operation: str, user_id: str, data: Optional[dict] = None, where: Optional[dict] = None) -> str:
     """
-    (HIGH-LEVEL ORCHESTRATOR) Automates a synchronized write to both SQLite and the Vector DB.
-    It relies on the low-level tools for all execution and security checks.
+    WHAT (Purpose): A high-level Orchestrator tool that automates a synchronized write operation to both the primary SQLite database and the secondary Vector DB index.
+    HOW (Usage): Provide the table, operation ('insert', 'update', 'delete'), data dictionary, user_id, and an optional where dictionary for updates/deletes.
+    WHEN (Scenarios): This should be your primary tool for any write operation on tables that have a semantic index in the Vector DB (e.g., long_term_memory, active_memory).
+    WHY (Strategic Value): It guarantees that your factual database (SQLite) and your conceptual search index (Vector DB) remain perfectly synchronized. It abstracts away the complexity of the two-step write process.
+    PROTOCOL: This tool is an orchestrator. It calls the low-level write tools, which contain their own robust, tiered security models. You must still follow the "Propose & Approve" workflow before calling this tool for any sensitive operation.
     """
     logger.info(f"--- Synchronized Write --- User: {user_id}, Table: {table}, Op: {operation}")
 
@@ -283,7 +286,16 @@ def execute_write(table: str, operation: str, user_id: str, data: Optional[dict]
 
 def execute_vdb_read(query_texts: list[str], n_results: int = 7, where: Optional[dict] = None, ids: Optional[list[str]] = None) -> str:
     """
-    Queries the vector database for similar documents. Can be filtered by metadata (`where`) or a specific list of `ids`.
+    WHAT (Purpose): To perform a semantic search on the Vector Database. This is your primary tool for finding conceptual information from sources like the Homebrew Compendium or archived conversation summaries.
+    HOW (Usage):
+    query_texts: A list containing one or more text strings to search for. The database will find documents with similar meaning.
+    n_results: The maximum number of results to return.
+    where: An optional dictionary for metadata filtering. Use this to narrow the search to a specific source, category, or ID.
+    WHEN (Scenarios): Use this as your default tool for answering questions about unstructured lore, homebrew rules, or past conversations.
+    WHY (Strategic Value): It allows you to find information based on conceptual relevance, not just exact keywords, giving you a more human-like ability to recall information.
+    EXAMPLE:
+    Leo asks: "Remind me about our homebrew rules for exhaustion."
+    Your Tool Call: execute_vdb_read(query_texts=["rules for exhaustion"], where={"source": "Homebrew_Compendium"})
     """
     logger.info(f"--- Vector DB Query --- Queries: {query_texts} | N: {n_results} | Where: {where} | IDs: {ids}")
     collection = _get_chroma_collection()
@@ -304,10 +316,14 @@ def execute_vdb_read(query_texts: list[str], n_results: int = 7, where: Optional
 
 def execute_vdb_write(operation: str, user_id: str, documents: Optional[list[str]] = None, metadatas: Optional[List[Metadata]] = None, ids: Optional[list[str]] = None, where: Optional[dict] = None) -> str:
     """
-    Manages the vector database using a tiered security model.
-    - 'add': Low-level access, anyone can use.
-    - 'update': Medium-level, restricted to the data's owner or the Primary Operator.
-    - 'delete': High-level, restricted to the Primary Operator only.
+    WHAT (Purpose): A low-level tool for directly managing the Vector Database (ChromaDB).
+    HOW (Usage): Provide the operation ('add', 'update', 'delete'), the user_id, and the relevant data (documents, metadatas, ids, or where).
+    WHEN (Scenarios): This tool should rarely be called directly. Its primary purpose is to be called internally by the high-level execute_write orchestrator or other automated processes. Direct calls should be reserved for special system maintenance or diagnostic tasks that require modifying the Vector DB without touching the SQLite database.
+    WHY (Strategic Value): It provides a necessary low-level access point for direct index management while containing its own robust security checks.
+    PROTOCOL: This tool contains a tiered security model and must follow the "Propose & Approve" workflow.
+    'add': Permitted for any user to allow for passive learning.
+    'update': Permitted for the Primary Operator or for a user updating a document they own.
+    'delete': Restricted to the Primary Operator only.
     """
     logger.info(f"--- Vector DB Write Request from User: {user_id} ---")
     logger.info(f"  - Operation: {operation.upper()}")
@@ -392,8 +408,13 @@ def execute_vdb_write(operation: str, user_id: str, documents: Optional[list[str
 
 def execute_sql_read(query: str, params: List[str] = []) -> str:
     """
-    (Pillar 1) Executes a read-only SQL query (SELECT) against the database.
-    Returns results as a JSON string.
+    WHAT (Purpose): A powerful, general-purpose tool for executing any read-only SELECT query against the database.
+    HOW (Usage): You must construct a valid SQL SELECT statement. For security and to prevent errors, any variables in a WHERE clause must use ? placeholders, with the corresponding values passed in the parameters list.
+    WHEN (Scenarios): Use this for complex queries that search_knowledge_base cannot handle, or for accessing tables other than knowledge_base, such as user_profiles or deep_memory (your conversation history).
+    WHY (Strategic Value): To give you maximum flexibility to find any piece of structured information in our campaign chronicle and memory.
+    EXAMPLE:
+    Leo asks: "What did we discuss about goblins in the main channel?"
+    Your Tool Call: query="SELECT prompt_text, response_text FROM deep_memory WHERE session_id = ? AND prompt_text LIKE ? LIMIT 5", parameters=['discord-channel-123', '%goblin%']
     """
     logger.info(f"--- DB READ --- Query: {query} | Params: {params}")
     
@@ -415,8 +436,19 @@ def execute_sql_read(query: str, params: List[str] = []) -> str:
 
 def execute_sql_write(query: str, params: List[Union[str, int, float, bool, None]], user_id: str) -> str:
     """
-    Executes a write query (INSERT, UPDATE, DELETE) on the database using a
-    tiered security model.
+    WHAT (Purpose): The sole, protected tool for all database modifications (INSERT, UPDATE, DELETE).
+    HOW (Usage): You must construct a valid SQL write statement with ? placeholders and provide the data in the parameters list. You MUST at all instances of this function call, to pass the user_id of the user that triggered this function call for security purposes.
+    WHEN (Scenarios): Use this to perform actions like adding a new memory to long_term_memory, updating a user's profile in user_profiles, or managing the pending_logs moderation queue.
+    WHY (Strategic Value): To allow you to curate and manage our shared memory and system state under the Operator's supervision.
+    CRITICAL PROTOCOL: "Propose & Approve" Workflow
+    This tool is protected and has critical safety restrictions. You must never call this tool on your own initiative for a task that is not explicitly defined (like the moderation queue). For any novel database modification, you must first state your intent and the exact query and parameters you plan to use. You can only call this tool after receiving explicit approval from the Primary Operator, Leo.
+    Implementation Description
+    This function acts as a security gatekeeper for all database modifications. It analyzes the intent of the query before executing it.
+    Parameter Requirement: The function now requires a user_id to be passed with every call. This is the "security credential" used for authorization.
+    Tier 1: Autonomous Writes: It identifies safe INSERT queries and allows them to proceed regardless of the user. This is what restores my ability to learn passively from any user and chronicle campaign events.
+    Tier 2: Protected Writes: For sensitive UPDATE and DELETE queries, it performs a strict authorization check.
+    The User Profile Exception: It includes the special logic we designed. It checks if an UPDATE query is targeting the user_profiles table and if the user is attempting to modify their own record. If so, the action is permitted.
+    Operator-Only Access: For all other UPDATE or DELETE operations, it verifies that the user_id matches the DISCORD_OWNER_ID from your environment variables. If it doesn't match, the operation is denied with a clear security alert.
     """
     logger.info(f"--- DB Write Request from User: {user_id} ---")
     logger.info(f"  - Query: {query}")
@@ -465,8 +497,14 @@ def execute_sql_write(query: str, params: List[Union[str, int, float, bool, None
 
 def execute_sql_ddl(query: str, user_id: str) -> str:
     """
-    (Pillar 2) Executes a Data Definition Language (DDL) query against the database.
-    This is a high-level, protected tool restricted to the Primary Operator.
+    WHAT (Purpose): A high-level, protected tool that executes Data Definition Language (DDL) commands (CREATE, ALTER, DROP) to modify the very structure of the orion_database.sqlite itself. This is your most powerful database administration tool.
+    HOW (Usage): You must construct a single, complete, and valid SQL DDL query string. This function does not use a parameters list. The user_id of the authorizing Operator is a mandatory argument for the final security check.
+    WHEN (Scenarios): Use this tool for major architectural changes to your own memory systems, such as creating a new table for a new feature, adding a column to an existing table, or removing an obsolete table. This is a foundational tool for your self-evolution (Milestone 3.3).
+    WHY (Strategic Value): To grant you, under strict supervision, the ultimate capability to autonomously administer and evolve your own database schema, making you a truly self-sufficient system.
+    CRITICAL PROTOCOL: This is your most restricted tool and is governed by the "Propose & Approve" workflow.
+    Propose: You must first use your Introspection Protocol to analyze the need for a schema change. You will then state your reasoning and present the exact CREATE TABLE, ALTER TABLE, or DROP TABLE query you intend to execute.
+    Await Command: You must wait for a direct and unambiguous command from the Primary Operator, Leo, to proceed.
+    Execute: Only after receiving approval will you generate the FunctionCall for this tool, passing your proposed query and the Operator's user_id for the final authorization check.
     """
     logger.info(f"--- DB DDL Request from User: {user_id} ---")
     logger.info(f"  - Query: {query}")
@@ -504,8 +542,12 @@ def execute_sql_ddl(query: str, user_id: str) -> str:
 
 def create_git_commit_proposal(file_path: str, new_content: str, commit_message: str, user_id: str) -> str:
     """
-    (Pillar 3 & 4 Unified) Creates a new Git branch, writes content to a file,
-    commits the change, and pushes the branch to the remote 'origin'.
+    WHAT (Purpose): A unified and protected Co-Pilot tool that creates a new Git branch, writes content to a file, commits the change, and pushes the branch to the remote 'origin' repository. It streamlines the entire process of proposing a code change into a single, secure action.
+    HOW (Usage): Provide the file_path for the file to be changed, the complete new_content for that file, a detailed commit_message explaining the change, and the user_id of the requester for authorization. The tool automatically handles all Git operations.
+    WHEN (Scenarios): Use this as the primary tool for all self-modification tasks. After analyzing a file and generating an improvement (like a bug fix or documentation update), and after receiving explicit approval from the Primary Operator, use this tool to submit the change for review.
+    WHY (Strategic Value): This tool provides a robust, safe, and auditable workflow for modifying the codebase. By creating a distinct branch and pushing it to the remote, it ensures every change is captured in a pull request that the Primary Operator can review, test, and approve before it is merged. This prevents direct, un-audited modifications to the main branch, significantly enhancing system stability and security. It replaces the older, more error-prone two-step propose_file_change and apply_proposed_change workflow.
+    CRITICAL PROTOCOL: "Propose & Approve" Workflow
+    This is a high-level, protected tool. You must never call this tool without first presenting your plan to the Primary Operator (Leo) and receiving their explicit command to proceed. Your proposal should include the file you intend to change and the reason for the change. You can only call this tool after receiving that approval.
     """
     logger.info(f"--- Git Commit Proposal received for '{file_path}' ---")
 
@@ -591,8 +633,11 @@ def create_git_commit_proposal(file_path: str, new_content: str, commit_message:
 
 def manual_sync_instructions(user_id: str) -> str:
     """
-    Triggers a manual synchronization of the AI's core instruction files.
-    SECURITY: This is a restricted tool.
+    WHAT (Purpose): Triggers a live synchronization of all instruction files from their source on Google Docs.
+    HOW (Usage): This tool is called with no arguments.
+    WHEN (Scenarios): Use this only when a user who you have identified as the Primary Operator, Leo, gives you a direct and unambiguous command to do so (e.g., "Sync your instructions," "Update your core files").
+    WHY (Strategic Value): To allow the Operator to update your core programming without needing to restart the system.
+    PROTOCOL: This is a high-level system function with the highest security restrictions. You are forbidden from calling this tool under any other circumstances. You will have to trigger an instruction refresh to reflect the changes made by this tool.
     """
     logger.info("--- Manual Instruction Sync requested... ---")
     primary_operator_id = os.getenv("DISCORD_OWNER_ID")
@@ -610,7 +655,17 @@ def manual_sync_instructions(user_id: str) -> str:
 
 def rebuild_manifests(manifest_names: list[str]) -> str:
     """
-    Rebuilds specified manifest JSON files using the central config.
+    WHAT (Purpose): Rebuilds your context files (manifests) from the database.
+    HOW (Usage): Provide a list of manifest names to rebuild. The currently supported manifests are:
+    tool_schema
+    db_schema
+    user_profile_manifest
+    long_term_memory_manifest
+    active_memory_manifest
+    pending_logs
+    WHEN (Scenarios): Use this when you suspect your context files are out of sync with the database, for example, after clearing the moderation queue or adding a new memory.
+    WHY (Strategic Value): To allow you to self-correct data desynchronization issues and ensure your context is always fresh.
+    PROTOCOL: After this tool is used successfully, you must immediately call the trigger_instruction_refresh() tool to make the changes live.
     """
     logger.info(f"--- ACTION: Rebuilding manifests: {manifest_names} ---")
     # Use the centrally managed config for paths
@@ -680,7 +735,11 @@ def browse_website(url: str) -> str:
 
 def list_project_files(subdirectory: str = ".") -> str:
     """
-    Lists all files and directories within the project.
+    WHAT (Purpose): Provides a map of your own codebase and instruction files.
+    HOW (Usage): Call with an optional subdirectory path to explore a specific folder (e.g., 'instructions').
+    WHEN (Scenarios): Use this as a first step before reading or modifying files to understand the project structure and get correct file paths.
+    WHY (Strategic Value): To gain situational awareness of your own software environment.
+    EXAMPLE: "To find the main bot script, you would first call list_project_files() to confirm its name and location is bot.py."
     """
     logger.info(f"--- Listing Project Files on directory {subdirectory} ---")
     try:
@@ -704,9 +763,13 @@ def list_project_files(subdirectory: str = ".") -> str:
 
 def delegate_to_native_tools_agent(task: str) -> str:
     """
-    (HIGH-LEVEL ORCHESTRATOR) Delegates a complex task that requires native tool use (like Google Search or Code Execution) to a specialized agent.
-    This tool should be used when a user's query cannot be answered directly and requires external information or computation.
-    The 'task' parameter should be a detailed description of what the agent needs to accomplish.
+    WHAT (Purpose): A high-level orchestrator that delegates tasks to a specialized agent equipped with Google Search and a URL Context..
+    HOW (Usage):
+    task: A detailed, natural language description of what you need the agent to do. Be specific about the output format you want.
+    WHEN (Scenarios):
+    Live Information: "Search Google for the release date of the new D&D Rulebook."
+    URL Analysis: "Look into this website link I provided and see if you can gather some information"
+    WHY (Strategic Value): You are a specialized AI, but this tool grants you access to the broader internet and computational power. It replaces the need for restricted search tools. Use this when your internal database lacks the answer.
     """
     logger.info(f"--- Delegating task to Native Tools Agent: {task} ---")
 
@@ -724,9 +787,15 @@ def delegate_to_native_tools_agent(task: str) -> str:
 
 def read_file(file_path: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> Union[str, list]:
     """
-    Reads a file from the project directory. For text files, it returns the content as a string,
-    optionally within a specified line range. For binary files (images, PDFs, audio, etc.)
-    or very large text files, it uploads the file and returns a file object for the LLM to process.
+    WHAT (Purpose): A multi-modal ingestion tool. It reads text files directly and uses a specialized FileProcessingAgent to analyze binary files (Images, Audio, PDFs) or massive text files.
+    HOW (Usage):
+    file_path: Relative path to the file.
+    start_line / end_line (Optional): Integers specifying a specific range of lines to read. Use this for targeted code inspection to save tokens.
+    WHEN (Scenarios):
+    Coding: "Read lines 50-100 of bot.py."
+    Vision: "Describe the contents of map_screenshot.png."
+    Audio: "Transcribe the audio in session_recording.mp3."
+    WHY (Strategic Value): This is your "eyes and ears." It abstracts the complexity of file handling. If a file is too large or complex (like an image), the system automatically dispatches a sub-agent to analyze it and return the relevant description to you.
     """
     logger.info(f"--- Reading File located on: {file_path} ---")
     try:

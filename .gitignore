@@ -41,3 +41,4 @@ test_utils/data/live_session_state.json
 /backends/instructions
 /data/temp_uploads
 frontends/web/.env.production
+/tests

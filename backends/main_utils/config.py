@@ -81,6 +81,7 @@ LIST OF LOCAL MODELS THAT RUN ON THE LAPTOP:
     Ollama Cloud Models:
         qwen3-vl:235b-instruct-cloud
         deepseek-v3.1:671b-cloud
+        gemma3:27b-cloud
 """
 
 """
