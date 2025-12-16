@@ -30,7 +30,7 @@ BACKEND = "ollama" # "api" or "ollama"
 
 # --- UTIL VARIABLES ---
 LOCAL_CONTEXT_WINDOW = 4096 * 4 # Context window for local models
-PAST_MEMORY = False # Past Semantic Memory Support
+PAST_MEMORY = True # Past Semantic Memory Support
 SAVE = False # Disables saving TTS voice to local
 EDIT_TIME = 1.5 # Frequency of editing discord messages in seconds
 VOICE = False # TTS voice support
