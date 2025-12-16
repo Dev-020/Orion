@@ -86,11 +86,17 @@ def build_frontend_if_needed():
 
     # 3. Decision
     # Epsilon for safety, though direct comparison usually fine locally
-    if latest_src_mtime > last_build_mtime:
+    if latest_src_mtime > last_build_mtime or not index_html.exists():
         logger.info("Frontend changes detected or build missing. Running 'npm run build'...")
         try:
+            # Pass environment variables to the build
+            env = os.environ.copy()
+            # Ensure VITE_API_URL is set for the build, default to 8000 if not present
+            if "VITE_API_URL" not in env:
+                env["VITE_API_URL"] = "http://localhost:8000"
+                
             # shell=True is often required on Windows to find 'npm' (which is a batch file)
-            subprocess.run(["npm", "run", "build"], cwd=str(web_dir), shell=True, check=True)
+            subprocess.run(["npm", "run", "build"], cwd=str(web_dir), shell=True, check=True, env=env)
             logger.info("Frontend build completed successfully.")
         except subprocess.CalledProcessError as e:
             logger.error(f"Frontend build failed: {e}")

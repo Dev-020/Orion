@@ -155,7 +155,7 @@ const MessageItem = React.memo(({ msg, userAvatar }) => {
                      marginRight: '0'
                 }}>
                     <UserAvatar 
-                        avatarUrl={`${import.meta.env.BASE_URL}orion_avatar.png`} 
+                        avatarUrl={`${window.location.origin}${import.meta.env.BASE_URL}orion_avatar.png`} 
                         size={32}
                     />
                 </div>
@@ -327,6 +327,7 @@ export default function ChatInterface({ session }) {
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
   const lastLoggedType = useRef(null) // For log throttling
+  const [historyError, setHistoryError] = useState(null) // Track history loading errors
 
   // Auto-scroll
   useEffect(() => {
@@ -462,6 +463,7 @@ export default function ChatInterface({ session }) {
        } catch (e) {
          console.error("History Load Error:", e)
          logToServer('error', `Failed to load history: ${e.message}`)
+         setHistoryError(`Failed to load history: ${e.message}`)
        }
     }
     
@@ -780,6 +782,21 @@ export default function ChatInterface({ session }) {
         maskImage: 'linear-gradient(to bottom, transparent 0%, black 5%, black 95%, transparent 100%)',
         WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 5%, black 95%, transparent 100%)'
       }}>
+        {historyError && (
+             <div style={{
+                 padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', 
+                 border: '1px solid rgba(239, 68, 68, 0.3)',
+                 borderRadius: '8px', color: '#fca5a5',
+                 textAlign: 'center', fontSize: '0.9rem'
+             }}>
+                 ⚠️ {historyError}
+                 <button onClick={() => window.location.reload()} style={{
+                     marginLeft: '1rem', padding: '0.25rem 0.5rem', 
+                     background: 'rgba(255,255,255,0.1)', border: 'none', 
+                     borderRadius: '4px', cursor: 'pointer', color: 'white'
+                 }}>Retry</button>
+             </div>
+        )}
         {messages.map((msg, idx) => (
              <MessageItem key={idx} msg={msg} userAvatar={user?.avatar_url} />
         ))}

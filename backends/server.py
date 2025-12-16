@@ -264,6 +264,11 @@ async def get_profile(user: Dict = Depends(verify_auth_header)):
     if not auth_manager:
         raise HTTPException(503, "Auth disabled")
     profile = auth_manager.get_user_profile(user['user_id'])
+    
+    # If auth_manager returns empty dict, it means DB error or user not found
+    if not profile:
+         raise HTTPException(status_code=404, detail="Profile not found or DB error")
+         
     return profile
 
 @app.post("/api/profile")
@@ -365,7 +370,8 @@ async def upload_avatar(
             pass
 
         # Update Profile with URL
-        avatar_url = f"http://localhost:8000/avatars/{final_filename}" 
+        # Use relative path so frontend can prepend API_BASE (works for Ngrok/Localhost/IP)
+        avatar_url = f"/avatars/{final_filename}" 
         
         success = auth_manager.update_user_profile(user['user_id'], {"avatar_url": avatar_url})
         

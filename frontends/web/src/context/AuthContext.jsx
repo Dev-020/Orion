@@ -92,13 +92,18 @@ export const AuthProvider = ({ children }) => {
                 setUser(profile);
                 localStorage.setItem('orion_user', JSON.stringify(profile));
             } else {
+                 console.warn("Login successful but Profile Fetch failed:", profileRes.status);
                  // Fallback to basic user info from login
-                 setUser(data.user);
-                 localStorage.setItem('orion_user', JSON.stringify(data.user));
+                 // Include an error flag so UI can show a warning
+                 const basicUser = { ...data.user, _profileError: `Fetch Failed: ${profileRes.status}` };
+                 setUser(basicUser);
+                 localStorage.setItem('orion_user', JSON.stringify(basicUser));
             }
         } catch (e) {
-            setUser(data.user);
-            localStorage.setItem('orion_user', JSON.stringify(data.user));
+            console.error("Profile Fetch Exception:", e);
+            const basicUser = { ...data.user, _profileError: `Network Error: ${e.message}` };
+            setUser(basicUser);
+            localStorage.setItem('orion_user', JSON.stringify(basicUser));
         }
         
         return true;

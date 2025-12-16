@@ -20,8 +20,16 @@ const UserAvatar = ({ avatarUrl, size = 32, alt = "User Avatar", style = {} }) =
         );
     }
 
+    // URL Normalization
+    let finalUrl = avatarUrl;
+    // If it's a relative path (starts with /), prepend API URL
+    if (avatarUrl && avatarUrl.startsWith('/')) {
+        const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+        finalUrl = `${apiBase}${avatarUrl}`;
+    }
+
     // Check if it's a video
-    const isVideo = avatarUrl.endsWith('.webm') || avatarUrl.endsWith('.mp4');
+    const isVideo = finalUrl.endsWith('.webm') || finalUrl.endsWith('.mp4');
 
     const commonStyle = {
         width: '100%',
@@ -46,7 +54,7 @@ const UserAvatar = ({ avatarUrl, size = 32, alt = "User Avatar", style = {} }) =
         <div style={containerStyle}>
             {isVideo ? (
                 <video 
-                    src={avatarUrl}
+                    src={finalUrl}
                     autoPlay 
                     loop 
                     muted 
@@ -58,7 +66,7 @@ const UserAvatar = ({ avatarUrl, size = 32, alt = "User Avatar", style = {} }) =
                 />
             ) : (
                 <img 
-                    src={avatarUrl} 
+                    src={finalUrl} 
                     alt={alt} 
                     style={commonStyle} 
                 />

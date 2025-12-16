@@ -116,6 +116,19 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <main style={{flex: 1, display: 'flex', flexDirection: 'column', position: 'relative'}}>
+         {/* Error Banner for Profile Fetch Issues */}
+         {user?._profileError && (
+            <div style={{
+                background: 'rgba(239, 68, 68, 0.2)', 
+                borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
+                color: '#fca5a5',
+                padding: '0.5rem 1rem',
+                fontSize: '0.85rem',
+                display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+                <span>⚠️ <b>Profile Sync Error:</b> {user._profileError} (Data may be incomplete)</span>
+            </div>
+         )}
          <Outlet />
       </main>
     </div>
