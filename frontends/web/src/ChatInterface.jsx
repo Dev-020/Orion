@@ -9,15 +9,14 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useAuth } from './context/AuthContext'
 import UserAvatar from './components/UserAvatar'
+import { orionApi } from './utils/api'
 
 // Log helper
 const logToServer = async (level, message) => {
   try {
-    // We send this to the WEB SERVER (8001), not the backend
-    // Since web server is same origin in dev, or distinct in prod, we checkenv
-    // Actually, for now let's just use the current origin if possible or hardcode 8001 for dev
-    // But better yet, let's skip logging to server if we are on GH pages (no server to receive logs!)
-    if (API_BASE.includes('localhost')) {
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    
+    if (isLocal) {
          await fetch('http://localhost:8001/log', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -439,15 +438,15 @@ export default function ChatInterface({ session }) {
   // --- HISTORY LOADING ---
   useEffect(() => {
     const fetchHistory = async () => {
-       if (!token) return;
-
+       // Token handled by orionApi, but we check if we should even try?
+       // orionApi handles getting token. If no token, it sends without auth header.
+       // But history endpoint requires auth.
+       // User check is sufficient.
+       
        try {
-         const res = await fetch(`${API_BASE}/get_history`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'ngrok-skip-browser-warning': 'true'
-            }
-         })
+         // orionApi.get handles headers
+         const res = await orionApi.get('/get_history');
+         
          if (!res.ok) throw new Error("Failed to fetch history")
          
          const data = await res.json()
@@ -468,7 +467,10 @@ export default function ChatInterface({ session }) {
        }
     }
     
-    fetchHistory()
+    // Check if user is logged in before fetching? 
+    if (localStorage.getItem('orion_auth_token')) {
+        fetchHistory()
+    }
   }, [session])
 
   const handleIncomingMessage = (data) => {
@@ -610,9 +612,7 @@ export default function ChatInterface({ session }) {
               const controller = new AbortController();
               activeUploads.current[myTempId] = controller;
 
-              return fetch('http://localhost:8000/upload_file', {
-                  method: 'POST',
-                  body: formData,
+              return orionApi.post('/upload_file', formData, {
                   signal: controller.signal
               })
               .then(res => {

@@ -1,4 +1,5 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
+import { orionApi } from '../utils/api';
 
 const AuthContext = createContext(null);
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -9,16 +10,15 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true); 
   const [error, setError] = useState(null);
 
+  // Import at top (I will assume I can't add imports with this tool easily in one go, so I'll edit the file separately or hope user accepts full replacement? No, I'll do chunks).
+  
+  // Actually, I need to add the import first.
+  
   const refreshUser = async () => {
     const token = localStorage.getItem('orion_auth_token');
     if (!token) return;
     try {
-        const res = await fetch(`${API_BASE}/api/profile`, {
-            headers: { 
-                'Authorization': `Bearer ${token}`,
-                'ngrok-skip-browser-warning': 'true'
-            }
-        });
+        const res = await orionApi.get('/api/profile');
         if (res.ok) {
             const profile = await res.json();
             setUser(profile);
@@ -40,12 +40,7 @@ export const AuthProvider = ({ children }) => {
         }
 
         // Verify token AND get latest profile data
-        fetch(`${API_BASE}/api/profile`, {
-            headers: { 
-                'Authorization': `Bearer ${token}`,
-                'ngrok-skip-browser-warning': 'true'
-            }
-        })
+        orionApi.get('/api/profile')
         .then(res => {
             if (res.ok) {
                 return res.json();
@@ -59,10 +54,6 @@ export const AuthProvider = ({ children }) => {
         })
         .catch(err => {
             console.error("Session verification failed:", err);
-            // If API refuses token (401), we should probably logout
-            // But strict 401 check is better. For now, if profile fetch fails, 
-            // we assume token is bad if it's a 4xx.
-            // Simplified:
             if (err.message === "Session invalid") logout();
         })
         .finally(() => setLoading(false));
@@ -74,14 +65,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (username, password) => {
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ username, password }),
-      });
-
+      const response = await orionApi.post('/api/auth/login', { username, password });
       const data = await response.json();
 
       if (data.success) {
@@ -90,20 +74,13 @@ export const AuthProvider = ({ children }) => {
         
         // Fetch Profile
         try {
-            const profileRes = await fetch(`${API_BASE}/api/profile`, {
-                headers: { 
-                    'Authorization': `Bearer ${data.token}`,
-                    'ngrok-skip-browser-warning': 'true'
-                }
-            });
+            const profileRes = await orionApi.get('/api/profile');
             if (profileRes.ok) {
                 const profile = await profileRes.json();
                 setUser(profile);
                 localStorage.setItem('orion_user', JSON.stringify(profile));
             } else {
                  console.warn("Login successful but Profile Fetch failed:", profileRes.status);
-                 // Fallback to basic user info from login
-                 // Include an error flag so UI can show a warning
                  const basicUser = { ...data.user, _profileError: `Fetch Failed: ${profileRes.status}` };
                  setUser(basicUser);
                  localStorage.setItem('orion_user', JSON.stringify(basicUser));
@@ -130,12 +107,7 @@ export const AuthProvider = ({ children }) => {
   const register = async (username, password) => {
     setError(null);
     try {
-        const response = await fetch(`${API_BASE}/api/auth/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
-        });
-        
+        const response = await orionApi.post('/api/auth/register', { username, password });
         const data = await response.json();
         
         if (data.success) {

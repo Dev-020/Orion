@@ -9,12 +9,11 @@ import UserAvatar from './components/UserAvatar'
 // Constants
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 
 export default function ProfilePage() {
     const { user, login, refreshUser } = useAuth() 
     const navigate = useNavigate()
-    const token = localStorage.getItem('orion_auth_token');
     
     // -- Data State --
     const [displayName, setDisplayName] = useState('')
@@ -43,17 +42,10 @@ export default function ProfilePage() {
     useEffect(() => {
         let isMounted = true;
         const fetchProfile = async () => {
-            if (!token) {
-                console.warn("No auth token found, cannot fetch profile.");
-                if (isMounted) setIsLoading(false);
-                return;
-            }
-
             try {
-                console.log(`Fetching profile from ${API_BASE}/api/profile...`);
-                const res = await fetch(`${API_BASE}/api/profile`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                })
+                console.log(`Fetching profile...`);
+                // orionApi handles path and headers
+                const res = await orionApi.get('/api/profile')
                 
                 if (res.ok) {
                     const data = await res.json()
@@ -65,10 +57,6 @@ export default function ProfilePage() {
                     }
                 } else {
                     console.error("Profile fetch failed:", res.status, res.statusText);
-                    if (res.status === 404) {
-                        // If API missing, show alert once?
-                        console.error("API Endpoint not found. Backend might be outdated.");
-                    }
                 }
             } catch (err) {
                 console.error("Failed to fetch profile (Network Error?)", err)
@@ -79,7 +67,7 @@ export default function ProfilePage() {
         fetchProfile()
 
         return () => { isMounted = false }
-    }, [user, token])
+    }, [user])
 
     // --- SAVE LOGIC ---
     const handleSave = async () => {
@@ -91,14 +79,8 @@ export default function ProfilePage() {
                 status_message: statusMatch,
                 description: description
             }
-            const res = await fetch(`${API_BASE}/api/profile`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(updates)
-            })
+            
+            const res = await orionApi.post('/api/profile', updates);
 
             if (!res.ok) throw new Error("Failed to update profile")
             
@@ -130,16 +112,15 @@ export default function ProfilePage() {
             formData.append('file', blob, `avatar.${ext}`) 
 
             console.log("Sending upload request...");
-            const res = await fetch(`${API_BASE}/api/profile/avatar`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
-                body: formData
-            })
+            
+            // orionApi.post automatically handles FormData content-type logic
+            const res = await orionApi.post('/api/profile/avatar', formData);
 
             console.log(`Upload Response Status: ${res.status}`);
 
             if (!res.ok) {
                 const errorText = await res.text();
+                // ...
                 console.error("Upload Failed Server Response:", errorText);
                 throw new Error(`Upload failed: ${res.status} ${res.statusText} - ${errorText}`)
             }
@@ -346,7 +327,7 @@ export default function ProfilePage() {
 
                         <div style={{position: 'relative'}}>
                             <UserAvatar
-                                avatarUrl={avatarUrl ? (avatarUrl.startsWith('http') ? avatarUrl : `${API_BASE}${avatarUrl}`) : null}
+                                avatarUrl={avatarUrl}
                                 size={100}
                                 style={{border: '2px solid rgba(255,255,255,0.1)'}}
                             />
