@@ -1,6 +1,7 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 
 const AuthContext = createContext(null);
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -12,7 +13,7 @@ export const AuthProvider = ({ children }) => {
     const token = localStorage.getItem('orion_auth_token');
     if (!token) return;
     try {
-        const res = await fetch('http://localhost:8000/api/profile', {
+        const res = await fetch(`${API_BASE}/api/profile`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {
@@ -36,7 +37,7 @@ export const AuthProvider = ({ children }) => {
         }
 
         // Verify token AND get latest profile data
-        fetch('http://localhost:8000/api/profile', {
+        fetch(`${API_BASE}/api/profile`, {
             headers: { 'Authorization': `Bearer ${token}` }
         })
         .then(res => {
@@ -67,7 +68,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (username, password) => {
     setError(null);
     try {
-      const response = await fetch('http://localhost:8000/api/auth/login', {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -83,7 +84,7 @@ export const AuthProvider = ({ children }) => {
         
         // Fetch Profile
         try {
-            const profileRes = await fetch('http://localhost:8000/api/profile', {
+            const profileRes = await fetch(`${API_BASE}/api/profile`, {
                 headers: { 'Authorization': `Bearer ${data.token}` }
             });
             if (profileRes.ok) {
@@ -115,7 +116,7 @@ export const AuthProvider = ({ children }) => {
   const register = async (username, password) => {
     setError(null);
     try {
-        const response = await fetch('http://localhost:8000/api/auth/register', {
+        const response = await fetch(`${API_BASE}/api/auth/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),

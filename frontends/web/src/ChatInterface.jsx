@@ -14,11 +14,16 @@ import UserAvatar from './components/UserAvatar'
 const logToServer = async (level, message) => {
   try {
     // We send this to the WEB SERVER (8001), not the backend
-    await fetch('http://localhost:8001/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ level, message })
-    })
+    // Since web server is same origin in dev, or distinct in prod, we checkenv
+    // Actually, for now let's just use the current origin if possible or hardcode 8001 for dev
+    // But better yet, let's skip logging to server if we are on GH pages (no server to receive logs!)
+    if (API_BASE.includes('localhost')) {
+         await fetch('http://localhost:8001/log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ level, message })
+         })
+    }
   } catch (e) {
     console.error('Failed to log to server', e)
   }
@@ -150,7 +155,7 @@ const MessageItem = React.memo(({ msg, userAvatar }) => {
                      marginRight: '0'
                 }}>
                     <UserAvatar 
-                        avatarUrl="/orion_avatar.png" // Change to .webm for video!
+                        avatarUrl={`${import.meta.env.BASE_URL}orion_avatar.png`} 
                         size={32}
                     />
                 </div>
@@ -306,6 +311,9 @@ export default function ChatInterface({ session }) {
   const { user } = useAuth(); // Get user from context
   const token = localStorage.getItem('orion_auth_token'); // Get raw token for WS
 
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  const WS_BASE = API_BASE.replace('http', 'ws');
+
   const [messages, setMessages] = useState([
     { role: 'assistant', content: `Hello ${user?.username || 'traveler'}! I am Orion. How can I help you today?`, id: 'init' }
   ])
@@ -368,9 +376,9 @@ export default function ChatInterface({ session }) {
 
   // WebSocket Connection
   useEffect(() => {
-    // 1. Establish WebSocket connection to Python Backend (FastAPI on 8000)
-    // Pass token in URL query params
-    const wsUrl = token ? `ws://localhost:8000/ws?token=${token}` : 'ws://localhost:8000/ws';
+    // Connect to WebSocket
+    const wsUrl = `${WS_BASE}/ws/${user?.id || 'guest'}`;
+    console.log('Connecting to WebSocket:', wsUrl)
     
     logToServer('info', `Initializing WebSocket connection to ${wsUrl}...`)
     
@@ -430,7 +438,7 @@ export default function ChatInterface({ session }) {
        if (!token) return;
 
        try {
-         const res = await fetch('http://localhost:8000/get_history', {
+         const res = await fetch(`${API_BASE}/get_history`, {
             headers: {
                 'Authorization': `Bearer ${token}`
             }

@@ -9,7 +9,7 @@ import UserAvatar from './components/UserAvatar'
 // Constants
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-const API_BASE = 'http://localhost:8000'; // Make sure this matches your backend
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function ProfilePage() {
     const { user, login, refreshUser } = useAuth() 
