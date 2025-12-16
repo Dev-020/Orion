@@ -5,6 +5,7 @@ import { useAuth } from './context/AuthContext'
 import Cropper from 'react-easy-crop'
 import getCroppedImg from './utils/cropUtils'
 import UserAvatar from './components/UserAvatar'
+import { orionApi } from './utils/api';
 
 // Constants
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
