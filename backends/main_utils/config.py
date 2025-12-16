@@ -51,6 +51,13 @@ AI_MODEL = "gemini-2.5-flash" # AI model for Gemini API
 # --- FILE CONFIGURATION ---
 TEXT_FILE_EXTENSIONS = ('.json', '.xml', '.txt', '.py', '.md', '.log', '.yml', '.yaml', '.sh', '.bat', '.css', '.html', '.js')
 
+# --- SECURITY ---
+ALLOWED_ORIGINS = [
+    "http://localhost:5173", # Local Development
+    "http://localhost:8001", # Local Web Server
+    "https://dev-020.github.io" # Production Frontend
+]
+
 """
 LIST OF LOCAL MODELS THAT RUN ON THE LAPTOP:
 WITH PAST MEMORY SUPPORT

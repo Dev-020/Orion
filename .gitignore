@@ -12,6 +12,7 @@ output.label_config.xml
 /misc_scripts/TTS/orion_voice
 misc_scripts/TTS/cloned_output.wav
 *.png
+!**/orion_avatar.png
 /misc_scripts/TTS/audio_samples
 /misc_scripts/TTS/HSR
 /misc_scripts/TTS/converted_dataset

@@ -227,7 +227,7 @@ app = FastAPI(lifespan=lifespan)
 # Allow requests from the React dev server (e.g., localhost:5173) and others
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For development, allow all. In prod, restrict this!
+    allow_origins=config.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
