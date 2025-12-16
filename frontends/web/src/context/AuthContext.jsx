@@ -14,7 +14,10 @@ export const AuthProvider = ({ children }) => {
     if (!token) return;
     try {
         const res = await fetch(`${API_BASE}/api/profile`, {
-            headers: { 'Authorization': `Bearer ${token}` }
+            headers: { 
+                'Authorization': `Bearer ${token}`,
+                'ngrok-skip-browser-warning': 'true'
+            }
         });
         if (res.ok) {
             const profile = await res.json();
@@ -38,7 +41,10 @@ export const AuthProvider = ({ children }) => {
 
         // Verify token AND get latest profile data
         fetch(`${API_BASE}/api/profile`, {
-            headers: { 'Authorization': `Bearer ${token}` }
+            headers: { 
+                'Authorization': `Bearer ${token}`,
+                'ngrok-skip-browser-warning': 'true'
+            }
         })
         .then(res => {
             if (res.ok) {
@@ -85,7 +91,10 @@ export const AuthProvider = ({ children }) => {
         // Fetch Profile
         try {
             const profileRes = await fetch(`${API_BASE}/api/profile`, {
-                headers: { 'Authorization': `Bearer ${data.token}` }
+                headers: { 
+                    'Authorization': `Bearer ${data.token}`,
+                    'ngrok-skip-browser-warning': 'true'
+                }
             });
             if (profileRes.ok) {
                 const profile = await profileRes.json();

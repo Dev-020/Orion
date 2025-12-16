@@ -444,7 +444,8 @@ export default function ChatInterface({ session }) {
        try {
          const res = await fetch(`${API_BASE}/get_history`, {
             headers: {
-                'Authorization': `Bearer ${token}`
+                'Authorization': `Bearer ${token}`,
+                'ngrok-skip-browser-warning': 'true'
             }
          })
          if (!res.ok) throw new Error("Failed to fetch history")
