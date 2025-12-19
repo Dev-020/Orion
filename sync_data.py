@@ -6,7 +6,7 @@ import time
 import io
 from pathlib import Path
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -113,25 +113,28 @@ def push_sync(service):
         # Search for existing sync file
         existing_file_id = find_file_in_folder(service, SYNC_FILENAME, root_folder_id)
         
-        media = MediaFileUpload(str(temp_zip), mimetype='application/zip', resumable=True)
-        
         if existing_file_id:
             print(f"Updating existing cloud archive (ID: {existing_file_id})...")
-            service.files().update(
-                fileId=existing_file_id,
-                media_body=media
-            ).execute()
+            # Use 'with open' to ensure file handle is closed immediately after usage
+            with open(temp_zip, 'rb') as f:
+                media = MediaIoBaseUpload(f, mimetype='application/zip', resumable=True)
+                service.files().update(
+                    fileId=existing_file_id,
+                    media_body=media
+                ).execute()
         else:
             print("Creating new cloud archive...")
             file_metadata = {
                 'name': SYNC_FILENAME,
                 'parents': [root_folder_id]
             }
-            service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id'
-            ).execute()
+            with open(temp_zip, 'rb') as f:
+                media = MediaIoBaseUpload(f, mimetype='application/zip', resumable=True)
+                service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
             
         print("Push complete!")
         
