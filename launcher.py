@@ -7,11 +7,48 @@ import glob
 import logging
 from pathlib import Path
 from datetime import datetime
-import msvcrt # Windows specific
 import atexit
 import urllib.request
 import urllib.error
 import json
+
+# Cross-Platform Input Handling
+if os.name == 'nt':
+    import msvcrt
+else:
+    import select
+    import tty
+    import termios
+
+class ConsoleInput:
+    """Abstracts non-blocking console input for Windows and Linux."""
+    def __init__(self):
+        self.os_name = os.name
+        if self.os_name != 'nt':
+            self.old_settings = termios.tcgetattr(sys.stdin)
+
+    def __enter__(self):
+        if self.os_name != 'nt':
+            tty.setcbreak(sys.stdin.fileno())
+        return self
+
+    def __exit__(self, type, value, traceback):
+        if self.os_name != 'nt':
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+
+    def kbhit(self):
+        if self.os_name == 'nt':
+            return msvcrt.kbhit()
+        else:
+            dr, dw, de = select.select([sys.stdin], [], [], 0)
+            return dr != []
+
+    def getch(self):
+        if self.os_name == 'nt':
+            return msvcrt.getch()
+        else:
+            return sys.stdin.read(1).encode('utf-8')
+
 
 # Add backends to path to get config
 sys.path.append(str(Path(__file__).resolve().parent / "backends"))
@@ -127,15 +164,21 @@ class ProcessManager:
             err_path = LOG_DIR / f"{key}.err.log"
             f_err = open(err_path, "a", encoding="utf-8")
             
-            p = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.DEVNULL, 
-                stderr=f_err,             
-                cwd=str(Path(__file__).parent),
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-                env=self.env
-            )
+            kwargs = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": f_err,
+                "cwd": str(Path(__file__).parent),
+                "text": True,
+                "env": self.env
+            }
+            
+            if os.name == 'nt':
+                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            else:
+                 # On Linux, start_new_session prevents signal propagation
+                 kwargs["start_new_session"] = True
+
+            p = subprocess.Popen(cmd, **kwargs)
             f_err.close() 
 
             self.procs[key] = p
@@ -174,7 +217,11 @@ class ProcessManager:
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], 
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    p.kill()
+                    import signal
+                    try:
+                        os.kill(p.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
             
             # Cleanup
             if key in self.procs: del self.procs[key]
@@ -500,7 +547,6 @@ def process_command(cmd: str):
 
 def main():
     # --- STARTUP CLEANUP ---
-    # Archive any stale logs from previous runs before starting anything
     LogManager.cleanup_all_logs()
     # -----------------------
 
@@ -525,65 +571,60 @@ def main():
     
     layout = generate_layout()
     
+    # Initialize Cross-Platform Input
+    input_handler = ConsoleInput()
+
     with Live(layout, refresh_per_second=10, screen=True) as live:
         try:
-            while True:
-                layout["header"].update(render_header())
-                layout["sidebar"]["status_pane"].update(render_status())
-                layout["sidebar"]["input_pane"].update(render_control_panel())
-                layout["main"].update(render_main())
-                layout["footer"].update(render_footer())
-                
-                while msvcrt.kbhit():
-                    char = msvcrt.getch()
+            # Enter input context (sets raw mode on Linux)
+            with input_handler: 
+                while True:
+                    layout["header"].update(render_header())
+                    layout["sidebar"]["status_pane"].update(render_status())
+                    layout["sidebar"]["input_pane"].update(render_control_panel())
+                    layout["main"].update(render_main())
+                    layout["footer"].update(render_footer())
                     
-                    if char == b'\r': 
-                        process_command(APP_STATE["input_buffer"])
-                        APP_STATE["input_buffer"] = ""
-                    elif char == b'\x08': 
-                        APP_STATE["input_buffer"] = APP_STATE["input_buffer"][:-1]
-                    elif char == b'\x03': 
-                        raise KeyboardInterrupt
-                    elif char == b'\xe0': 
-                        # Arrow keys
-                        key = msvcrt.getch()
-                        if key == b'H': # Up
+                    while input_handler.kbhit():
+                        char = input_handler.getch()
+                        
+                        # Windows returns bytes, Linux (sys.stdin.read) returns string (but we encoded it to bytes in getch)
+                        # Let's standardize on bytes for logic
+                        
+                        if char == b'\r' or char == b'\n': 
+                            process_command(APP_STATE["input_buffer"])
+                            APP_STATE["input_buffer"] = ""
+                        elif char == b'\x08' or char == b'\x7f': # \x7f is del on linux sometimes
+                            APP_STATE["input_buffer"] = APP_STATE["input_buffer"][:-1]
+                        elif char == b'\x03': 
+                            raise KeyboardInterrupt
+                        elif char in [b'\xe0', b'\x1b']: 
+                            # Arrow keys: Windows send \xe0 then key. Linux sends \x1b [ A etc.
+                            # Simplified: Just ignore complex arrows on Linux for now or implement full parser
+                            # Supporting Windows arrows as before:
+                            if char == b'\xe0' and os.name == 'nt':
+                                key = input_handler.getch()
+                                if key == b'H': # Up
+                                    APP_STATE["scroll_offset"] += 1
+                                elif key == b'P': # Down
+                                    APP_STATE["scroll_offset"] = max(0, APP_STATE["scroll_offset"] - 1)
+                        else:
                             try:
-                                key_log = APP_STATE["selected_log"]
-                                lp = PROCESSES[key_log]["log"]
-                                if lp.exists():
-                                    with open(lp, "rb") as f:
-                                        # Fast line count (byte scan might be faster but line count is safe)
-                                        lines_count = sum(1 for _ in f)
-                                        view_height = get_log_view_height()
-                                        max_scroll = max(0, lines_count - view_height)
-                                        if APP_STATE["scroll_offset"] < max_scroll:
-                                            APP_STATE["scroll_offset"] += 1
-                            except:
-                                APP_STATE["scroll_offset"] += 1 # Fallback
-                            
-                        elif key == b'P': # Down
-                            APP_STATE["scroll_offset"] = max(0, APP_STATE["scroll_offset"] - 1)
-                    else:
-                        try:
-                            s = char.decode('utf-8')
-                            if s.isprintable():
-                                APP_STATE["input_buffer"] += s
-                        except: pass
+                                s = char.decode('utf-8')
+                                if s.isprintable():
+                                    APP_STATE["input_buffer"] += s
+                            except: pass
 
-                pm.check_health()
-                time.sleep(0.1)
+                    pm.check_health()
+                    time.sleep(0.1)
                 
         except KeyboardInterrupt:
             pass
         finally:
             console.print("[bold red]Shutting down and archiving logs...[/bold red]")
             pm.stop_all()
-            # --- SHUTDOWN cleanup ---
-            # Wait a sec for file handles to release
             time.sleep(1) 
             LogManager.cleanup_all_logs()
-            # ------------------------
 
 if __name__ == "__main__":
     main()

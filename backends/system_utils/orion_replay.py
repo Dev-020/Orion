@@ -332,8 +332,11 @@ def main(file_processor_callback):
             # If watcher fails, we must shut down
             raise Exception("Failed to start file watcher. Check REPLAY_SAVE_PATH.")
 
-        keyboard.add_hotkey(SAVE_HOTKEY, trigger_replay_save)
-        print(f"Hotkey '{SAVE_HOTKEY}' is active.")
+        try:
+            keyboard.add_hotkey(SAVE_HOTKEY, trigger_replay_save)
+            print(f"Hotkey '{SAVE_HOTKEY}' is active.")
+        except Exception as e:
+            print(f"Warning: Could not register global hotkey (requires root on Linux?): {e}")
         print("Script is running. Press Ctrl+C in this window to stop.")
         
         while True:
