@@ -40,8 +40,9 @@ AUTO_BACKUP_INTERVAL_HOURS = 12 # Time in hours between auto-backups
 
 # --- CORE CONFIGS ---
 ORION_CORE_INSTANCE = None # Where the core instance is stored
-THINKING_SUPPORT = True # Global flag: Auto-disables if model rejects 'think'
-CONTEXT_CACHING = False # Master switch for Context Caching (Free Tier limit protection)
+THINKING_SUPPORT = False # Global flag: Auto-disables if model rejects 'think'
+FUNCTION_CALLING_SUPPORT = True # Master switch for Function Calling
+CONTEXT_CACHING = False # Master switch for Context Caching (Free Tier limit protection)    
 OLLAMA_CLOUD = True # Uses Ollama Cloud instead of local
 
 # --- AI MODELS ---

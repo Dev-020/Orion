@@ -68,7 +68,7 @@ class OrionLiteCore:
         # --- Tool Initialization (Ollama Only) ---
         self.tools = []
         self.tool_map = {}
-        if self.backend == "ollama":
+        if self.backend == "ollama" and config.FUNCTION_CALLING_SUPPORT:
             self.tools = self._load_tools()
             # Create a name -> callable map for execution
             # self.tools contains the callable functions themselves which Ollama SDK accepts
@@ -187,7 +187,24 @@ class OrionLiteCore:
                     prompt_parts.append(f.read())
             except FileNotFoundError:
                 logger.warning(f"WARNING: File not found: {filepath}")
-        return "\n\n".join(prompt_parts)
+        base_instructions = "\n\n".join(prompt_parts)
+        
+        # --- Dynamic Injection ---
+        if config.FUNCTION_CALLING_SUPPORT:
+            dynamic_part = (
+                "\n\n## 5.0 Capabilities\n"
+                "You have access to external tools (e.g., search, file operations). "
+                "Use them when the user's request requires real-world data or actions. "
+                "Do not simulate actions; valid tool calls must be generated."
+            )
+        else:
+            dynamic_part = (
+                "\n\n## 5.0 Restrictions\n"
+                "You do not have access to external tools. You are in Pure Conversation mode. "
+                "If asked to perform an action requiring tools, politely explain your current limitations."
+            )
+            
+        return base_instructions + dynamic_part
 
     def _vision_file_handler(self, file_path: str):
         """Callback for vision system."""
@@ -357,30 +374,11 @@ class OrionLiteCore:
             if self.backend == "api":
                 final_part = final_file_parts + [final_text_part]
             else:
-                # For Local/Ollama: We just send the Text Part here.
-                # Images need to be passed strictly via the `images` arg in `ollama.chat`.
-                # We will attach the raw file objects to the *User Content Object* custom field?
-                # Or we rely on `file_check` being passed down? 
-                # `_generate_stream_response` signature assumes `contents_to_send`.
-                # We need to hack the `UserContent` to hold the image data if we want it to flow to `_generate`.
-                # Google Types don't natively support "Base64 Image" parts that aren't API files?
-                # Actually they do: types.Part.from_bytes(...)
-                # Let's try to convert Base64 to Blob part if possible? 
-                # But Ollama client expects specific structure. 
-                # EASIEST PATH: We are passing `file_check` via `_finalize` etc? No.
-                # `_generate` receives `contents_to_send`.
-                # We should embed the images as parts in the UserContent.
                 
                 ollama_parts = [final_text_part]
                 for f in file_check:
                     # Check if base64_data exists AND is not None
                     if getattr(f, 'base64_data', None):
-                        # Attach as a "proxy" part or just raw object?
-                        # The `_generate` loop iterates parts.
-                        # We can attach a custom object if we want.
-                        # Let's attach a "Placeholder Part" that holds the image data.
-                        # Python allows dynamic attributes.
-                        # Use standard GenAI Blob for data storage
                         try:
                             # f.base64_data is text. Decode to bytes for the Part.
                             img_bytes = base64.b64decode(f.base64_data)
@@ -497,7 +495,7 @@ class OrionLiteCore:
                                 if 'thought_buffer' not in locals():
                                     locals()['thought_buffer'] = []
                                     logger.debug("[Thinking Process Started...]")
-                                
+
                                 locals()['thought_buffer'].append(think_text)
                                 yield {"type": "thought", "content": think_text}
 
@@ -523,15 +521,15 @@ class OrionLiteCore:
 
                         # --- End of Stream Chunking ---
                         
-                        # 3. Decision Logic
-                        if not final_message["tool_calls"]:
-                            # No tools called -> Response is complete.
-                            break
-                        
                         # 4. Tool Execution Phase
                         # Append assistant's "intent" to local history
                         ollama_messages.append(final_message)
                         
+                        # 3. Decision Logic
+                        if not final_message["tool_calls"]:
+                            # No tools called -> Response is complete.
+                            break
+
                         # --- RATE LIMIT CHECK ---
                         if tool_loop_count >= 5:
                             logger.warning(f"Tool execution limit reached ({tool_loop_count}). Blocking execution.")
@@ -571,14 +569,16 @@ class OrionLiteCore:
                                     "content": str(result), 
                                     # "name": func_name # Optional in some versions, but content is key
                                 })
-                                
+
                                 # Capture for archival (generic dict structure)
                                 new_tool_turns.append({
                                     "name": func_name,
                                     "args": args,
                                     "result": str(result)
                                 })
-                        
+                            
+                            ollama_messages.append({"role": "system", "content": "[System Note: You just finished a tool call. Please continue your response based on the information you have. Make sure to properly place your response in the content field and your thoughts in the thinking field]"})
+                                
                         # Increment Loop Count
                         tool_loop_count += 1
                         

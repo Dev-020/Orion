@@ -600,14 +600,27 @@ def main():
                             raise KeyboardInterrupt
                         elif char in [b'\xe0', b'\x1b']: 
                             # Arrow keys: Windows send \xe0 then key. Linux sends \x1b [ A etc.
-                            # Simplified: Just ignore complex arrows on Linux for now or implement full parser
-                            # Supporting Windows arrows as before:
                             if char == b'\xe0' and os.name == 'nt':
                                 key = input_handler.getch()
                                 if key == b'H': # Up
                                     APP_STATE["scroll_offset"] += 1
                                 elif key == b'P': # Down
                                     APP_STATE["scroll_offset"] = max(0, APP_STATE["scroll_offset"] - 1)
+                            elif char == b'\x1b' and os.name != 'nt':
+                                # Linux Arrow Keys (Standard ANSI: ESC [ A/B)
+                                # We try to read the next two bytes to confirm logic
+                                # Note: This implies a blocking read for 2 bytes, but usually they arrive together.
+                                # A more robust solution involves a state machine, but this is sufficient for a TUI.
+                                try:
+                                    next1 = input_handler.getch()
+                                    if next1 == b'[':
+                                        next2 = input_handler.getch()
+                                        if next2 == b'A': # Up
+                                            APP_STATE["scroll_offset"] += 1
+                                        elif next2 == b'B': # Down
+                                            APP_STATE["scroll_offset"] = max(0, APP_STATE["scroll_offset"] - 1)
+                                except Exception:
+                                    pass
                         else:
                             try:
                                 s = char.decode('utf-8')

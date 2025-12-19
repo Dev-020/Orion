@@ -3,20 +3,20 @@
 from git import Repo, GitCommandError
 # --- PUBLIC TOOL DEFINITION ---
 __all__ = [
-    "initialize_persona",
-    "manual_sync_instructions",
-    "rebuild_manifests",
+    #"initialize_persona",
+    #"manual_sync_instructions",
+    #"rebuild_manifests",
     "browse_website",
     "list_project_files",
     "delegate_to_native_tools_agent",
     "read_file",
     "execute_sql_read",
-    "execute_sql_write",
-    "execute_sql_ddl",
+    #"execute_sql_write",
+    #"execute_sql_ddl",
     "execute_vdb_read",
-    "execute_vdb_write",
-    "execute_write",
-    "create_git_commit_proposal",
+    #"execute_vdb_write",
+    #"execute_write",
+    #"create_git_commit_proposal",
     "search_web"
 ]
 
@@ -852,15 +852,25 @@ def list_project_files(subdirectory: str = ".") -> str:
             return "Error: Access denied."
         if not start_path.exists():
             return f"Error: Directory '{subdirectory}' not found."
+        
         tree = []
-        for root, dirs, files in os.walk(start_path):
-            dirs[:] = [d for d in dirs if d not in ['__pycache__', '.venv', '.git', '.vscode']]
-            level = root.replace(str(start_path), '').count(os.sep)
-            indent = ' ' * 4 * level
-            tree.append(f"{indent}{Path(root).name}/")
-            sub_indent = ' ' * 4 * (level + 1)
-            for f in files:
-                tree.append(f"{sub_indent}{f}")
+        # Add the root directory name
+        tree.append(f"{start_path.name}/")
+        
+        # Get all entries and sort them (directories first, then files)
+        entries = sorted(list(start_path.iterdir()), key=lambda p: (not p.is_dir(), p.name.lower()))
+        
+        indent = ' ' * 4
+        for entry in entries:
+            # Skip hidden/system directories
+            if entry.name in ['__pycache__', '.venv', '.git', '.vscode', '.idea', 'node_modules']:
+                continue
+                
+            if entry.is_dir():
+                tree.append(f"{indent}{entry.name}/")
+            else:
+                tree.append(f"{indent}{entry.name}")
+                
         return "\n".join(tree)
     except Exception as e:
         return f"Error listing files: {e}"

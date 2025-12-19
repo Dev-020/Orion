@@ -165,6 +165,7 @@ def pull_sync(service):
         status, done = downloader.next_chunk()
         print(f"Download {int(status.progress() * 100)}%.", end='\r')
     print("\nDownload complete.")
+    fh.close()
     
     # 3. Extract & Overwrite
     try:

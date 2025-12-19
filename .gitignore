@@ -42,3 +42,4 @@ test_utils/data/live_session_state.json
 /data/temp_uploads
 frontends/web/.env.production
 /tests
+/venv_linux
