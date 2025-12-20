@@ -171,6 +171,7 @@ def pull_sync(service):
     print("Validating archive integrity...")
     try:
         import zipfile
+        import zlib
         
         # Verify zip structure and CRCs before touching any local files
         with zipfile.ZipFile(temp_zip, 'r') as zipf:
@@ -191,7 +192,7 @@ def pull_sync(service):
             
         print("Pull complete! Local state is now identical to cloud.")
         
-    except zipfile.BadZipFile as e:
+    except (zipfile.BadZipFile, zlib.error) as e:
         print("\n[ERROR] The downloaded archive is corrupted!")
         print(f"Details: {e}")
         print("Use the 'push' command on the SOURCE device to create a fresh archive.")
