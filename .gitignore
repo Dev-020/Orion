@@ -43,3 +43,4 @@ test_utils/data/live_session_state.json
 frontends/web/.env.production
 /tests
 /venv_linux
+venv_windows/

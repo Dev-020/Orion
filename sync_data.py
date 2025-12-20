@@ -167,21 +167,35 @@ def pull_sync(service):
     print("\nDownload complete.")
     fh.close()
     
-    # 3. Extract & Overwrite
+    # 3. Validation & Extraction
+    print("Validating archive integrity...")
     try:
         import zipfile
         
-        # Helper to nuke folders before extracting to ensure no stale files (like deleted DBs) remain
-        # User requested "Replace", implies full state sync.
-        print("Clearing local state folders...")
-        if DATABASES_DIR.exists(): shutil.rmtree(DATABASES_DIR)
-        if DATA_DIR.exists(): shutil.rmtree(DATA_DIR)
-        
-        print(f"Extracting to {PROJECT_ROOT}...")
+        # Verify zip structure and CRCs before touching any local files
         with zipfile.ZipFile(temp_zip, 'r') as zipf:
+            first_bad_file = zipf.testzip()
+            if first_bad_file:
+                raise zipfile.BadZipFile(f"CRC-32 error detected in file: {first_bad_file}")
+            
+            # If we get here, the zip is good. NOW we can safely replace local data.
+            print("Archive is valid. replacing local data...")
+            
+            # Helper to nuke folders before extracting to ensure no stale files
+            print("Clearing local state folders...")
+            if DATABASES_DIR.exists(): shutil.rmtree(DATABASES_DIR)
+            if DATA_DIR.exists(): shutil.rmtree(DATA_DIR)
+            
+            print(f"Extracting to {PROJECT_ROOT}...")
             zipf.extractall(PROJECT_ROOT)
             
         print("Pull complete! Local state is now identical to cloud.")
+        
+    except zipfile.BadZipFile as e:
+        print("\n[ERROR] The downloaded archive is corrupted!")
+        print(f"Details: {e}")
+        print("Use the 'push' command on the SOURCE device to create a fresh archive.")
+        print("Your local data has NOT been modified.")
         
     finally:
         if temp_zip.exists():
