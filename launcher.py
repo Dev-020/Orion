@@ -407,7 +407,7 @@ def generate_layout():
 
 def render_header():
     return Panel(
-        Align.center("[bold cyan]ORION COMMAND CENTER[/bold cyan] | [green]Phase 2: Client-Server[/green] | [bold yellow]WEB: http://localhost:8000[/bold yellow]"),
+        Align.center("[bold cyan]ORION COMMAND CENTER[/bold cyan] | [green]Phase 2: Client-Server[/green] | [bold yellow]WEB: https://dev-020.github.io/Orion/[/bold yellow]"),
         box=box.ROUNDED, style="white on blue"
     )
 

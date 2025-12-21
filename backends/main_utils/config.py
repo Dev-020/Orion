@@ -40,14 +40,14 @@ AUTO_BACKUP_INTERVAL_HOURS = 12 # Time in hours between auto-backups
 
 # --- CORE CONFIGS ---
 ORION_CORE_INSTANCE = None # Where the core instance is stored
-THINKING_SUPPORT = False # Global flag: Auto-disables if model rejects 'think'
+THINKING_SUPPORT = True # Global flag: Auto-disables if model rejects 'think'
 FUNCTION_CALLING_SUPPORT = True # Master switch for Function Calling
 CONTEXT_CACHING = False # Master switch for Context Caching (Free Tier limit protection)    
-OLLAMA_CLOUD = True # Uses Ollama Cloud instead of local
+OLLAMA_CLOUD = False # Uses Ollama Cloud instead of local
 
 # --- AI MODELS ---
-LOCAL_MODEL = "deepseek-v3.1:671b-cloud" # Local model Ollama API
-AI_MODEL = "gemini-2.5-flash" # AI model for Gemini API
+LOCAL_MODEL = "hermes3:8b" # Local model Ollama API
+AI_MODEL = "gemini-3-flash" # AI model for Gemini API
 
 # --- FILE CONFIGURATION ---
 TEXT_FILE_EXTENSIONS = ('.json', '.xml', '.txt', '.py', '.md', '.log', '.yml', '.yaml', '.sh', '.bat', '.css', '.html', '.js')
@@ -83,6 +83,10 @@ LIST OF LOCAL MODELS THAT RUN ON THE LAPTOP:
         qwen3-vl:235b-instruct-cloud
         deepseek-v3.1:671b-cloud
         gemma3:27b-cloud
+
+    Local Models:
+        qwen2.5-coder:7b
+        hermes3:8b
 """
 
 """
