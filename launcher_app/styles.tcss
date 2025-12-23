@@ -1,0 +1,126 @@
+
+Screen {
+    background: $surface;
+    layers: base overlay;
+}
+
+/* SIDEBAR */
+#sidebar {
+    dock: left;
+    width: 30%;
+    background: $panel;
+    border-right: heavy $primary;
+    padding: 1;
+}
+
+.section_title {
+    content-align: center middle;
+    background: $primary;
+    color: $text;
+    text-style: bold;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+/* STATS */
+DataTable {
+    height: 50%;
+    border: solid $accent;
+    scrollbar-gutter: stable;
+}
+
+#stats_bar {
+    height: 3;
+    background: $surface-darken-1;
+    border-bottom: solid $primary;
+    padding: 0 1;
+    align: center middle;
+}
+
+#global_stats {
+    width: 100%;
+    content-align: center middle;
+    color: $text;
+}
+
+/* CLI */
+#cmd_input {
+    dock: bottom;
+    border: tall $success;
+    margin-top: 1;
+}
+
+.feedback_text {
+    height: 1;
+    color: $text-muted;
+    content-align: center middle;
+}
+
+/* LOGS */
+#content_area {
+    padding: 0;
+}
+
+#log_controls {
+    height: 3;
+    align: center middle;
+    margin-bottom: 1;
+}
+
+.log_selector {
+    margin: 0 1;
+    min-width: 10;
+}
+
+#log_view {
+    height: 1fr;
+    border: solid $secondary;
+    background: $surface;
+}
+
+/* CONFIG FORM */
+.section_header {
+    background: $primary-darken-2;
+    color: $accent-lighten-2;
+    padding: 1;
+    margin-top: 1;
+    text-style: bold;
+    width: 100%;
+}
+
+.config_input {
+    border: tall $primary;
+    margin-bottom: 1;
+}
+
+.switch_row {
+    height: 3;
+    align: left middle;
+    margin: 1 0;
+}
+
+.switch_label {
+    width: 30%;
+    color: $text;
+    content-align: right middle;
+    margin-right: 2;
+}
+
+.status_msg {
+    content-align: center middle;
+    margin-top: 1;
+}
+
+#settings_scroll {
+    scrollbar-gutter: stable;
+}
+
+#btn_save_config {
+    width: 100%;
+    margin-top: 1;
+}
+
+.modified {
+    border: tall $warning;
+    color: $warning-lighten-1;
+}

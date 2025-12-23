@@ -16,6 +16,12 @@ import signal
 import shutil
 import os
 
+try:
+    import setproctitle
+    setproctitle.setproctitle("Orion Server")
+except ImportError:
+    pass
+
 # --- LOG FILTERING ---
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:

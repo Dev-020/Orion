@@ -2,6 +2,11 @@ import sys
 import os
 import uvicorn
 from pathlib import Path
+try:
+    import setproctitle
+    setproctitle.setproctitle("Orion Web Frontend")
+except ImportError:
+    pass
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware

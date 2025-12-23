@@ -5,6 +5,11 @@ import os
 import sys
 import logging
 from pathlib import Path
+try:
+    import setproctitle
+    setproctitle.setproctitle("Orion Discord Bot")
+except ImportError:
+    pass
 
 # --- PATH HACK FOR REFRACTOR PHASE 1 ---
 # Add 'backends' to sys.path so we can import 'orion_core', 'main_utils', etc.

@@ -12,6 +12,12 @@ import threading
 import sys
 from pathlib import Path
 
+try:
+    import setproctitle
+    setproctitle.setproctitle("Orion GUI")
+except ImportError:
+    pass
+
 # --- PATH HACK FOR REFRACTOR PHASE 1 ---
 # Add 'backends' to sys.path so we can import 'orion_core', 'main_utils', etc.
 sys.path.append(str(Path(__file__).resolve().parent.parent / 'backends'))
