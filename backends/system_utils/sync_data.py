@@ -13,7 +13,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 # --- CONFIGURATION ---
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATABASES_DIR = PROJECT_ROOT / "databases"
 DATA_DIR = PROJECT_ROOT / "backends" / "data"
 SYNC_FILENAME = "orion_sync_state.zip"

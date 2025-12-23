@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # Add project root to path so we can import backends
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 # Adjust data path logic relative to execution

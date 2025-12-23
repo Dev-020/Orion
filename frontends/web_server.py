@@ -86,8 +86,24 @@ def build_frontend_if_needed():
 
     # 3. Decision
     # Epsilon for safety, though direct comparison usually fine locally
+    # 3. Decision
+    # Epsilon for safety, though direct comparison usually fine locally
     if latest_src_mtime > last_build_mtime or not index_html.exists():
-        logger.info("Frontend changes detected or build missing. Running 'npm run build'...")
+        logger.info("Frontend changes detected or build missing. Running build process...")
+        
+        # Check for node_modules
+        node_modules = web_dir / "node_modules"
+        if not node_modules.exists():
+            logger.info("node_modules missing. Running 'npm install'...")
+            try:
+                # Install dependencies first
+                subprocess.run(["npm", "install"], cwd=str(web_dir), shell=True, check=True)
+                logger.info("Dependencies installed successfully.")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"npm install failed: {e}")
+                return # Cannot build without dependencies
+
+        logger.info("Running 'npm run build'...")
         try:
             # Pass environment variables to the build
             env = os.environ.copy()
@@ -96,6 +112,7 @@ def build_frontend_if_needed():
                 env["VITE_API_URL"] = "http://localhost:8000"
                 
             # shell=True is often required on Windows to find 'npm' (which is a batch file)
+            # We capture output to help debug if needed, or let it flow to stdout/stderr
             subprocess.run(["npm", "run", "build"], cwd=str(web_dir), shell=True, check=True, env=env)
             logger.info("Frontend build completed successfully.")
         except subprocess.CalledProcessError as e:

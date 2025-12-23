@@ -96,6 +96,12 @@ PROCESSES = {
         "cmd": [sys.executable, "-u", "frontends/web_server.py"],
         "log": LOG_DIR / "web.log",
         "name": "Web Frontend"
+    },
+    "ngrok": {
+        "cmd": ["ngrok", "http", "--domain=soila-noninstructional-sallie.ngrok-free.dev", "8000", "--log", "stdout"],
+        "log": LOG_DIR / "ngrok.log",
+        "name": "Ngrok Tunnel",
+        "capture_stdout": True
     }
 }
 
@@ -163,9 +169,18 @@ class ProcessManager:
             # SESSION LOGGING:
             err_path = LOG_DIR / f"{key}.err.log"
             f_err = open(err_path, "a", encoding="utf-8")
-            
+
+            # Handle stdout capture for Snap/Sandboxed apps (like Ngrok)
+            f_out = subprocess.DEVNULL
+            if PROCESSES[key].get("capture_stdout", False):
+                 # Open the main log file for writing since the subprocess can't
+                 try:
+                     f_out = open(PROCESSES[key]["log"], "a", encoding="utf-8")
+                 except Exception as ex:
+                     LOGGER.error(f"Failed to open logging redirection for {key}: {ex}")
+
             kwargs = {
-                "stdout": subprocess.DEVNULL,
+                "stdout": f_out,
                 "stderr": f_err,
                 "cwd": str(Path(__file__).parent),
                 "text": True,
@@ -179,7 +194,11 @@ class ProcessManager:
                  kwargs["start_new_session"] = True
 
             p = subprocess.Popen(cmd, **kwargs)
+            
+            # Close file handles (subprocess now has its own handle)
             f_err.close() 
+            if f_out != subprocess.DEVNULL:
+                f_out.close() 
 
             self.procs[key] = p
             PROCESSES[key]["log"] = log_path
@@ -370,20 +389,24 @@ def tail_logs(key, offset=0):
             
             view_height = get_log_view_height()
             
-            if offset == 0:
-                return visual_lines[-view_height:]
-            else:
-                end_index = -offset
-                start_index = -(view_height + offset)
+            total_lines = len(visual_lines)
+            
+            # SCROLLING LOGIC (Positive Indexing with Clamping)
+            # 1. Determine max allowable scrolling (so start_index >= 0)
+            max_scroll = max(0, total_lines - view_height)
+            
+            # 2. Clamp the user's requested offset
+            #    This prevents "overshooting" past the top of the file
+            effective_offset = min(offset, max_scroll)
+            
+            # 3. Calculate explicit indices
+            end_index = total_lines - effective_offset
+            start_index = max(0, end_index - view_height)
+            
+            if total_lines <= view_height:
+                return visual_lines # Return everything if short
                 
-                # Boundaries
-                if abs(end_index) > len(visual_lines):
-                    return [] # Scrolled past top
-                    
-                if abs(start_index) > len(visual_lines):
-                    start_index = 0 # Cap at top
-                    
-                return visual_lines[start_index:end_index]
+            return visual_lines[start_index:end_index]
 
     except Exception as e:
         return [f"[red]Error reading log: {e}[/]"]
@@ -557,6 +580,7 @@ def main():
     parser.add_argument("--bot", action="store_true")
     parser.add_argument("--gui", action="store_true")
     parser.add_argument("--web", action="store_true")
+    parser.add_argument("--ngrok", action="store_true")
     args = parser.parse_args()
 
     if args.server or args.all:
@@ -568,6 +592,8 @@ def main():
         pm.start_process("bot")
     if args.gui or args.all:
         pm.start_process("gui")
+    if args.ngrok or args.all:
+        pm.start_process("ngrok")
     
     layout = generate_layout()
     
