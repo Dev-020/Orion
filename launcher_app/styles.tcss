@@ -35,12 +35,39 @@ DataTable {
     border-bottom: solid $primary;
     padding: 0 1;
     align: center middle;
+    layout: horizontal;
 }
 
 #global_stats {
     width: 100%;
+    height: 100%;
+    layout: horizontal;
+    align: center middle;
+}
+
+ResourceMonitor {
+    width: 1fr;
+    height: 100%;
+    layout: vertical;
+    /* align: center middle; Removed to prevent shrink-to-fit behavior */
+    padding: 0 2; /* Increased padding slightly for aesthetics */
+}
+
+ResourceMonitor Label {
+    width: 100%;
     content-align: center middle;
     color: $text;
+}
+
+ResourceMonitor ProgressBar {
+    width: 1fr;
+    height: 1;
+    margin: 0;
+    padding: 0;
+}
+
+ResourceMonitor ProgressBar > Bar {
+    width: 1fr;
 }
 
 /* CLI */

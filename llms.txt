@@ -1,0 +1,59 @@
+# Orion Project Context for AI Agents
+
+> **Project**: Orion - Local AI Assistant with React Frontend, Python Backend, and TUI Launcher.
+> **Documentation**: See `docs/` for detailed guides.
+> **Generated Website**: Run `mkdocs serve` to view at `http://localhost:8002`.
+
+## High-Level Architecture
+Orion is a local AI application designed to provide a premium Chat interface backed by either Google GenAI (Gemini) or local models (Ollama).
+
+-   **Frontend**: React 19 + Vite SPA (`frontends/web`). Connects to Backend via REST/WebSockets.
+-   **Backend**: FastAPI Server (`backends/server.py`). Wraps `OrionCore` logic.
+-   **Core Logic**: `backends/orion_core.py`. Handles session state, tool calling, and streaming.
+-   **Launcher**: Textual TUI (`launcher_app/`). Manages processes (frontend, backend, ngrok).
+
+## Key Directory Map & Documentation References
+The project uses a comprehensive "Docs-as-Code" structure. Refer to these files for deep dives:
+
+### Management
+-   **Launcher**: [docs/launcher/index.md](docs/launcher/index.md)
+    -   The Textual TUI Dashboard.
+
+### Connectivity
+-   **API Reference**: [docs/api/index.md](docs/api/index.md)
+    -   Endpoints: [docs/api/endpoints.md](docs/api/endpoints.md)
+    -   Clients: [docs/api/clients.md](docs/api/clients.md)
+
+### Backend (`backends/`)
+-   **Overview**: [docs/backend/index.md](docs/backend/index.md)
+-   **Core Logic**: [docs/backend/core_logic.md](docs/backend/core_logic.md)
+    -   `server.py` (FastAPI Entry)
+    -   `orion_core.py` (The Brain)
+-   **Agents**: [docs/backend/agents.md](docs/backend/agents.md)
+    -   `file_processing_agent.py` (File analysis)
+-   **Utilities**: [docs/backend/main_utils.md](docs/backend/main_utils.md)
+    -   `main_functions.py` (Tool definitions)
+    -   `auth_manager.py` (User/Token management)
+-   **Maintenance**: [docs/backend/system_utils.md](docs/backend/system_utils.md)
+    -   `backup_db.py` (Automatic Backups)
+
+### Frontend (`frontends/`)
+-   **Web App**: [docs/frontend/index.md](docs/frontend/index.md) & [docs/frontend/web_structure.md](docs/frontend/web_structure.md)
+    -   React 19, Vite, Context API, CSS Variables.
+-   **Discord Bot**: [docs/frontend/discord_bot.md](docs/frontend/discord_bot.md)
+    -   `bot.py` (py-cord implementation).
+-   **Legacy GUI**: [docs/frontend/legacy_gui.md](docs/frontend/legacy_gui.md)
+    -   `gui.py` (DEPRECATED/BROKEN - Needs specific refactor).
+
+## Tech Stack
+-   **Language**: Python 3.10+ (Backend/Launcher), JavaScript/JSX (Frontend).
+-   **Web Framework**: FastAPI (Backend), React (Frontend).
+-   **TUI Framework**: Textual (Python).
+-   **Database**: SQLite (`databases/`).
+-   **Communication**: HTTP + WebSockets (Port 8000 default).
+
+## Developer Workflows
+-   **Start App**: Run `python launcher.py`.
+-   **Frontend Dev**: `cd frontends/web && npm run dev`.
+-   **Backend Dev**: Restart launcher to reload server changes.
+-   **Documentation**: Run `mkdocs serve` for local docs site.

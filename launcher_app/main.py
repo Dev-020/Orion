@@ -150,21 +150,50 @@ class ConfigForm(ScrollableContainer):
         else:
             status_lbl.update("[red]Error saving config file![/]")
 
+from textual.widgets import Header, Footer, Static, Button, Label, DataTable, RichLog, Input, TabbedContent, TabPane, Switch, ProgressBar
+
+# ... (Previous imports remain, ensuring ProgressBar is added)
+
+class ResourceMonitor(Static):
+    """A widget to display a resource label and a progress bar."""
+    
+    def compose(self) -> ComposeResult:
+        yield Label("", id="lbl_stat")
+        yield ProgressBar(total=100, show_eta=False, show_percentage=False)
+
+    def update_resource(self, label_text: str, percentage: float):
+        self.query_one("#lbl_stat").update(label_text)
+        bar = self.query_one(ProgressBar)
+        bar.progress = percentage
+
 class GlobalStats(Static):
-    # ... (Unchanged)
     """Widget to display global resource stats (CPU/RAM/GPU)."""
-    text_content = reactive("Initializing Stats...")
+
+    def compose(self) -> ComposeResult:
+        yield ResourceMonitor(id="gpu_mon")
+        yield ResourceMonitor(id="vram_mon")
 
     def update_stats(self, gpu_stats):
-        # Format string
-        t = f"[bold cyan]GPU:[/bold cyan] {gpu_stats.get('gpu_util', 0):.1f}% | "
-        t += f"[bold cyan]VRAM:[/bold cyan] {gpu_stats.get('vram_used_mb', 0):.0f}MB ({gpu_stats.get('vram_util', 0):.1f}%)"
-        self.update(t)
+        gpu_util = gpu_stats.get('gpu_util', 0.0)
+        vram_util = gpu_stats.get('vram_util', 0.0)
+        vram_used = gpu_stats.get('vram_used_mb', 0.0)
+
+        # Update GPU
+        self.query_one("#gpu_mon").update_resource(
+            f"[bold cyan]GPU:[/bold cyan] {gpu_util:.1f}%", 
+            gpu_util
+        )
+        
+        # Update VRAM
+        self.query_one("#vram_mon").update_resource(
+            f"[bold cyan]VRAM:[/bold cyan] {vram_used:.0f}MB ({vram_util:.1f}%)", 
+            vram_util
+        )
 
 class OrionLauncherApp(App):
     CSS_PATH = "styles.tcss"
-    TITLE = "Orion Command Center"
-    SUB_TITLE = "Agentic AI Orchestrator"
+    TITLE = "Orion Dashboard"
+    SUB_TITLE = "https://dev-020.github.io/Orion/"
 
     def __init__(self):
         super().__init__()

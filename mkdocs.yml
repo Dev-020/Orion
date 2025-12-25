@@ -1,0 +1,48 @@
+site_name: Orion Documentation
+site_url: http://localhost:8002
+site_description: Documentation for the Orion Local AI Assistant.
+site_author: Orion Team
+
+theme:
+  name: material
+  palette:
+    # Slate (Dark Mode)
+    - scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    # Light Mode
+    - scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.expand
+    - navigation.indexes
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Launcher (Dashboard): launcher/index.md
+  - API Reference:
+    - Overview: api/index.md
+    - Endpoints: api/endpoints.md
+    - Client SDKs: api/clients.md
+  - Backend:
+    - Overview: backend/index.md
+    - Core Logic: backend/core_logic.md
+    - Agents: backend/agents.md
+    - Main Utils: backend/main_utils.md
+    - System Utils: backend/system_utils.md
+  - Frontend:
+    - Overview: frontend/index.md
+    - Web Architecture: frontend/web_structure.md
+    - Discord Bot: frontend/discord_bot.md
+    - Legacy GUI: frontend/legacy_gui.md
+
+dev_addr: '127.0.0.1:8002'
