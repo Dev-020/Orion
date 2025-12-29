@@ -17,6 +17,7 @@ COLLECTION_NAME = ""
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # New Data Directory
 BACKEND_ROOT = PROJECT_ROOT / "backends"
+DATA_DIR = BACKEND_ROOT / "data"
 OUTPUT_DIR = BACKEND_ROOT / "instructions"
 
 # --- GLOBAL VARIABLES ---

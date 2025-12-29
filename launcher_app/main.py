@@ -1,28 +1,39 @@
-
 from textual.app import App, ComposeResult
 from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
 from textual.widgets import Header, Footer, Static, Button, Label, DataTable, RichLog, Input, TabbedContent, TabPane, Switch
 from textual import on, work
-from textual.reactive import reactive
 
-import asyncio
 import time
-from datetime import datetime
 from pathlib import Path
+import logging
+
+import sys
+from pathlib import Path
+
+# Add backends to path to import main_utils
+BACKEND_PATH = Path(__file__).resolve().parent.parent / "backends"
+if str(BACKEND_PATH) not in sys.path:
+    sys.path.append(str(BACKEND_PATH))
 
 # Import Internal Logic
 try:
     from .process_manager import ProcessManager, PROCESSES, LogManager
     from .monitors.amd_gpu import RadeontopMonitor
     from .config_parser import ConfigParser
+    
+    # Import Standard Logger and Config
+    from main_utils import config
+    from main_utils.orion_logger import setup_logging, ColorFormatter
 except ImportError:
     # Fallback for direct execution testing
     from process_manager import ProcessManager, PROCESSES, LogManager
     from monitors.amd_gpu import RadeontopMonitor
-    from config_parser import ConfigParser
+    from config_parser import ConfigParser    
+    from main_utils import config
+    from main_utils.orion_logger import setup_logging, ColorFormatter
 
-# Path to config file
-CONFIG_PATH = Path(__file__).parent.parent / "backends" / "main_utils" / "config.py"
+# Use config provided path
+CONFIG_PATH = Path(config.BACKEND_ROOT) / "main_utils" / "config.py"
 
 class ConfigForm(ScrollableContainer):
     """Form to edit config.py variables."""
@@ -152,8 +163,6 @@ class ConfigForm(ScrollableContainer):
 
 from textual.widgets import Header, Footer, Static, Button, Label, DataTable, RichLog, Input, TabbedContent, TabPane, Switch, ProgressBar
 
-# ... (Previous imports remain, ensuring ProgressBar is added)
-
 class ResourceMonitor(Static):
     """A widget to display a resource label and a progress bar."""
     
@@ -190,6 +199,22 @@ class GlobalStats(Static):
             vram_util
         )
 
+class TextualHandler(logging.Handler):
+    """Custom logging handler that emits to a Textual RichLog widget."""
+    def __init__(self, widget_getter):
+        super().__init__()
+        self.widget_getter = widget_getter
+        self.setFormatter(ColorFormatter())
+        
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            widget = self.widget_getter()
+            if widget:
+                widget.write(msg)
+        except Exception:
+            self.handleError(record)
+
 class OrionLauncherApp(App):
     CSS_PATH = "styles.tcss"
     TITLE = "Orion Dashboard"
@@ -201,7 +226,12 @@ class OrionLauncherApp(App):
         self.gpu_monitor = RadeontopMonitor()
         self.selected_log_service = "server" # Default
         self.log_seek_offsets = {} # Key -> int byte position
-
+        
+        # Setup Standard Logging
+        # We disable console_output because we want to control where it goes (to Widget)
+        # We write to launcher.log via FileHandler setup by orion_logger
+        self.logger = setup_logging("Launcher", config.DATA_DIR / "logs" / "launcher.log", console_output=False)
+        
     def compose(self) -> ComposeResult:
         # ... (Unchanged)
         yield Header(show_clock=True)
@@ -212,11 +242,11 @@ class OrionLauncherApp(App):
                 yield Label("System Services", classes="section_title")
                 yield DataTable(id="process_table")
                 
-                yield Static(id="spacer", classes="spacer")
-                
-                yield Label("Command Input", classes="section_title")
-                yield Input(placeholder="Type command (e.g. start server)...", id="cmd_input")
-                yield Static(id="cmd_feedback", classes="feedback_text")
+                yield Label("Command Panel", classes="section_title")
+                with Vertical(id="command_panel"):
+                    yield RichLog(id="cmd_history", wrap=True, highlight=True, markup=True)
+                    yield Input(placeholder="Type command (e.g. start server)...", id="cmd_input")
+                    yield Static(id="cmd_feedback", classes="feedback_text")
 
             # RIGHT MAIN: Tabs (Logs, Stats)
             with Vertical(id="content_area"):
@@ -226,10 +256,7 @@ class OrionLauncherApp(App):
                 with TabbedContent():
                     with TabPane("Live Logs", id="tab_logs"):
                          # Log Selector Buttons
-                        with Horizontal(id="log_controls"):
-                             for key in PROCESSES.keys():
-                                 yield Button(key.upper(), id=f"btn_log_{key}", classes="log_selector")
-                        
+                        # Log Selector Buttons Removed (Now handled by Sidebar Table)
                         yield RichLog(id="log_view", wrap=True, highlight=True, markup=True, max_lines=1000)
                     
                     with TabPane("Configuration", id="tab_config"):
@@ -246,10 +273,28 @@ class OrionLauncherApp(App):
 
     def on_mount(self) -> None:
         # Archive old logs from previous session
+        # NOTE: If we want to keep history for "Command History", we shouldn't archive launcher.log immediately
+        # or we should load it before archiving? 
+        # Actually ProcessManager.cleanup_all_logs archives EVERYTHING.
+        # Use existing logic for now.
         LogManager.cleanup_all_logs()
+        
+        # Attach Textual Handler for live logs
+        # We use a lambda to get the widget since it might not be ready in __init__
+        handler = TextualHandler(lambda: self.query_one("#cmd_history", RichLog))
+        # Ensure we capture INFO level
+        handler.setLevel(logging.INFO)
+        self.logger.addHandler(handler)
         
         self.gpu_monitor.start_monitoring()
         
+        # Load Command History? 
+        # Since we just archived logs, history is empty for a new session.
+        # If user wants persistent history across sessions, we should NOT archive launcher.log every time.
+        # But for now, let's load what's there (which is empty after cleanup).
+        self.load_command_history()
+        
+        # ... (Rest remains same)
         # Setup Table
         table = self.query_one(DataTable)
         table.cursor_type = "row"
@@ -266,6 +311,37 @@ class OrionLauncherApp(App):
         # Start Update Loops
         self.set_interval(1.0, self.update_system_stats)
         self.set_interval(0.5, self.update_logs)
+
+    def load_command_history(self):
+        """Loads existing launcher.log into the history view."""
+        history_view = self.query_one("#cmd_history")
+        log_path = config.DATA_DIR / "logs" / "launcher.log"
+        
+        if log_path.exists():
+            try:
+                # We interpret ANSI codes from the file since they are saved plainly?
+                # orion_logger PlainFormatter does NOT save colors to file. ColorFormatter does.
+                # So file has no colors. TextualHandler adds colors live.
+                # Loading file will result in plain text history. Acceptable.
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                    if content:
+                        history_view.write(content)
+            except Exception as e:
+                history_view.write(f"[red]Failed to load history: {e}[/]")
+
+    def log_command(self, text: str):
+        """Standardized logging wrapper."""
+        # This writes to file (plain) and TextualHandler (colorized) automatically
+        # BUT 'text' here comes from handle_cli_command with Rich markup (e.g. [bold]).
+        # Logger Formatter might mess up Rich markup or RichLog interprets both?
+        # RichLog supports markup.
+        # orion_logger uses ANSI codes.
+        # Rich markup + ANSI codes usually works but can be tricky.
+        # Let's strip markup for the file? No, standard logger just takes string.
+        # If I want rich markup to render in UI, I should just log it.
+        # The file will contain the markup strings.
+        self.logger.info(text)
 
     # ... (Methods update_system_stats, update_logs, handle_log_switch, reload_log_view, handle_cli_command unchanged)
 
@@ -324,12 +400,12 @@ class OrionLauncherApp(App):
         except Exception:
             pass
 
-    @on(Button.Pressed)
-    def handle_log_switch(self, event: Button.Pressed):
-        if event.button.id.startswith("btn_log_"):
-            service_key = event.button.id.replace("btn_log_", "")
-            self.selected_log_service = service_key
-            self.reload_log_view()
+    @on(DataTable.RowSelected)
+    def on_table_row_selected(self, event: DataTable.RowSelected):
+        """Switch log view when a service row is selected."""
+        service_key = event.row_key.value
+        self.selected_log_service = service_key
+        self.reload_log_view()
 
     def reload_log_view(self):
         log_view = self.query_one("#log_view")
@@ -365,58 +441,74 @@ class OrionLauncherApp(App):
 
     @on(Input.Submitted)
     def handle_cli_command(self, event: Input.Submitted):
-        cmd = event.value.strip().lower()
+        cmd = event.value.strip() # Keep case for logging? User said "inputted". Lowercase for logic.
+        if not cmd: return
+        
         event.input.value = "" # Clear input
         
+        # Log Input
+        self.log_command(f"> [bold]{cmd}[/bold]")
+        
+        cmd_lower = cmd.lower()
         feedback = self.query_one("#cmd_feedback")
         
-        parts = cmd.split()
+        parts = cmd_lower.split()
         if not parts: return
         
         action = parts[0]
+        msg = ""
         
         if action == "start":
             if len(parts) < 2: 
-                feedback.update("[red]Usage: start <service|all>[/]")
-                return
-            target = parts[1]
-            if target == "all":
-                self.pm.start_all()
-                feedback.update("[green]Starting all services...[/]")
-            elif target in PROCESSES:
-                self.pm.start_process(target)
-                feedback.update(f"[green]Starting {target}...[/]")
+                msg = "[red]Usage: start <service|all>[/]"
             else:
-                 feedback.update(f"[red]Unknown service: {target}[/]")
-
+                target = parts[1]
+                if target == "all":
+                    self.pm.start_all()
+                    msg = "[green]Starting all services...[/]"
+                elif target in PROCESSES:
+                    self.pm.start_process(target)
+                    msg = f"[green]Starting {target}...[/]"
+                else:
+                    msg = f"[red]Unknown service: {target}[/]"
+ 
         elif action == "stop":
             if len(parts) < 2:
-                feedback.update("[red]Usage: stop <service|all>[/]")
-                return
-            target = parts[1]
-            if target == "all":
-                self.pm.stop_all()
-                feedback.update("[yellow]Stopping all services...[/]")
-            elif target in PROCESSES:
-                self.pm.stop_process(target)
-                feedback.update(f"[yellow]Stopping {target}...[/]")
+                msg = "[red]Usage: stop <service|all>[/]"
             else:
-                 feedback.update(f"[red]Unknown service: {target}[/]")
-                 
+                target = parts[1]
+                if target == "all":
+                    self.pm.stop_all()
+                    msg = "[yellow]Stopping all services...[/]"
+                elif target in PROCESSES:
+                    self.pm.stop_process(target)
+                    msg = f"[yellow]Stopping {target}...[/]"
+                else:
+                     msg = f"[red]Unknown service: {target}[/]"
+                  
         elif action == "restart":
-             if len(parts) < 2: return
-             target = parts[1]
-             if target in PROCESSES:
-                 self.pm.stop_process(target)
-                 time.sleep(1)
-                 self.pm.start_process(target)
-                 feedback.update(f"[green]Restarted {target}[/]")
-                 
+             if len(parts) < 2: 
+                 msg = "[red]Usage: restart <service>[/]"
+             else:
+                 target = parts[1]
+                 if target in PROCESSES:
+                     self.pm.stop_process(target)
+                     time.sleep(1)
+                     self.pm.start_process(target)
+                     msg = f"[green]Restarted {target}[/]"
+                 else:
+                     msg = f"[red]Unknown service: {target}[/]"
+                  
         elif action == "quit":
             self.exit()
             
         else:
-            feedback.update(f"[red]Unknown command: {action}[/]")
+            msg = f"[red]Unknown command: {action}[/]"
+            
+        # Update feedback and Log Result
+        feedback.update(msg)
+        if msg:
+            self.log_command(msg)
 
     def on_unmount(self):
         self.gpu_monitor.stop_monitoring()

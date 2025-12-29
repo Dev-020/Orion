@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+import os
 
 # ANSI Color Codes
 RESET = "\033[0m"
@@ -19,7 +20,7 @@ class ColorFormatter(logging.Formatter):
     FORMATS = {
         logging.DEBUG:    GREY + "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s" + RESET,
         logging.INFO:     CYAN + "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s" + RESET,
-        logging.WARNING:  YELLOW + "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s" + RESET,
+        logging.WARNING:  YELLOW + "%(asctime)s -   [%(name)s] - %(levelname)s - %(message)s" + RESET,
         logging.ERROR:    RED + "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s" + RESET,
         logging.CRITICAL: BOLD_RED + "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s" + RESET
     }
@@ -55,7 +56,9 @@ def setup_logging(logger_name: str, log_file_path: Path = None, level=logging.IN
         root_logger.handlers.clear()
 
     # 1. Console Handler
-    if console_output:
+    # If running managed (by launcher), suppress console output to avoid duplicates
+    # because launcher redirects stdout to the log file already.
+    if console_output and os.environ.get("ORION_MANAGED_PROCESS") != "true":
         c_handler = logging.StreamHandler(sys.stdout)
         c_handler.setLevel(level)
         c_handler.setFormatter(ColorFormatter())

@@ -90,6 +90,7 @@ class ProcessManager:
         # Enforce UTF-8
         self.env = os.environ.copy()
         self.env["PYTHONIOENCODING"] = "utf-8"
+        self.env["ORION_MANAGED_PROCESS"] = "true"
         
         # Logging
         self.log_dir = Path(__file__).parent.parent / "backends" / "data" / "logs"

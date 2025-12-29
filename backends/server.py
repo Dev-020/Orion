@@ -189,19 +189,25 @@ async def lifespan(app: FastAPI):
     try:
         # Initialize the Brain
         if config.BACKEND == "ollama":
-             logger.info("Initializing OrionLiteCore (Ollama Backend)...")
-             core_instance = OrionLiteCore()
-             logger.info("OrionLiteCore Initialized Successfully.")
+             if 'OrionLiteCore' in globals():
+                 logger.info("Initializing OrionLiteCore (Ollama Backend)...")
+                 core_instance = OrionLiteCore()
+                 logger.info("OrionLiteCore Initialized Successfully.")
+             else:
+                 logger.critical("OrionLiteCore not imported. Check dependencies (googleapiclient etc).")
+                 # We can't proceed with this backend
+                 # core_instance remains None, health check will show 'initializing' or we should set a 'failed' state
         else:
-             logger.info("Initializing OrionCore (API Backend)...")
-             core_instance = OrionCore()
-             logger.info("OrionCore Initialized Successfully.")
+             if 'OrionCore' in globals():
+                 logger.info("Initializing OrionCore (API Backend)...")
+                 core_instance = OrionCore()
+                 logger.info("OrionCore Initialized Successfully.")
+             else:
+                 logger.critical("OrionCore not imported. Check dependencies.")
 
         # Launch Backup Scheduler
         if backup_db:
-            # Run one check immediately on startup (non-blocking)
-            asyncio.create_task(asyncio.to_thread(backup_db.run_backup, 'auto'))
-            # Start loop
+            # Start loop (it runs one backup immediately)
             asyncio.create_task(auto_backup_scheduler())
 
     except Exception as e:

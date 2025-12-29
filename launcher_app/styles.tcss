@@ -23,8 +23,9 @@ Screen {
 }
 
 /* STATS */
+/* STATS */
 DataTable {
-    height: 50%;
+    height: 35%; /* Reduced to make room for history */
     border: solid $accent;
     scrollbar-gutter: stable;
 }
@@ -36,6 +37,29 @@ DataTable {
     padding: 0 1;
     align: center middle;
     layout: horizontal;
+}
+
+/* ... global_stats and ResourceMonitor styles ... */
+
+/* CLI */
+#cmd_history {
+    height: 1fr;
+    border: solid $secondary;
+    background: $surface;
+    margin-bottom: 1;
+    overflow-y: scroll;
+}
+
+#cmd_input {
+    /* dock: bottom; Removed docking to let it stack naturally below history */
+    border: tall $success;
+    margin-top: 0;
+}
+
+.feedback_text {
+    height: 1;
+    color: $text-muted;
+    content-align: center middle;
 }
 
 #global_stats {
@@ -70,33 +94,42 @@ ResourceMonitor ProgressBar > Bar {
     width: 1fr;
 }
 
-/* CLI */
+/* COMMAND PANEL */
+#command_panel {
+    height: 1fr;
+    border: solid $secondary;
+    background: $surface;
+    padding: 0;
+    margin-bottom: 1;
+}
+
+#cmd_history {
+    height: 1fr;
+    border: none;
+    background: transparent;
+    margin: 0;
+}
+
 #cmd_input {
-    dock: bottom;
-    border: tall $success;
-    margin-top: 1;
+    border-top: solid $secondary;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    background: transparent;
+    height: 3;
+    margin: 0;
 }
 
 .feedback_text {
     height: 1;
     color: $text-muted;
     content-align: center middle;
+    background: transparent;
 }
 
 /* LOGS */
 #content_area {
     padding: 0;
-}
-
-#log_controls {
-    height: 3;
-    align: center middle;
-    margin-bottom: 1;
-}
-
-.log_selector {
-    margin: 0 1;
-    min-width: 10;
 }
 
 #log_view {
