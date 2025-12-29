@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { ArrowLeft, Camera, Save, User, X, ZoomIn, ZoomOut, Check } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useAuth } from './context/AuthContext'
+import { useAuth } from '../context/AuthContext'
 import Cropper from 'react-easy-crop'
-import getCroppedImg from './utils/cropUtils'
-import UserAvatar from './components/UserAvatar'
-import { orionApi } from './utils/api';
+import getCroppedImg from '../utils/cropUtils'
+import UserAvatar from '../components/UserAvatar'
+import { orionApi } from '../utils/api';
 
 // Constants
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB

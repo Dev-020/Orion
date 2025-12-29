@@ -7,9 +7,9 @@ import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { useAuth } from './context/AuthContext'
-import UserAvatar from './components/UserAvatar'
-import { orionApi } from './utils/api'
+import { useAuth } from '../context/AuthContext'
+import UserAvatar from '../components/UserAvatar'
+import { orionApi } from '../utils/api'
 
 // Log helper
 const logToServer = async (level, message) => {

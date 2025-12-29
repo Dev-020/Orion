@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAuth } from './context/AuthContext';
-import LoginPage from './LoginPage';
+import LoginPage from './pages/LoginPage';
 
 const ProtectedRoute = ({ children }) => {
     const { user, loading } = useAuth();
