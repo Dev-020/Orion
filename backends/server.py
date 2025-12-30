@@ -71,19 +71,11 @@ auth_manager = None # Initialized in lifespan
 # Import AuthManager
 try:
     from main_utils.auth_manager import AuthManager
-except ImportError as e:
-    logger.error(f"Could not import AuthManager: {e}. Authentication will be disabled.")
+except ImportError:
     AuthManager = None
-
-# Import Minesweeper Manager
-try:
-    from minesweeper.logic import GameManager
-except ImportError as e:
-    logger.error(f"Could not import Minesweeper GameManager: {e}")
-    GameManager = None
+    logger.error("Could not import AuthManager. Authentication will be disabled.")
 
 # --- GLOBAL SINGLETONS ---
-game_manager = GameManager() if GameManager else None
 
 # --- Pydantic Models for Requests ---
 class FileMetadata(BaseModel):
@@ -181,6 +173,12 @@ async def lifespan(app: FastAPI):
         auth_manager = AuthManager(db_path=db_path)
         logger.info(f"AuthManager initialized. DB: {db_path}")
     
+    # Attach to app.state for Routers to access
+    app.state.auth_manager = auth_manager
+
+    # Attach to state for Routers
+    yield # Start serving
+    
     # --- AUTO BACKUP SCHEDULER ---
     async def auto_backup_scheduler():
         """Runs auto-backup check every 15 minutes."""
@@ -244,6 +242,15 @@ async def lifespan(app: FastAPI):
             logger.error(f"Final Backup Failed: {e}")
 
 app = FastAPI(lifespan=lifespan)
+
+# --- ROUTERS ---
+# Mount Minesweeper Router
+try:
+    from minesweeper.routes import router as minesweeper_router
+    app.include_router(minesweeper_router)
+    logger.info("Minesweeper Router Mounted Successfully")
+except Exception as e:
+    logger.error(f"Failed to mount Minesweeper Router: {e}")
 
 # --- CORS SETUP ---
 # Allow requests from the React dev server (e.g., localhost:5173) and others
@@ -544,107 +551,6 @@ async def process_prompt(request: PromptRequest):
                 yield json.dumps(err) + "\n"
 
     return StreamingResponse(response_generator(), media_type="application/x-ndjson")
-
-@app.websocket("/ws/game")
-async def game_websocket(websocket: WebSocket):
-    await websocket.accept()
-    
-    # 1. Authenticate (Manual method to match routes.py fix)
-    token = websocket.query_params.get("token")
-    user_id = str(id(websocket)) # Default to session ID if no auth
-    username = "Anonymous"
-    
-    if token and auth_manager:
-        user = auth_manager.verify_token(token)
-        if user:
-            user_id = user['user_id']
-            username = user['username']
-            logger.info(f"Minesweeper connected: {username} ({user_id})")
-        else:
-             logger.warning("Invalid token for Minesweeper connection")
-    
-    session_id = user_id 
-    
-    # 2. Check for existing game (Persistence)
-    existing_game = None
-    if game_manager:
-        existing_game = game_manager.get_game(session_id)
-        
-    if existing_game:
-        logger.info(f"Restoring game for {username}")
-        await websocket.send_json({
-            "type": "game_start", 
-            "payload": existing_game.get_full_state_for_client()
-        })
-    elif not game_manager:
-         await websocket.send_json({"type": "error", "message": "Game Server Unavailable"})
-    
-    try:
-        while True:
-            data = await websocket.receive_text()
-            logger.info(f"Minesweeper received: {data}") # DEBUG
-            if not game_manager: 
-                logger.error("Minesweeper Error: game_manager is None. Ignoring request.")
-                continue 
-
-            try:
-                message = json.loads(data)
-                action = message.get("type")
-                
-                if action == "new_game":
-                    logger.info("Processing new_game...")
-                    # For new game, we might overwrite existing one
-                    difficulty = message.get("difficulty", "medium")
-                    game = game_manager.create_game(session_id, difficulty)
-                    logger.info(f"Game created: {game.game_id}. Sending payload...")
-                    
-                    payload = game.get_full_state_for_client()
-                    # logger.info(f"Payload: {payload}") # Too verbose
-                    
-                    await websocket.send_json({
-                        "type": "game_start", 
-                        "payload": payload
-                    })
-                    logger.info("Game start payload key sent.")
-
-                elif action == "reveal":
-                    game = game_manager.get_game(session_id)
-                    if game:
-                        x, y = message.get("x"), message.get("y")
-                        result = game.reveal(x, y)
-                        
-                        response = {
-                            "type": "game_update",
-                            "payload": result
-                        }
-                        await websocket.send_json(response)
-                
-                elif action == "flag":
-                    game = game_manager.get_game(session_id)
-                    if game:
-                        x, y = message.get("x"), message.get("y")
-                        result = game.toggle_flag(x, y)
-                        
-                        # If error (limit reached)
-                        if result.get("error"):
-                             await websocket.send_json({"type": "error", "message": result["error"]})
-                        else:
-                            response = {
-                                "type": "game_update", 
-                                "payload": result
-                            }
-                            await websocket.send_json(response)
-
-            except json.JSONDecodeError:
-                await websocket.send_text("Invalid JSON")
-            except Exception as e:
-                logger.error(f"Game Error: {e}")
-                await websocket.send_json({"type": "error", "message": str(e)})
-
-    except WebSocketDisconnect:
-        # For persistence, we DO NOT remove the game on disconnect
-        # GameManager.remove_game(session_id) 
-        logger.info(f"Minesweeper session {session_id} disconnected")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):

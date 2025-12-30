@@ -45,6 +45,5 @@ nav:
     - Web Architecture: frontend/web_structure.md
     - Discord Bot: frontend/discord_bot.md
     - Legacy GUI: frontend/legacy_gui.md
-  - Minesweeper: minesweeper.md
 
 dev_addr: '127.0.0.1:8002'
