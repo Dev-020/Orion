@@ -44,3 +44,4 @@ frontends/web/.env.production
 /tests
 /venv_linux
 venv_windows/
+bot_debug.log
