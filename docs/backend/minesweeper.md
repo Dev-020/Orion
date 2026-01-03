@@ -1,78 +1,80 @@
 # Minesweeper Implementation Documentation
 
 ## 1. Overview
-This feature implements a full-stack Minesweeper game within Orion. It uses a robust Client-Server architecture over WebSockets, ensuring game logic is secure and persistent on the backend while providing a responsive "Glassmorphism" UI on the frontend.
+The Minesweeper module in Orion is a robust, full-stack implementation of the classic game, enhanced with real-time multiplayer capabilities and an autonomous AI agent ("Orion Bot"). It uses a **Client-Server** architecture over **WebSockets** to ensure secure, authoritative game logic while delivering a responsive, modern "Glassmorphism" UI on the frontend.
 
-## 2. Backend Architecture
+## 2. Architecture
 
-### Core Components
-The backend is modularized to ensure separation of concerns:
+### Backend (`backends/minesweeper/`)
+The backend logic is modularized for scalability and stability:
 
-- **`minesweeper/logic.py`**:
-    - **`MinesweeperGame`**: Pure Python class handling the board state, mine generation, recursive flood-fill for revealing zeros, and win/loss rules.
-    - **`GameManager`**: A singleton class managing active game sessions in memory (RAM). It maps `session_id` to `MinesweeperGame` instances.
-- **`minesweeper/routes.py`**:
-    - Defines the `APIRouter` for the WebSocket endpoint.
-    - **Dependency Injection**: Accesses `app.state.auth_manager` (initialized in `server.py`) to share the same authentication context (Database & Secret Keys) as the main server.
-- **`server.py`**:
-    - Mounts the `minesweeper_router` to the main FastAPI app.
-    - Manages the global `AuthManager` lifecycle.
+- **`logic.py`**:
+    - **`MinesweeperGame`**: The core game logic class. Handles board representation (1D/2D mapping), mine generation, recursive flood-fill, and win/loss conditions. It supports multiple modes (`classic`, `flags`).
+    - **`GameManager`**: A centralized Singleton that manages active game sessions in memory. It handles:
+        - `active_games`: Mapping users to games for quick lookup.
+        - `games_by_id`: Registry of all active game lobbies.
+        - `cleanup_stale_games`: Garbage collection for abandoned sessions.
 
-### Connection & Authentication flows
-1.  **Connection**: Client connects to `/ws/game?token=<jwt>`.
-2.  **Auth Verification**: The router uses the shared `AuthManager` to verify the JWT.
-    - **Success**: The persistent `user_id` is used as the session key. This allows a user to refresh the page and reconnect to the *exact same game*.
-    - **Failure/No Token**: Falls back to an `Anonymous` session tied to the WebSocket ID (lost on disconnect).
-3.  **Restoration**: Upon connection, the server checks `GameManager` for an existing game for that user. If found, it immediately sends a `game_start` payload to restore the board.
+- **`routes.py`**:
+    - The WebSocket Controller. Handles connection lifecycle, authentication, and message routing.
+    - **Connection Management**: Maps persistent `user_ids` (from JWT) to active WebSocket connections, enabling seamless reconnection.
+    - **Bot Orchestration**: Manages the spawning and termination of Bot subprocesses.
 
-### SDK (`minesweeper_client.py`)
-A standalone Python SDK provided for "headless" interactions. This is used for automated testing and will be the foundation for the AI Bot agent.
+- **`orion_minesweeper_core.py`**:
+    - The standalone AI Agent. Runs as a separate process to ensure isolation.
+    - Uses a Hybrid Solver (CSP + Probability) to play the game autonomously.
 
-```python
-from minesweeper_client import MinesweeperClient
+### Frontend (`frontends/web/src/pages/MinesweeperPage.jsx`)
+The React frontend acts as the view layer, synchronizing state with the server:
 
-# Example: Headless interaction
-client = MinesweeperClient("ws://localhost:8000")
-await client.connect(token="...")
-await client.new_game("medium")
-await client.reveal(5, 5)
-```
+- **Lobby System**: A dedicated UI (`LobbyControls`) for creating Solo or Multiplayer lobbies.
+- **Draft Mode (Lazy Creation)**: In Solo mode, the grid acts as a "Draft". The server session is only created upon the **first move**, optimizing resource usage.
+- **Persistence**: The UI automatically reconnects and restores the game state if the browser is refreshed, thanks to persistent User IDs.
 
-## 3. Frontend Architecture
-Built with React (Vite) and located in `frontends/web/src/`.
+## 3. Game Modes
 
-- **`MinesweeperPage.jsx`**: 
-    - The main controller.
-    - Handles WebSocket connection lifecycle (connect, disconnect, reconnect).
-    - Manages local state (`grid`, `gameState`, `timers`).
-    - **Smart Persistence**: Does *not* automatically start a new game on load. It waits for the server to dictate if there is an existing game to resume.
-- **`Board.jsx`**: 
-    - Renders the 2D grid.
-    - Handles user inputs (Left Click = Reveal, Right Click = Flag).
-    - Styling: Uses Tailwind CSS for a dark, modern look with distinct colors for numbers.
-- **`Controls.jsx`**: 
-    - Difficulty selector (Easy 9x9, Medium 16x16, Hard 16x30).
-    - Game status indicators (Timer, Mines Left).
+### Classic (Solo)
+- **Goal**: Reveal all safe cells without hitting a mine.
+- **Rules**: Standard Minesweeper rules.
+- **Features**: 
+    - "First Click Safe" guarantee.
+    - Draft Mode start.
 
-## 4. API Protocol (WebSocket)
-All communication happens via JSON payloads.
+### Flags (Multiplayer)
+- **Goal**: Find more mines than your opponent.
+- **Mechanics**:
+    - **Competitive**: Players take turns or play simultaneously (configurable).
+    - **Scoring**: Revealing a mine (or flagging correctly) grants a point.
+    - **Victory**: The player with the highest score when all mines are found wins.
+
+## 4. Orion Bot (The "Hunter")
+The Orion Bot is a sophisticated AI agent designed to play against humans or test the system.
+
+- **Strategy ("Hunter")**: 
+    - Unlike standard solvers that avoid mines, the Hunter **actively seeks mines** in Flags mode to score points.
+    - It uses Constraint Satisfaction Problems (CSP) to identify 100% certain mines and reveals them immediately.
+- **Lifecycle**:
+    - **Summoning**: Can be summoned into a Lobby by the host via `summon_bot`.
+    - **Process**: Runs as a detached subprocess.
+    - **Termination**: 
+        - Automatically terminates if the Game Host leaves.
+        - Can be **Kicked** via the UI, which forcibly kills the subprocess.
+
+## 5. Connection & Safety Features
+- **Graceful Termination**: When a Host leaves a multiplayer game:
+    - **Bots** are forcibly disconnected to ensure process cleanup.
+    - **Humans** receive a `game_terminated` signal, resetting their UI to the lobby *without* triggering a "Connection Error".
+- **Delayed Disconnect**: The server uses a `delayed_disconnect` helper to ensure final termination messages are delivered before the socket is closed.
+
+## 6. API Protocol (WebSocket)
+All communication is JSON-based.
 
 | Action | Direction | Payload Structure | Description |
 | :--- | :--- | :--- | :--- |
-| **New Game** | Client → Server | `{"type": "new_game", "difficulty": "medium"}` | Request to destroy current game (if any) and start fresh. |
-| **Reveal** | Client → Server | `{"type": "reveal", "x": 5, "y": 3}` | Reveal a specific cell. Triggers flood-fill if 0. |
-| **Flag** | Client → Server | `{"type": "flag", "x": 5, "y": 3}` | Toggle flag on a covered cell. |
-| **Game Start** | Server → Client | `{"type": "game_start", "payload": { "grid": [...], "state": "playing", ... }}` | Sent on reconnection (restore) or after New Game. |
-| **Update** | Server → Client | `{"type": "game_update", "payload": { "grid": [...], "state": "won" }}` | Sent after a move causes a change. |
-| **Error** | Server → Client | `{"type": "error", "message": "Invalid Move"}` | Sent if validation fails. |
-
-## 5. Future Roadmap (Phase 2)
-
-### Phase 2.1: Minesweeper Bot (`orion_minesweeper_core.py`)
-Development of an autonomous AI agent capable of solving Minesweeper games.
-- **Algorithms**: Hybrid usage of **CSP (Constraint Satisfaction)** for logical deduction and **Probabilistic Models** for making the safest optimal guess in ambiguous situations.
-- **Architecture**: Will be built as a standalone service utilizing the `MinesweeperClient` SDK.
-
-### Phase 2.2: Multiplayer
-- **Lobbies**: Upgrading `GameManager` to support "Rooms" where multiple users can join.
-- **Race Mode**: Real-time 1v1 battles where two players solve identical boards. First to clear wins.
+| **New Game** | Client → Server | `{"type": "new_game", "mode": "classic", "first_move": {x,y}}` | Starts a new game. Supports "First Move" for lazy creation. |
+| **Join Game** | Client → Server | `{"type": "join_game", "game_id": "..."}` | Joins an existing multiplayer lobby. |
+| **Summon Bot** | Client → Server | `{"type": "summon_bot", "game_id": "..."}` | Spawns an AI bot in the lobby. |
+| **Kick Player** | Client → Server | `{"type": "kick_player", "target_id": "..."}` | Removes a player (Bot) from the game. |
+| **Leave Game** | Client → Server | `{"type": "leave_game", "game_id": "..."}` | Host destroys game; Client leaves lobby. |
+| **Game Terminated** | Server → Client | `{"type": "game_terminated", "message": "..."}` | Signals clients to return to lobby (Host left). |
+| **Game Update** | Server → Client | `{"type": "game_update", "payload": {...}}` | Broadcasts grid changes, scores, and turn info. |
