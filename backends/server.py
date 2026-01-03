@@ -177,7 +177,6 @@ async def lifespan(app: FastAPI):
     app.state.auth_manager = auth_manager
 
     # Attach to state for Routers
-    yield # Start serving
     
     # --- AUTO BACKUP SCHEDULER ---
     async def auto_backup_scheduler():
@@ -217,6 +216,30 @@ async def lifespan(app: FastAPI):
         if backup_db:
             # Start loop (it runs one backup immediately)
             asyncio.create_task(auto_backup_scheduler())
+
+        # --- MINESWEEPER GC SCHEDULER ---
+        async def minesweeper_cleanup_scheduler():
+            try:
+                # Local import to check availability
+                from minesweeper.routes import game_manager
+                if not game_manager: return
+                
+                logger.info("Minesweeper GC Scheduler Started (Interval: 5m)")
+                while True:
+                    await asyncio.sleep(5 * 60) # Wait 5 minutes
+                    try:
+                        # count = game_manager.cleanup_stale_games(max_age_seconds=600)
+                        count = await asyncio.to_thread(game_manager.cleanup_stale_games, 600)
+                        if count > 0:
+                            logger.info(f"Minesweeper GC: Purged {count} stale games.")
+                    except Exception as e:
+                        logger.error(f"Minesweeper GC Error: {e}")
+            except (ImportError, ModuleNotFoundError):
+                logger.warning("Minesweeper module not found, GC disabled.")
+            except Exception as e:
+                logger.error(f"Minesweeper GC Startup Error: {e}")
+
+        asyncio.create_task(minesweeper_cleanup_scheduler())
 
     except Exception as e:
         logger.critical(f"Failed to init OrionCore: {e}")

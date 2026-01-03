@@ -2,7 +2,7 @@
 import React from 'react';
 import { RefreshCw, Play } from 'lucide-react';
 
-const Controls = ({ difficulty, setDifficulty, onNewGame, gameState, minesRemaining, timeElapsed }) => {
+const Controls = ({ difficulty, setDifficulty, onRestart, gameState, minesRemaining, timeElapsed, disabled }) => {
     // Format seconds to MM:SS
     const formatTime = (seconds) => {
         const mins = Math.floor(seconds / 60);
@@ -20,6 +20,7 @@ const Controls = ({ difficulty, setDifficulty, onNewGame, gameState, minesRemain
             border: '1px solid rgba(255, 255, 255, 0.05)',
             borderRadius: '16px',
             width: '100%',
+            boxSizing: 'border-box', // Fix overflow
             justifyContent: 'space-between',
             flexWrap: 'wrap' // Allow wrapping on very small screens
         }}>
@@ -57,15 +58,17 @@ const Controls = ({ difficulty, setDifficulty, onNewGame, gameState, minesRemain
                 <select
                     value={difficulty}
                     onChange={(e) => setDifficulty(e.target.value)}
+                    disabled={disabled}
                     style={{
-                        background: 'rgba(0, 0, 0, 0.3)',
+                        background: disabled ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.3)',
+                        opacity: disabled ? 0.5 : 1,
                         color: 'white',
                         border: '1px solid rgba(255, 255, 255, 0.1)',
                         borderRadius: '8px',
                         padding: '0.5rem 1rem',
                         fontSize: '0.9rem',
                         outline: 'none',
-                        cursor: 'pointer'
+                        cursor: disabled ? 'not-allowed' : 'pointer'
                     }}
                 >
                     <option value="easy">Easy</option>
@@ -74,7 +77,7 @@ const Controls = ({ difficulty, setDifficulty, onNewGame, gameState, minesRemain
                 </select>
 
                 <button
-                    onClick={onNewGame}
+                    onClick={onRestart}
                     className="interactive-btn"
                     style={{
                         display: 'flex',
@@ -89,8 +92,8 @@ const Controls = ({ difficulty, setDifficulty, onNewGame, gameState, minesRemain
                         fontWeight: 600
                     }}
                 >
-                    {gameState === 'playing' ? <RefreshCw size={16} /> : <Play size={16} />}
-                    {gameState === 'playing' ? 'Restart' : 'New Game'}
+                    <RefreshCw size={16} />
+                    Restart
                 </button>
             </div>
         </div>

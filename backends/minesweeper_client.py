@@ -20,11 +20,21 @@ class MinesweeperClient:
         self.on_update: Optional[Callable[[Dict], None]] = None
         self._running = False
 
-    async def connect(self):
+    async def connect(self, username: str = None):
         """Establishes the WebSocket connection."""
+        from urllib.parse import quote
+        
         url = f"{self.base_url}/ws/game"
+        
+        # Build query params
+        params = []
         if self.token:
-            url += f"?token={self.token}"
+            params.append(f"token={quote(self.token)}")
+        if username:
+            params.append(f"username={quote(username)}")
+            
+        if params:
+            url += "?" + "&".join(params)
             
         logger.info(f"Connecting to {url}...")
         try:
@@ -61,19 +71,54 @@ class MinesweeperClient:
             
         elif msg_type == "game_update":
             payload = data.get("payload", {})
-            # Merge updates into local state (simplified)
-            # In a real app we'd deep merge, but for now just replacing what we can
-            updates = payload.get("updates", [])
             
-            # Note: We don't have the full grid here to update individual cells easily 
-            # without a grid object. This SDK just exposes the raw update event.
-            if self.on_update: self.on_update(payload)
+            # Update local grid state
+            if self.game_state and "grid" in self.game_state:
+                updates = payload.get("updates", [])
+                for u in updates:
+                    ux, uy, val = u.get("x"), u.get("y"), u.get("value")
+                    if 0 <= uy < len(self.game_state["grid"]) and 0 <= ux < len(self.game_state["grid"][0]):
+                        self.game_state["grid"][uy][ux] = val
+                
+                # Update mines/flags count if present
+                if "mines_remaining" in payload:
+                    self.game_state["mines_remaining"] = payload["mines_remaining"]
+                if "state" in payload:
+                    self.game_state["state"] = payload["state"]
+                    
+                # Multiplayer Fields
+                if "scores" in payload:
+                    self.game_state["scores"] = payload["scores"]
+                if "current_turn" in payload:
+                    self.game_state["current_turn"] = payload["current_turn"]
+                if "mode" in payload:
+                    self.game_state["mode"] = payload["mode"]
+                    
+                if "flag_update" in payload:
+                    f = payload["flag_update"]
+                    fx, fy, is_flagged = f.get("x"), f.get("y"), f.get("flagged")
+                    if 0 <= fy < len(self.game_state["grid"]) and 0 <= fx < len(self.game_state["grid"][0]):
+                        # If flagged -> "F", if unflagged -> None (Hidden)
+                        self.game_state["grid"][fy][fx] = "F" if is_flagged else None
+
+            if self.on_update: self.on_update(self.game_state)
             
         elif msg_type == "error":
             logger.error(f"Server Error: {data.get('message')}")
 
-    async def new_game(self, difficulty: str = "medium"):
-        await self._send({"type": "new_game", "difficulty": difficulty})
+    async def new_game(self, difficulty: str = "medium", mode: str = "classic", invite_ids: list = None):
+        payload = {
+            "type": "new_game", 
+            "difficulty": difficulty,
+            "mode": mode
+        }
+        if invite_ids:
+            payload["invite_ids"] = invite_ids
+            
+        await self._send(payload)
+
+    async def join_game(self, game_id: str):
+        await self._send({"type": "join_game", "game_id": game_id})
 
     async def reveal(self, x: int, y: int):
         await self._send({"type": "reveal", "x": x, "y": y})
