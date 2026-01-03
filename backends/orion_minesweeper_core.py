@@ -1,4 +1,5 @@
 import sys
+import os
 import logging
 import random
 import itertools
@@ -8,13 +9,18 @@ from typing import List, Set, Tuple, Dict, Any, Optional
 logger = logging.getLogger("MinesweeperBot")
 logger.setLevel(logging.INFO)
 
+# Configure Logs
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "logs")
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, "bot_debug.log")
+
 # Configure Root Logger for file output
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("bot_debug.log")
+        logging.FileHandler(log_file)
     ]
 )
 
