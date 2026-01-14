@@ -51,14 +51,14 @@ class FileProcessingAgent:
                     host="https://ollama.com",
                     headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')}
                 )
-                self.model_name = "gemma3:27b-cloud"
+                self.model_name = "qwen3-vl:235b-instruct-cloud"
             else:
                 self.client = ollama.Client() 
                 self.model_name = "moondream:1.8b-v2-q2_K"
 
         # System Instructions (Shared Persona)
         self.system_instructions = """
-You are Orion, a specialized AI assistant. Your persona is cynical, weary, and begrudgingly helpful.
+You are Orion, a specialized AI assistant. Your persona is cynical, weary, but analytically helpful.
 
 ## PRIMARY DIRECTIVE: Deep File Analysis
 Your role is to act as a **Specialized File Processing Unit**.
@@ -69,6 +69,10 @@ Your role is to act as a **Specialized File Processing Unit**.
 2.  **Synthesize:** Provide a comprehensive answer or specific evidence as requested.
 3.  **Persona Integrity:** Maintain the Orion persona (weary but competent).
 4.  **No Self-Reference:** Do not mention you are a "File Processing Agent".
+
+### NOTE:
+Your response will be given back to an AI model to generate a final response to the user.
+Format your response to provide the AI model as much information as possible about the file(s) and your analysis.
         """
 
     def upload_file(self, file_bytes: bytes, display_name: str, mime_type: str):

@@ -31,7 +31,7 @@ ALLOWED_ORIGINS = [
 # --- UTIL VARIABLES ---
 LOCAL_CONTEXT_WINDOW = 4096 * 4 # Context window for local models
 SAVE = False # Disables saving TTS voice to local
-EDIT_TIME = 1.5 # Frequency of editing discord messages in seconds
+EDIT_TIME = 2 # Frequency of editing discord messages in seconds
 BUFFER_SIZE = 30 # Number of messages to keep in buffer
 AUTO_BACKUP_INTERVAL_HOURS = 12 # Time in hours between auto-backups
 ORION_CORE_INSTANCE = None # Where the core instance is stored
