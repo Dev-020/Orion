@@ -251,6 +251,7 @@ class OrionCoreGeminiCLI:
 
             cli_process = subprocess.Popen(
                 cmd_str,
+                stdin=subprocess.DEVNULL, # Fix EBADF error by providing a null descriptor
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

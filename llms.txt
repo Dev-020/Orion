@@ -36,7 +36,7 @@ The project uses a comprehensive "Docs-as-Code" structure. Refer to these files 
 
 ## Current Progress (March 2026)
 -   **Gemini CLI Integration**: Successfully implemented `OrionCoreGeminiCLI`. This core uses an ephemeral subprocess to wrap the Gemini CLI as its "brain," allowing for native tool usage and high-quality reasoning without direct API SDK overhead in certain environments.
--   **Windows Stability**: Fixed critical `WinError 2` and "Infinite Research Loop" bugs by moving to `shell=True` execution and relative-path prompt management.
+- **Windows Stability**: Fixed critical `WinError 2`, `EBADF: bad file descriptor`, and "Infinite Research Loop" bugs by moving to `shell=True` execution, `stdin=subprocess.DEVNULL`, and relative-path prompt management.
 -   **Status**: Core communication and streaming are fully functional. Regression tests are in place. Ready for frontend integration.
 
 ### Frontend (`frontends/`)
