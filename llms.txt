@@ -42,6 +42,8 @@ The project uses a comprehensive "Docs-as-Code" structure. Refer to these files 
     -   React 19, Vite, Context API, CSS Variables.
 -   **Discord Bot**: [docs/frontend/discord_bot.md](docs/frontend/discord_bot.md)
     -   `bot.py` (py-cord implementation).
+-   **Telegram Bot**: [docs/frontend/telegram_bot.md](docs/frontend/telegram_bot.md)
+    -   `telegram_bot.py` (python-telegram-bot v21+ implementation).
 -   **Legacy GUI**: [docs/frontend/legacy_gui.md](docs/frontend/legacy_gui.md)
     -   `gui.py` (DEPRECATED/BROKEN - Needs specific refactor).
 

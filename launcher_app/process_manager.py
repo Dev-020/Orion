@@ -38,6 +38,10 @@ PROCESSES = {
         "cmd": ["ngrok", "http", "--domain=soila-noninstructional-sallie.ngrok-free.dev", "8000", "--log", "stdout"],
         "name": "Ngrok Tunnel",
         "capture_stdout": True
+    },
+    "telegram": {
+        "cmd": [sys.executable, "-u", "frontends/telegram_bot.py"],
+        "name": "Telegram Bot"
     }
 }
 

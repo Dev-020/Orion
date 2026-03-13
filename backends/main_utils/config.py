@@ -49,7 +49,7 @@ VOICE = False # TTS voice support
 VISION = False # Vision support
 
 # --- AI MODELS ---
-LOCAL_MODEL = "deepseek-v3.1:671b-cloud" # Local model Ollama API
+LOCAL_MODEL = "qwen3.5:397b-cloud" # Local model Ollama API
 AI_MODEL = "gemini-3-flash" # AI model for Gemini API
 
 """
