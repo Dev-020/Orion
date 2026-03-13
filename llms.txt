@@ -28,14 +28,16 @@ The project uses a comprehensive "Docs-as-Code" structure. Refer to these files 
 -   **Overview**: [docs/backend/index.md](docs/backend/index.md)
 -   **Core Logic**: [docs/backend/core_logic.md](docs/backend/core_logic.md)
     -   `server.py` (FastAPI Entry)
-    -   `orion_core.py` (The Brain)
+    -   `orion_core.py` (The Brain - GenAI SDK)
+    -   `orion_core_geminicli.py` (NEW: Headless CLI Wrapper Core)
+    -   `orion_core_lite.py` (Local/Ollama Backend)
 -   **Agents**: [docs/backend/agents.md](docs/backend/agents.md)
-    -   `file_processing_agent.py` (File analysis)
--   **Utilities**: [docs/backend/main_utils.md](docs/backend/main_utils.md)
-    -   `main_functions.py` (Tool definitions)
-    -   `auth_manager.py` (User/Token management)
--   **Maintenance**: [docs/backend/system_utils.md](docs/backend/system_utils.md)
-    -   `backup_db.py` (Automatic Backups)
+-   **Test Utils**: [backends/test_utils/test_geminicli_core.py] (CLI Core regression testing)
+
+## Current Progress (March 2026)
+-   **Gemini CLI Integration**: Successfully implemented `OrionCoreGeminiCLI`. This core uses an ephemeral subprocess to wrap the Gemini CLI as its "brain," allowing for native tool usage and high-quality reasoning without direct API SDK overhead in certain environments.
+-   **Windows Stability**: Fixed critical `WinError 2` and "Infinite Research Loop" bugs by moving to `shell=True` execution and relative-path prompt management.
+-   **Status**: Core communication and streaming are fully functional. Regression tests are in place. Ready for frontend integration.
 
 ### Frontend (`frontends/`)
 -   **Web App**: [docs/frontend/index.md](docs/frontend/index.md) & [docs/frontend/web_structure.md](docs/frontend/web_structure.md)

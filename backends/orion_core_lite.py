@@ -681,12 +681,6 @@ class OrionLiteCore:
     def _load_state_on_restart(self) -> bool:
         return self.chat.load_state_on_restart()
     
-    def execute_restart(self):
-         # Lite core hard restart just means exit, bot.py handles loop.
-         # But to be consistent with main_utils logic we can use python executable.
-         python = sys.executable
-         os.execl(python, python, *sys.argv)
-
     def trigger_instruction_refresh(self, full_restart: bool = False):
         """
         WHAT (Purpose): Performs a full "hot-swap or an “Orchestrated Restart” of your core programming. 

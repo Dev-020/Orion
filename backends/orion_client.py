@@ -336,15 +336,3 @@ class OrionClient:
                 return val
         return RemoteSessionDict(self)
 
-    # --- Legacy/Deprecated Methods (Stubs to prevent crashes) ---
-    def save_state_for_restart(self):
-        logger.warning("Client: save_state_for_restart called but not supported in Client-Server mode.")
-        return False
-
-    def execute_restart(self):
-        logger.warning("Client: execute_restart called. Please use the Launcher TUI to restart services.")
-        pass
-
-    def shutdown(self):
-        # Client shutdown, generic cleanup
-        pass

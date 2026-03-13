@@ -54,6 +54,11 @@ try:
 except ImportError:
     pass
 
+try:
+    from orion_core_geminicli import OrionCoreGeminiCLI
+except ImportError:
+    pass
+
 # --- LOGGING SETUP ---
 # Server logs go to file primarily, with console output for debugging/TUI.
 # Standard log location: logs/server.log
@@ -204,6 +209,13 @@ async def lifespan(app: FastAPI):
                  logger.critical("OrionLiteCore not imported. Check dependencies (googleapiclient etc).")
                  # We can't proceed with this backend
                  # core_instance remains None, health check will show 'initializing' or we should set a 'failed' state
+        elif config.BACKEND == "cli":
+             if 'OrionCoreGeminiCLI' in globals():
+                 logger.info("Initializing OrionCoreGeminiCLI (Gemini CLI Backend)...")
+                 core_instance = OrionCoreGeminiCLI()
+                 logger.info("OrionCoreGeminiCLI Initialized Successfully.")
+             else:
+                 logger.critical("OrionCoreGeminiCLI not imported. Check dependencies.")
         else:
              if 'OrionCore' in globals():
                  logger.info("Initializing OrionCore (API Backend)...")

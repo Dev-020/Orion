@@ -38,7 +38,7 @@ ORION_CORE_INSTANCE = None # Where the core instance is stored
 
 # --- CORE CONFIGS ---
 PERSONA = "default"
-BACKEND = "ollama" # "api" or "ollama"
+BACKEND = "cli" # "api" or "ollama"
 VERTEX = False # VertexAI SDK / GenAI SDK
 PAST_MEMORY = True # Past Semantic Memory Support
 THINKING_SUPPORT = True # Global flag: Auto-disables if model rejects 'think'

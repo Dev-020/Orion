@@ -268,12 +268,6 @@ class OrionCore:
     def _load_state_on_restart(self) -> bool:
         return self.chat.load_state_on_restart()
     
-    def execute_restart(self):
-         """Executes a hard restart of the script."""
-         # Re-uses logic compatible with main_utils
-         python = sys.executable
-         os.execl(python, python, *sys.argv)
-    
     def get_session_mode(self, session_id: str) -> str:
         return self.chat.get_session_mode(session_id)
 
@@ -798,7 +792,7 @@ class OrionCore:
             attachments=attachments_for_db,
             token_count=token_count,
             vdb_context=json.dumps(context_ids_for_db), # Serialize for storage
-            model_source=(self.local_model if None else self.model_name), # Fixme: No self.local_model access? OrionPro uses API model
+            model_source=self.model_name,
             user_content_obj=user_content_for_db,
             model_content_obj=model_content_obj,
             tool_calls_list=new_tool_turns
