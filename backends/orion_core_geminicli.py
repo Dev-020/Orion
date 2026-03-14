@@ -219,7 +219,9 @@ class OrionCoreGeminiCLI:
 
         # --- Build Data Envelope ---
         data_envelope = {
-            "system_notifications": [],
+            "system_notifications": [
+                "[System: The 'orion' skill is available with codebase-specific tools (SQL, VDB, multi-modal files). Please call activate_skill('orion') to enable them.]"
+            ],
             "user_prompt": user_prompt,
             "vdb_context": vdb_response,
             "auth": {
