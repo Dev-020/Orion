@@ -3,8 +3,9 @@ import sys
 import json
 import logging
 import subprocess
+import uuid
 import time
-from typing import Generator
+from typing import Generator, Dict, Optional
 from datetime import datetime, timezone
 
 from google.genai import types
@@ -16,13 +17,24 @@ from system_utils import orion_replay, orion_tts
 
 logger = logging.getLogger(__name__)
 
+# --- Paths ---
+INSTRUCTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instructions')
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GEMINI_MD_PATH = os.path.join(PROJECT_ROOT, 'GEMINI.md')
+
+INSTRUCTIONS_FILES = [
+    'Primary_Directive.md', 
+    'master_manifest.json'
+]
+
+
 class OrionCoreGeminiCLI:
     def __init__(self, model_name: str = config.AI_MODEL, persona: str = "default"):
         """
-        Initializes the Gemini CLI wrapper version of Orion Core.
-        Architecture mimics OrionCore but uses an ephemeral terminal process per-generation as the brain.
+        Initializes the Gemini CLI "Thin Wrapper" version of Orion Core.
+        Delegates chat history, tool execution, and persona to the Gemini CLI natively.
         """
-        logger.info(f"--- [CLI Core] Initializing Gemini CLI wrapper ---")
+        logger.info(f"--- [CLI Core] Initializing Gemini CLI Thin Wrapper ---")
         
         self.restart_pending = False
         config.ORION_CORE_INSTANCE = self
@@ -32,12 +44,22 @@ class OrionCoreGeminiCLI:
         self.persona = config.PERSONA = persona
         self.backend = "cli"
         
-        # Tools: Let CLI handle them natively if configured
+        # Tools: CLI handles them natively
         self.tools = []
         self.tool_map = {}
 
         # Initialize Database access
         functions.initialize_persona(self.persona)
+        
+        # --- CLI Path Resolution (cached once) ---
+        self.cli_js_path = self._resolve_cli_path()
+        
+        # --- CLI Session ID Mapping ---
+        # Maps Orion session IDs (from frontend/server) to Gemini CLI session IDs
+        self.cli_sessions: Dict[str, str] = {}
+
+        # --- Generate GEMINI.md from Primary Directive ---
+        self._generate_gemini_md()
         
         # Vision System (Optional)
         self.vision_attachments = {}
@@ -67,8 +89,61 @@ class OrionCoreGeminiCLI:
         if not self.chat.load_state_on_restart():
              pass 
         
-        logger.info(f"--- [CLI Core] Online. Ready for headless prompt execution. ---")
+        logger.info(f"--- [CLI Core] Online. Thin Wrapper ready. CLI: {self.cli_js_path} ---")
 
+    # =========================================================================
+    # INITIALIZATION HELPERS
+    # =========================================================================
+
+    def _resolve_cli_path(self) -> str:
+        """Resolves the Gemini CLI entry point path once at startup."""
+        try:
+            npm_root = subprocess.check_output(
+                ['npm', 'root', '-g'], 
+                shell=True if sys.platform == 'win32' else False
+            ).decode().strip()
+            cli_path = os.path.join(npm_root, '@google', 'gemini-cli', 'dist', 'index.js')
+            if os.path.exists(cli_path):
+                logger.info(f"--- [CLI Core] Resolved CLI path: {cli_path} ---")
+                return cli_path
+        except Exception as e:
+            logger.warning(f"Failed to resolve CLI via npm root: {e}")
+        
+        # Fallback: assume 'gemini' is in PATH
+        logger.warning("--- [CLI Core] Falling back to 'gemini' command ---")
+        return "gemini"
+
+    def _generate_gemini_md(self):
+        """
+        Reads all instruction files and writes a processed GEMINI.md to the project root.
+        The Gemini CLI auto-loads this file as persistent system context.
+        """
+        prompt_parts = []
+        for filename in INSTRUCTIONS_FILES:
+            filepath = os.path.join(INSTRUCTIONS_DIR, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    prompt_parts.append(f.read())
+            except FileNotFoundError:
+                logger.warning(f"Instruction file not found, skipping: {filepath}")
+
+        if not prompt_parts:
+            logger.error("--- [CLI Core] No instruction files found! GEMINI.md will be empty. ---")
+            return
+
+        # Process content for CLI compatibility
+        content = "\n\n---\n\n".join(prompt_parts)
+        
+        try:
+            with open(GEMINI_MD_PATH, 'w', encoding='utf-8') as f:
+                f.write(content)
+            logger.info(f"--- [CLI Core] Generated GEMINI.md at {GEMINI_MD_PATH} ---")
+        except Exception as e:
+            logger.error(f"--- [CLI Core] Failed to write GEMINI.md: {e} ---")
+
+    # =========================================================================
+    # CALLBACKS
+    # =========================================================================
 
     def _vision_file_handler(self, file_path: str):
         """Callback for vision system."""
@@ -79,6 +154,10 @@ class OrionCoreGeminiCLI:
         except Exception as e:
             logger.error(f"[Vision Error] {e}")
 
+    # =========================================================================
+    # PROMPT PREPARATION (Simplified — CLI handles history & persona)
+    # =========================================================================
+
     def _get_session(self, session_id: str) -> list:
         return self.chat.get_session(session_id)
 
@@ -87,15 +166,18 @@ class OrionCoreGeminiCLI:
             data = json.loads(raw_json)
             if not data.get('documents') or not data['documents'][0]:
                 return ""
-
             output_lines = [f"--- Context from {source_name} ---"]
-            for i, doc in enumerate(data['documents'][0]):
+            for doc in data['documents'][0]:
                  output_lines.append(f"- {doc}")
-            return "\\n".join(output_lines)
+            return "\n".join(output_lines)
         except:
             return ""
 
     def _prepare_prompt_data(self, session_id: str, user_prompt: str, file_check: list, user_id: str, user_name: str):
+        """
+        Builds the data envelope with VDB context, user metadata, and prompt.
+        History and persona are handled by the CLI via --resume and GEMINI.md.
+        """
         logger.info(f"----- Processing prompt for session {session_id} and user {user_name} -----")
         chat_session = self._get_session(session_id)
         
@@ -113,7 +195,7 @@ class OrionCoreGeminiCLI:
                 formatted_deep_mem = self._format_vdb_results_for_context(deep_memory_results_raw, "Deep Memory")
                 formatted_ltm = self._format_vdb_results_for_context(long_term_results_raw, "Long-Term Memory")
                 
-                formatted_vdb_context = f"{formatted_deep_mem}\\n{formatted_ltm}".strip()
+                formatted_vdb_context = f"{formatted_deep_mem}\n{formatted_ltm}".strip()
             else:
                 formatted_vdb_context = ""
                 deep_memory_results_raw = "{}"
@@ -133,20 +215,28 @@ class OrionCoreGeminiCLI:
                 except Exception:
                     pass
 
-        vdb_response = f'[Relevant Context:\\n{formatted_vdb_context}]' if formatted_vdb_context else ""
+        vdb_response = f'[Relevant Context:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
 
+        # --- Build Data Envelope ---
         data_envelope = {
             "system_notifications": [],
             "user_prompt": user_prompt,
-            "vdb_context": vdb_response
+            "vdb_context": vdb_response,
+            "auth": {
+                "user_id": user_id,
+                "user_name": user_name,
+                "session_id": session_id
+            },
+            "timestamp_utc": datetime.now(timezone.utc).isoformat()
         }
 
         if config.VISION and self.vision_attachments:
              data_envelope["system_notifications"].append(f"[Vision: Attached {self.vision_attachments['display_name']}]")
              self.vision_attachments = {}
 
-        injected_text_buffers = []
-        file_attachments_for_cli = []
+        # --- File Handling ---
+        # Files are passed directly to the CLI — no pre-processing needed.
+        file_paths_for_cli = []
         attachments_for_db = []
 
         if file_check:
@@ -163,30 +253,29 @@ class OrionCoreGeminiCLI:
                  except Exception as e:
                      logger.warning(f"Metadata extract warning: {e}")
 
-                 # Provide file path directly to CLI if local
+                 # Pass file paths directly to CLI
                  local_path = getattr(f, 'local_path', None)
                  if local_path and os.path.exists(local_path):
-                     file_attachments_for_cli.append(f"@{local_path}")
-                 elif hasattr(f, 'text_content'):
+                     file_paths_for_cli.append(local_path)
+                 elif hasattr(f, 'text_content') and f.text_content:
+                     # For text-extracted files, inject content into the prompt
                      header = f"\n\n--- FILE: {f.display_name} ---\n"
                      if getattr(f, 'is_analysis', False):
                          header = f"\n\n--- FILE ANALYSIS: {f.display_name} ({f.mime_type}) ---\n[System: The following is an AI analysis of the file.]\n"
-                     injected_text_buffers.append(f"{header}{f.text_content}")
+                     data_envelope["user_prompt"] += f"{header}{f.text_content}"
 
-        if file_attachments_for_cli:
-             data_envelope["system_notifications"].extend(file_attachments_for_cli)
-
-        if injected_text_buffers:
-            data_envelope["user_prompt"] += "".join(injected_text_buffers)
-
-        # Re-build for db purposes
+        # Store for DB archival
         user_content_for_db = types.UserContent(parts=[types.Part.from_text(text=json.dumps(data_envelope, indent=2))])
 
-        return (None, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db)
+        return (data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db, file_paths_for_cli)
 
-    def _generate_stream_response(self, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db):
-        """Handles streaming generation by spawning an ephemeral CLI subprocess."""
-        logger.info(f"----- Sending Prompt to Orion CLI Core . . . -----")
+    # =========================================================================
+    # GENERATION (Thin Wrapper — spawn CLI with --resume)
+    # =========================================================================
+
+    def _generate_stream_response(self, data_envelope, session_id, user_id, user_name, user_prompt, attachments_for_db, context_ids_for_db, user_content_for_db, file_paths_for_cli):
+        """Spawns CLI with --resume and streams JSONL output back to the frontend."""
+        logger.info(f"----- Sending Prompt to Gemini CLI (Thin Wrapper) . . . -----")
         
         full_response_text = ""
         token_count = 0
@@ -194,91 +283,70 @@ class OrionCoreGeminiCLI:
         temp_file_path = None
 
         try:
-            # 1. Gather Chat History
-            chat_session = self._get_session(session_id)
-            history_text = []
-            if chat_session:
-                history_text.append("--- PREVIOUS CHAT HISTORY ---")
-                for exchange in chat_session[-10:]: # Pass last 10 messages context to CLI
-                    history_text.append(f"User: {exchange.get('prompt', '')}")
-                    history_text.append(f"Assistant: {exchange.get('response', '')}")
-                history_text.append("-----------------------------")
-
-            # 2. Format the payload string
-            parts_to_send = []
-            if history_text:
-                parts_to_send.extend(history_text)
-            
-            if data_envelope.get("vdb_context"):
-                parts_to_send.append(data_envelope["vdb_context"])
-            
-            for note in data_envelope.get("system_notifications", []):
-                parts_to_send.append(note)
-                
-            # Only add "User: " if we have history or other context parts
-            if parts_to_send:
-                parts_to_send.append(f"User: {data_envelope['user_prompt']}")
-            else:
-                parts_to_send.append(data_envelope['user_prompt'])
-            
-            final_prompt_string = "\n".join(parts_to_send)
-            logger.info(f"--- [DEBUG] Final Prompt being sent to CLI: ---")
-            logger.info(final_prompt_string)
-            logger.info(f"--- [DEBUG] END OF PROMPT ---")
-            
-            import uuid
-            # Use a local relative filename to avoid absolute path/backslash issues on Windows
-            temp_filename = f"orion_prompt_{uuid.uuid4().hex[:8]}.txt"
+            # 1. Write data envelope to JSON temp file
+            temp_filename = f"orion_prompt_{uuid.uuid4().hex[:8]}.json"
             with open(temp_filename, "w", encoding="utf-8") as f:
-                f.write(final_prompt_string)
+                json.dump(data_envelope, f, indent=2, ensure_ascii=False)
             temp_file_path = temp_filename
             
-            # 3. Spawn Subprocess and inject prompt
-            import sys
+            # 2. Build CLI command
+            cmd_parts = [f'node "{self.cli_js_path}"']
             
-            # Bypassing the cmd wrapper on Windows for cleaner stdin handling
-            try:
-                npm_root = subprocess.check_output(['npm', 'root', '-g'], shell=True if sys.platform == 'win32' else False).decode().strip()
-                cli_js_path = os.path.join(npm_root, '@google', 'gemini-cli', 'dist', 'index.js')
-            except Exception as e:
-                logger.warning(f"Failed to find npm global root: {e}")
-                cli_js_path = "gemini" # Fallback
+            # Resume existing CLI session if we have a mapping
+            cli_session_id = self.cli_sessions.get(session_id)
+            if cli_session_id:
+                cmd_parts.append(f'--resume {cli_session_id}')
+            
+            cmd_parts.append(f'--prompt "@{temp_filename}"')
+            cmd_parts.append('-o stream-json')
+            cmd_parts.append('--yolo')
+            
+            # Append file references directly
+            for fpath in file_paths_for_cli:
+                cmd_parts.append(f'"@{fpath}"')
 
-            # Construct the command as a single string to use with shell=True
-            # This ensures the CLI receives the arguments exactly as if run in the terminal.
-            cmd_str = f'node "{cli_js_path}" --prompt "@{temp_filename}" --yolo -o stream-json -e none'
-            logger.info(f"--- [DEBUG] Executing Shell Command: {cmd_str}")
+            cmd_str = ' '.join(cmd_parts)
+            logger.info(f"--- [CLI Core] Executing: {cmd_str}")
 
+            # 3. Spawn subprocess
             cli_process = subprocess.Popen(
                 cmd_str,
-                stdin=subprocess.DEVNULL, # Fix EBADF error by providing a null descriptor
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
                 bufsize=1,
-                shell=True
+                shell=True,
+                cwd=PROJECT_ROOT  # Run from project root so GEMINI.md is found
             )
 
-            # 4. Stream Loop Reading
+            # 4. Stream JSONL output
             for line in iter(cli_process.stdout.readline, ''):
-                logger.debug(f"[CLI RAW] {line.strip()}")
                 if not line.strip():
                     continue
+                
+                logger.debug(f"[CLI RAW] {line.strip()}")
+                
                 try:
                     data = json.loads(line)
                     msg_type = data.get("type")
                     
                     if msg_type == "init":
-                        logger.info(f"[CLI Core] Initialized with Session ID: {data.get('session_id')}")
+                        # Capture CLI session ID for future --resume calls
+                        new_cli_session_id = data.get("session_id")
+                        if new_cli_session_id:
+                            self.cli_sessions[session_id] = new_cli_session_id
+                            logger.info(f"[CLI Core] Session mapped: {session_id} -> {new_cli_session_id}")
                     
                     elif msg_type == "message" and data.get("role") == "assistant":
                         content = data.get("content", "")
                         if content:
                             yield {"type": "token", "content": content}
                             full_response_text += content
-                            if getattr(config, 'VOICE', False): orion_tts.process_stream_chunk(content)
-                            
+                            if getattr(config, 'VOICE', False):
+                                orion_tts.process_stream_chunk(content)
+                                
                     elif msg_type == "tool_use":
                         tool_name = data.get("tool_name", "unknown")
                         logger.info(f"[CLI Core] Tool Called: {tool_name}")
@@ -287,7 +355,7 @@ class OrionCoreGeminiCLI:
                     elif msg_type == "tool_result":
                         tool_name = data.get("tool_id", "unknown")
                         output = data.get("output", "")
-                        logger.info(f"[CLI Core] Tool Result Received: {tool_name}")
+                        logger.info(f"[CLI Core] Tool Result: {tool_name}")
                         new_tool_turns.append({
                             "name": tool_name,
                             "args": {},
@@ -296,17 +364,19 @@ class OrionCoreGeminiCLI:
                         yield {"type": "status", "content": f"Tool result parsed"}
                         
                     elif msg_type == "result":
-                        logger.info(f"[CLI Core] End of generation flagged directly by CLI result state.")
+                        # Extract token usage if available
+                        usage = data.get("usage", {})
+                        if usage:
+                            token_count = usage.get("total_tokens", 0)
+                        logger.info(f"[CLI Core] Generation complete.")
                         break
                         
                 except json.JSONDecodeError as jde:
-                    # Ignore non-JSON terminal noise unless it looks like it should have been JSON
                     if "{" in line:
                         logger.debug(f"[CLI JSON Error] {jde} on line: {line.strip()}")
-                    pass
             
             if not full_response_text:
-                logger.warning("[CLI Core] No content was received from the CLI process.")
+                logger.warning("[CLI Core] No content received from CLI process.")
                 yield {"type": "token", "content": "[No response from CLI core]"}
                     
             # Cleanup process
@@ -322,10 +392,14 @@ class OrionCoreGeminiCLI:
                 except Exception as cleanup_err:
                     logger.warning(f"Failed to cleanup temp file {temp_file_path}: {cleanup_err}")
 
-        if getattr(config, 'VOICE', False): orion_tts.flush_stream()
-        token_count = len(full_response_text) // 3
+        if getattr(config, 'VOICE', False):
+            orion_tts.flush_stream()
+        
+        # Fallback token estimate if CLI didn't provide usage
+        if token_count == 0:
+            token_count = len(full_response_text) // 3
 
-        # Finalize Exchange
+        # --- Archive Exchange ---
         logger.info(f"--- [CLI Core] Archiving exchange to database... ---")
         try:
             self.chat.archive_exchange(
@@ -344,31 +418,35 @@ class OrionCoreGeminiCLI:
             )
         except Exception as arch_err:
             logger.error(f"--- [CLI Core] Archival Error: {arch_err} ---")
-            # We don't yield this error as the exchange was successfully presented to the user.
         
         logger.info(f"----- Response Generated ({token_count} tokens) -----")
-        yield {"type": "done"}
+        yield {"type": "usage", "token_count": token_count, "restart_pending": self.restart_pending}
+
+    # =========================================================================
+    # PUBLIC API (matches interface expected by server.py)
+    # =========================================================================
 
     def process_prompt(self, session_id: str, user_prompt: str, file_check: list = None, user_id: str = None, user_name: str = "User", stream: bool = False) -> Generator:
         file_check = file_check or []
         try:
             yield {"type": "status", "content": "Initializing Request via CLI..."}
             
-            # Enforce 10k token limit buffer
+            # Enforce token limit buffer
             self.chat.enforce_token_limit(session_id, token_limit=14000)
             
-            yield {"type": "status", "content": "Preparing Wrapper Context..."}
+            yield {"type": "status", "content": "Preparing Context..."}
             
-            (_, data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db) = \
+            (data_envelope, context_ids_for_db, attachments_for_db, user_content_for_db, file_paths_for_cli) = \
                 self._prepare_prompt_data(session_id, user_prompt, file_check, user_id, user_name)
             
             yield {"type": "status", "content": "Thinking..."}
             
             generator = self._generate_stream_response(
                 data_envelope, session_id, user_id, user_name, user_prompt, 
-                attachments_for_db, context_ids_for_db, user_content_for_db
+                attachments_for_db, context_ids_for_db, user_content_for_db, file_paths_for_cli
             )
-            for item in generator: yield item
+            for item in generator:
+                yield item
 
         except Exception as e:
             logger.error(f"Error in process_prompt: {e}")
@@ -388,7 +466,9 @@ class OrionCoreGeminiCLI:
         return self.chat.load_state_on_restart()
     
     def trigger_instruction_refresh(self, full_restart: bool = False):
-        return "Instructions Refreshed. CLI automatically handles local dir."
+        # Re-generate GEMINI.md from latest instruction files
+        self._generate_gemini_md()
+        return "GEMINI.md regenerated. CLI will auto-load on next prompt."
 
     def shutdown(self):
         logger.info("--- CLI Core shutting down. ---")
@@ -400,11 +480,8 @@ class OrionCoreGeminiCLI:
             orion_replay.shutdown() 
 
     def execute_restart(self):
-        """
-        Executes the final step of the restart by shutting down gracefully
-        and then replacing the current process.
-        """
+        """Graceful shutdown + process replacement."""
         logger.info("  - State saved. Performing graceful shutdown before restart...")
-        self.shutdown() # <-- CRITICAL: Call the shutdown method here.
+        self.shutdown()
         logger.info("  - Shutdown complete. Executing process replacement...")
         os.execv(sys.executable, ['python'] + sys.argv)

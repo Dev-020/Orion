@@ -22,7 +22,8 @@ graph TD
         
         Server -->|Calls| Core[OrionCore]
         
-        Core -->|Uses| GenAI[Google GenAI]
+        Core -->|Uses| GenAI[Google GenAI SDK]
+        Core -->|Uses| GeminiCLI[Gemini CLI]
         Core -->|Uses| Ollama[Local Ollama]
         Core -->|Reads/Writes| DB[(SQLite DB)]
     end

@@ -35,9 +35,9 @@ The project uses a comprehensive "Docs-as-Code" structure. Refer to these files 
 -   **Test Utils**: [backends/test_utils/test_geminicli_core.py] (CLI Core regression testing)
 
 ## Current Progress (March 2026)
--   **Gemini CLI Integration**: Successfully implemented `OrionCoreGeminiCLI`. This core uses an ephemeral subprocess to wrap the Gemini CLI as its "brain," allowing for native tool usage and high-quality reasoning without direct API SDK overhead in certain environments.
-- **Windows Stability**: Fixed critical `WinError 2`, `EBADF: bad file descriptor`, and "Infinite Research Loop" bugs by moving to `shell=True` execution, `stdin=subprocess.DEVNULL`, and relative-path prompt management.
--   **Status**: Core communication and streaming are fully functional. Regression tests are in place. Ready for frontend integration.
+-   **Gemini CLI Integration**: Refactored `OrionCoreGeminiCLI` as a high-efficiency **Thin Wrapper**. It leverages the Gemini CLI's native `--resume` for session persistence and `GEMINI.md` for consistent persona management. This reduces latency by caching the CLI path and eliminates manual history serialization.
+-   **Windows Stability**: Fixed critical `WinError 2`, `EBADF: bad file descriptor`, and "Infinite Research Loop" bugs by moving to `shell=True` execution, `stdin=subprocess.DEVNULL`, and relative-path prompt management.
+-   **Status**: Core communication and streaming are fully functional with native CLI state management. Ready for frontend integration.
 
 ### Frontend (`frontends/`)
 -   **Web App**: [docs/frontend/index.md](docs/frontend/index.md) & [docs/frontend/web_structure.md](docs/frontend/web_structure.md)

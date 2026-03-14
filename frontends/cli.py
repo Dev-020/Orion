@@ -8,6 +8,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / 'backends'))
 # ---------------------------------------
 
 from orion_core import OrionCore
+from main_utils import config
 from dotenv import load_dotenv
 import json
 import os
@@ -20,11 +21,19 @@ def run_cli():
     """Initializes the Orion Core and runs the command-line interface."""
     
     # --- 1. Create the "Brain" ---
-    core = OrionCore()
+    if config.BACKEND == "cli":
+        from orion_core_geminicli import OrionCoreGeminiCLI
+        core = OrionCoreGeminiCLI()
+    elif config.BACKEND == "ollama":
+        from orion_core_lite import OrionLiteCore
+        core = OrionLiteCore()
+    else:
+        from orion_core import OrionCore
+        core = OrionCore()
 
     # --- 2. Run the User Interface Loop ---
     print("\n=================================================================")
-    print("Orion CLI is active. Type 'quit' to exit.")
+    print(f"Orion CLI is active ({config.BACKEND} backend). Type 'quit' to exit.")
     print("=================================================================\n")
 
     cli_session_id = "local_cli_user"
@@ -43,19 +52,40 @@ def run_cli():
             continue
 
         # --- MODIFICATION HERE ---
-        # The old `structured_prompt` is gone.
-        # We now create a list of Parts, which for the CLI is just the user's text.
-
-        # We call the new process_prompt with the correct arguments.
-        response_text, token_count, restart_pending = core.process_prompt(
+        # Handle the generator returned by process_prompt
+        print("\nOrion: ", end="", flush=True)
+        
+        response_text = ""
+        token_count = 0
+        restart_pending = False
+        
+        for chunk in core.process_prompt(
             user_prompt=user_input,
             session_id=cli_session_id,
             file_check=[],
             user_id=cli_user_id,
-            user_name=cli_user_name
-        )
+            user_name=cli_user_name,
+            stream=True
+        ):
+            if chunk["type"] == "token":
+                print(chunk["content"], end="", flush=True)
+                response_text += chunk["content"]
+            elif chunk["type"] == "status":
+                # Optional: print status in a subtle way
+                # print(f"[{chunk['content']}] ", end="", flush=True)
+                pass
+            elif chunk["type"] == "full_response":
+                response_text = chunk.get("text", response_text)
+                token_count = chunk.get("token_count", token_count)
+                restart_pending = chunk.get("restart_pending", restart_pending)
+            elif chunk["type"] == "usage":
+                token_count = chunk.get("token_count", token_count)
+                restart_pending = chunk.get("restart_pending", restart_pending)
         
-        print(f"\nOrion: {response_text}\n\n*(`Tokens: {token_count}`)*\n")
+        if token_count > 0:
+            print(f"\n\n*(`Tokens: {token_count}`)*\n")
+        else:
+            print("\n")
 
         # --- Orchestrated Restart Logic for CLI ---
         if restart_pending:
