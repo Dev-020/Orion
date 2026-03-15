@@ -36,11 +36,14 @@ def generate_new_state_from_markdown(file_path: Path):
         if stripped_line.startswith('#'):
             if current_content and current_headers:
                 header_path = "::".join(h for h, l in current_headers)
-                unique_string = f"{source_name}::{header_path}"
+                # Include a short hash of the content to ensure uniqueness even with duplicate headers
+                content_text = "".join(current_content).strip()
+                content_hash = hashlib.md5(content_text.encode()).hexdigest()[:8]
+                unique_string = f"{source_name}::{header_path}::{content_hash}"
                 chunk_id = hashlib.sha256(unique_string.encode()).hexdigest()
                 
                 breadcrumb = " > ".join(h for h, l in current_headers)
-                document_text = f"{breadcrumb}\n\n{''.join(current_content).strip()}"
+                document_text = f"{breadcrumb}\n\n{content_text}"
                 
                 metadata = {
                     "source": str(source_name),
@@ -65,11 +68,14 @@ def generate_new_state_from_markdown(file_path: Path):
 
     if current_content and current_headers:
         header_path = "::".join(h for h, l in current_headers)
-        unique_string = f"{source_name}::{header_path}"
+        # Include a short hash of the content to ensure uniqueness even with duplicate headers
+        content_text = "".join(current_content).strip()
+        content_hash = hashlib.md5(content_text.encode()).hexdigest()[:8]
+        unique_string = f"{source_name}::{header_path}::{content_hash}"
         chunk_id = hashlib.sha256(unique_string.encode()).hexdigest()
         
         breadcrumb = " > ".join(h for h, l in current_headers)
-        document_text = f"{breadcrumb}\n\n{''.join(current_content).strip()}"
+        document_text = f"{breadcrumb}\n\n{content_text}"
         
         metadata = {
             "source": str(source_name),
@@ -120,9 +126,28 @@ def run_embedding_sync(file_path_str: str):
         return
 
     logging.info(f"Step 1: Generating new state from '{source_name}'...")
-    new_ids, new_docs, new_metadatas = generate_new_state_from_markdown(file_path)
+    raw_ids, raw_docs, raw_metas = generate_new_state_from_markdown(file_path)
+    
+    # --- Local Duplicate Detection & Filtering ---
+    new_ids, new_docs, new_metadatas = [], [], []
+    seen_ids_in_this_file = {}
+    
+    for i, chunk_id in enumerate(raw_ids):
+        if chunk_id in seen_ids_in_this_file:
+            first_occurrence_idx = seen_ids_in_this_file[chunk_id]
+            logging.warning(f"DUPLICATE ID DETECTED: {chunk_id}")
+            logging.warning(f"  - First seen at chunk {first_occurrence_idx}: {raw_metas[first_occurrence_idx].get('current_section')}")
+            logging.warning(f"  - Current duplicate at chunk {i}: {raw_metas[i].get('current_section')}")
+            logging.warning(f"  - Content Preview: {raw_docs[i][:50]}...")
+            continue
+        
+        seen_ids_in_this_file[chunk_id] = i
+        new_ids.append(chunk_id)
+        new_docs.append(raw_docs[i])
+        new_metadatas.append(raw_metas[i])
+
     new_ids_set = set(new_ids)
-    logging.info(f"Generated {len(new_ids)} chunks from the source file.")
+    logging.info(f"Generated {len(new_ids)} unique chunks from the source file.")
 
     logging.info(f"Step 2: Fetching old state for '{source_name}' from database...")
     old_ids_set = get_old_state_ids(collection, source_name)

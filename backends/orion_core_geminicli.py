@@ -13,7 +13,7 @@ from google.genai import types
 from main_utils import config, main_functions as functions
 from main_utils.chat_object import ChatObject
 from main_utils.file_manager import UploadFile
-from system_utils import orion_replay, orion_tts
+from system_utils import orion_replay, orion_tts, generate_manifests
 
 logger = logging.getLogger(__name__)
 

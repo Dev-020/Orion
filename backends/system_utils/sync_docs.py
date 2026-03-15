@@ -69,6 +69,9 @@ def get_doc_as_markdown(service, doc_id):
 
 def sync_instructions():
     """Main function to check for updates and sync documents as Markdown."""
+    # Recalculate MANIFEST_FILE based on the current config.PERSONA (initialized in main)
+    manifest_file = config.DATA_DIR / f'docs_{config.PERSONA}.json'
+    
     try:
         drive_service = get_authenticated_service('drive', 'v3')
     except Exception as e:
@@ -77,7 +80,7 @@ def sync_instructions():
 
     INSTRUCTIONS_DIR.mkdir(exist_ok=True)
 
-    with open(MANIFEST_FILE, 'r+') as f:
+    with open(manifest_file, 'r+') as f:
         manifest_data = json.load(f)
         for doc_info in manifest_data['instructions']:
             doc_id = doc_info['google_doc_id']
@@ -119,5 +122,18 @@ def sync_instructions():
         f.truncate()
     
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Sync Google Docs to local Markdown files.')
+    parser.add_argument('--persona', type=str, default='default', help='The persona to use for database paths.')
+    args = parser.parse_args()
+
+    # Add project root to be able to import main_utils if not already present
+    project_root = str(Path(__file__).resolve().parent.parent)
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+
+    from main_utils.main_functions import initialize_persona
+    initialize_persona(args.persona)
+
     setup_logging("SyncDocs", config.DATA_DIR / "logs" / "system_utils.log")
     sync_instructions()
