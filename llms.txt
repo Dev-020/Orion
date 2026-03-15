@@ -12,6 +12,10 @@ Orion is a local AI application designed to provide a premium Chat interface bac
 -   **Core Logic**: `backends/orion_core.py`. Handles session state, tool calling, and streaming.
 -   **Launcher**: Textual TUI (`launcher_app/`). Manages processes (frontend, backend, ngrok).
 
+## Architectural Standards & Mandates
+-   **Design Principles**: [docs/design_principles.md](docs/design_principles.md) (CRITICAL: Read before building new components).
+-   **New Component Workflow**: [.agents/workflows/new-component-standard.md](.agents/workflows/new-component-standard.md) (Required for Frontends/Backends).
+
 ## Key Directory Map & Documentation References
 The project uses a comprehensive "Docs-as-Code" structure. Refer to these files for deep dives:
 
