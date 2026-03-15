@@ -51,6 +51,14 @@ class OrionCoreGeminiCLI:
 
         # Initialize Database access
         functions.initialize_persona(self.persona)
+
+        # Refreshing Core Instructions
+        print("--- Syncing Core Instructions... ---")
+        self.discord_id = os.getenv("DISCORD_OWNER_ID")
+        if self.discord_id:
+            functions.manual_sync_instructions(self.discord_id)
+        generate_manifests.main()
+        logger.info("--- Core Instructions Successfully synced.... ---")
         
         # --- CLI Path Resolution (cached once) ---
         self.cli_js_path = self._resolve_cli_path()
@@ -219,10 +227,14 @@ class OrionCoreGeminiCLI:
         vdb_response = f'[Relevant Context:\n{formatted_vdb_context}]' if formatted_vdb_context else ""
 
         # --- Build Data Envelope ---
+        notifications = [
+            "[System: The 'orion' skill is available with codebase-specific tools (SQL, VDB, multi-modal files). Please call activate_skill('orion') to enable them.]"
+        ]
+        if self.persona == "dnd":
+            notifications.append("[System: D&D specific tools (Search, Dice, Resources) are available within the 'orion' skill.]")
+
         data_envelope = {
-            "system_notifications": [
-                "[System: The 'orion' skill is available with codebase-specific tools (SQL, VDB, multi-modal files). Please call activate_skill('orion') to enable them.]"
-            ],
+            "system_notifications": notifications,
             "user_prompt": user_prompt,
             "vdb_context": vdb_response,
             "auth": {

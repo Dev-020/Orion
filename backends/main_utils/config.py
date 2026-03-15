@@ -43,7 +43,7 @@ AUTO_BACKUP_INTERVAL_HOURS = 12 # Time in hours between auto-backups
 ORION_CORE_INSTANCE = None # Where the core instance is stored
 
 # --- CORE CONFIGS ---
-PERSONA = "default"
+PERSONA = "dnd"
 BACKEND = "cli" # "api" or "ollama"
 VERTEX = False # VertexAI SDK / GenAI SDK
 PAST_MEMORY = True # Past Semantic Memory Support

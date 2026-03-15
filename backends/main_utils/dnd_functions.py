@@ -4,10 +4,10 @@
 __all__ = [
     "search_knowledge_base",
     "roll_dice",
-    "update_character_from_web",
-    "search_dnd_rules",
-    "browse_website",
-    "lookup_character_data",
+    #"update_character_from_web",
+    #"search_dnd_rules",
+    #"browse_website",
+    #"lookup_character_data",
     "manage_character_resource",
     "manage_character_status",
     "list_searchable_types",
@@ -34,7 +34,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- FIVETOOLS INTEGRATION ---
-from backends.system_utils.fivetools_search import (
+from system_utils.fivetools_search import (
     search as fivetools_search, 
     get_by_id as fivetools_get_by_id, 
     list_searchable_types as fivetools_list_searchable_types
@@ -257,28 +257,30 @@ def roll_dice(dice_notation: str) -> str:
         "grand_total": grand_total
     }, indent=2)
 
-def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None, item_type: Optional[str] = None, source: Optional[str] = None, data_query: Optional[dict] = None, mode: str = 'summary', max_results: int = 25) -> str:
+def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None, item_type: Optional[str] = None, source: Optional[str] = None, semantic_query: Optional[str] = None, data_query: Optional[dict] = None, mode: str = 'summary', max_results: int = 25) -> str:
     """
     Searches the D&D 5e knowledge base (local 5eTools dataset).
     This tool has two modes: 'summary' (default) and 'full'.
     - 'summary' mode returns a list of matching items with basic info (id, name, type, source).
     - 'full' mode requires a specific 'id' and returns the complete data for that single item.
+    - 'query': Exact or fuzzy search by item name.
+    - 'semantic_query': Concept-based search (e.g., "a spell that shoots a beam of frost"). Use when you don't know the exact name.
     - 'item_type': filter by type (spell, monster, feat, class, etc.). See DND Search Guide.
     - 'source': filter by source code (PHB, XGE, MM, etc.).
     - 'data_query': (Legacy) Filter by JSON keys. Not supported in 5eTools local.
-    
+
     For valid item_type and source values, see the DND Search Guide in your instructions.
     """
-    logger.info(f"--- 5eTools Knowledge Search. Mode: {mode.upper()}. Query: '{query or id}' ---")
+    logger.info(f"--- 5eTools Knowledge Search. Mode: {mode.upper()}. Query: '{query or id or semantic_query}' ---")
 
     if not config.ENABLE_5ETOOLS_LOCAL:
         return "Error: 5eTools local API is disabled in config."
 
     if mode == 'full' and not id:
         return "Error: 'full' mode requires a specific 'id'. Please perform a 'summary' search first to get the ID."
-    
-    if not any([query, id]):
-        return "Error: You must provide at least 'query' or 'id'."
+
+    if not any([query, id, semantic_query]):
+        return "Error: You must provide at least 'query', 'semantic_query', or 'id'."
 
     try:
         if mode == 'full' and id:
@@ -286,19 +288,67 @@ def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None,
             if not result:
                 return f"Source: 5eTools Local\n---\nNo entry found for id: {id}"
             return json.dumps(result, indent=2)
-        
+
+        elif semantic_query:
+            # Semantic Search via Vector DB
+            from main_utils.main_functions import execute_vdb_read
+
+            # ChromaDB requires logical operators ($and) for multiple metadata filters
+            filters = [{"source_table": "5etools"}]
+            if item_type:
+                filters.append({"item_type": item_type})
+            if source:
+                filters.append({"source": source})
+
+            if len(filters) > 1:
+                where_clause = {"$and": filters}
+            else:
+                where_clause = filters[0]
+
+            vdb_result_str = execute_vdb_read(
+                query_texts=[semantic_query], 
+                n_results=max_results, 
+                where=where_clause
+            )
+
+
+            # The vdb_result_str is a JSON dumped dict containing 'ids', 'documents', etc.
+            try:
+                vdb_result = json.loads(vdb_result_str)
+                # ChromaDB returns a list of lists for ids when query_texts is a list
+                if isinstance(vdb_result, dict) and "ids" in vdb_result and vdb_result["ids"]:
+                    found_ids = vdb_result["ids"][0]
+
+                    results = []
+                    for item_id in found_ids:
+                        item = fivetools_get_by_id(item_id)
+                        if item:
+                            results.append({
+                                "id": item["id"], 
+                                "name": item["name"], 
+                                "type": item["type"], 
+                                "source": item["source"]
+                            })
+
+                    if not results:
+                        return f"Source: 5eTools Local (Semantic)\n---\nNo exact entries found matching your conceptual criteria."
+                    return json.dumps(results, indent=2)
+                else:
+                    return f"Source: 5eTools Local (Semantic)\n---\nNo semantic matches found."
+            except json.JSONDecodeError:
+                return f"Error parsing Vector DB response: {vdb_result_str}"
+
         else:
-            # Summary mode or search
+            # Summary mode exact/fuzzy search
             results = fivetools_search(query=query, item_type=item_type, source=source, mode=mode, max_results=max_results)
             if not results:
                 return f"Source: 5eTools Local\n---\nNo entries found matching your criteria."
-            
+
             return json.dumps(results, indent=2)
 
     except Exception as e:
         logger.error(f"Error in search_knowledge_base: {e}")
         return f"An error occurred during search: {e}"
-
 def list_searchable_types() -> str:
     """
     Returns a list of all searchable D&D content types and their descriptions, 

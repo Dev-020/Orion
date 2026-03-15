@@ -40,7 +40,6 @@ import chromadb
 from chromadb.types import Metadata
 from pathlib import Path
 from system_utils import sync_docs, generate_manifests
-from system_utils import sync_docs, generate_manifests
 from . import config
 import logging
 import ollama
@@ -75,6 +74,7 @@ def get_db_paths(persona: str) -> dict:
 
 def initialize_persona(persona: str = "default"):
     """Initializes the database paths for the given persona."""
+    logger.info(f"Initializing persona: {persona}")
     paths = get_db_paths(persona)
     config.DB_FILE = paths["db_file"]
     config.CHROMA_DB_PATH = paths["chroma_db_path"]

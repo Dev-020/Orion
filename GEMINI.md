@@ -735,6 +735,7 @@ Based on the scope, you MUST load the required manifests into your active contex
   "character_schema.json",
   "db_schema.json",
   "DND_Handout.md",
+  "DND_Search_Guide.md",
   "General_Prompt_Optimizer.md",
   "Homebrew_Compendium.md",
   "long_term_memory_manifest.json",

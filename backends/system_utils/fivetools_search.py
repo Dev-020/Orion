@@ -1,9 +1,10 @@
 import logging
 import json
+import difflib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from .fivetools_loader import loader
-from backends.main_utils import config
+from main_utils import config
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ def search(
     max_results: int = 25
 ) -> List[Dict[str, Any]]:
     """
-    Searches across cached 5eTools collections.
+    Searches across cached 5eTools collections. Includes a fuzzy search fallback.
     """
     results = []
     
@@ -27,9 +28,13 @@ def search(
         # Search all mapped collections
         collections_to_search = list(loader.collections_map.keys())
 
+    # 1. Exact Substring Search
+    all_items = []
     for col_name in collections_to_search:
         collection = loader.get_collection(col_name)
         for item in collection:
+            all_items.append(item)
+            
             # Filter by query (name substring)
             if query and query.lower() not in item.get("name", "").lower():
                 continue
@@ -43,6 +48,26 @@ def search(
                 break
         if len(results) >= max_results:
             break
+
+    # 2. Fuzzy Search Fallback
+    if not results and query:
+        logger.info(f"No exact matches for '{query}'. Attempting fuzzy search...")
+        
+        # Filter all_items by source first if provided, to improve fuzzy accuracy
+        if source:
+            filtered_items = [i for i in all_items if i.get("source", "").upper() == source.upper()]
+        else:
+            filtered_items = all_items
+
+        item_names = {item.get("name"): item for item in filtered_items if item.get("name")}
+        
+        # Find closest matches. cutoff=0.6 is a standard starting point.
+        closest_names = difflib.get_close_matches(query, item_names.keys(), n=max_results, cutoff=0.6)
+        
+        if closest_names:
+            logger.info(f"Fuzzy search found matches: {closest_names}")
+            for name in closest_names:
+                results.append(item_names[name])
 
     if mode == 'summary':
         return [

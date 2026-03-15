@@ -2,7 +2,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-from backends.main_utils import config
+from main_utils import config
 
 logger = logging.getLogger(__name__)
 

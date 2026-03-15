@@ -203,7 +203,7 @@ async def lifespan(app: FastAPI):
         if config.BACKEND == "ollama":
              if 'OrionLiteCore' in globals():
                  logger.info("Initializing OrionLiteCore (Ollama Backend)...")
-                 core_instance = OrionLiteCore()
+                 core_instance = OrionLiteCore(persona=config.PERSONA)
                  logger.info("OrionLiteCore Initialized Successfully.")
              else:
                  logger.critical("OrionLiteCore not imported. Check dependencies (googleapiclient etc).")
@@ -212,14 +212,14 @@ async def lifespan(app: FastAPI):
         elif config.BACKEND == "cli":
              if 'OrionCoreGeminiCLI' in globals():
                  logger.info("Initializing OrionCoreGeminiCLI (Gemini CLI Backend)...")
-                 core_instance = OrionCoreGeminiCLI()
+                 core_instance = OrionCoreGeminiCLI(persona=config.PERSONA)
                  logger.info("OrionCoreGeminiCLI Initialized Successfully.")
              else:
                  logger.critical("OrionCoreGeminiCLI not imported. Check dependencies.")
         else:
              if 'OrionCore' in globals():
                  logger.info("Initializing OrionCore (API Backend)...")
-                 core_instance = OrionCore()
+                 core_instance = OrionCore(persona=config.PERSONA)
                  logger.info("OrionCore Initialized Successfully.")
              else:
                  logger.critical("OrionCore not imported. Check dependencies.")
