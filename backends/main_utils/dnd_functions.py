@@ -10,6 +10,7 @@ __all__ = [
     "lookup_character_data",
     "manage_character_resource",
     "manage_character_status",
+    "list_searchable_types",
 ]
 # --- END OF PUBLIC TOOL DEFINITION ---
 
@@ -31,6 +32,13 @@ from . import config
 import logging
 
 logger = logging.getLogger(__name__)
+
+# --- FIVETOOLS INTEGRATION ---
+from backends.system_utils.fivetools_search import (
+    search as fivetools_search, 
+    get_by_id as fivetools_get_by_id, 
+    list_searchable_types as fivetools_list_searchable_types
+)
 
 # --- CONSTANTS ---
 DAILY_SEARCH_QUOTA = 10000
@@ -251,72 +259,60 @@ def roll_dice(dice_notation: str) -> str:
 
 def search_knowledge_base(query: Optional[str] = None, id: Optional[str] = None, item_type: Optional[str] = None, source: Optional[str] = None, data_query: Optional[dict] = None, mode: str = 'summary', max_results: int = 25) -> str:
     """
-    Searches the knowledge base using a structured query and the low-level SQL execution function.
+    Searches the D&D 5e knowledge base (local 5eTools dataset).
     This tool has two modes: 'summary' (default) and 'full'.
     - 'summary' mode returns a list of matching items with basic info (id, name, type, source).
     - 'full' mode requires a specific 'id' and returns the complete data for that single item.
-    - 'data_query' can be a dictionary (e.g., {'metadata.is_official': True}) to filter results based on the content of the 'data' JSON column.
+    - 'item_type': filter by type (spell, monster, feat, class, etc.). See DND Search Guide.
+    - 'source': filter by source code (PHB, XGE, MM, etc.).
+    - 'data_query': (Legacy) Filter by JSON keys. Not supported in 5eTools local.
+    
+    For valid item_type and source values, see the DND Search Guide in your instructions.
     """
-    logger.info(f"--- DB Knowledge Search. Mode: {mode.upper()}. Query: '{query or id}' ---")
+    logger.info(f"--- 5eTools Knowledge Search. Mode: {mode.upper()}. Query: '{query or id}' ---")
+
+    if not config.ENABLE_5ETOOLS_LOCAL:
+        return "Error: 5eTools local API is disabled in config."
 
     if mode == 'full' and not id:
         return "Error: 'full' mode requires a specific 'id'. Please perform a 'summary' search first to get the ID."
     
-    if not any([query, id, data_query]):
-        return "Error: You must provide at least one search criterion: 'query', 'id', or 'data_query'."
+    if not any([query, id]):
+        return "Error: You must provide at least 'query' or 'id'."
 
-    select_columns = "id, name, type, source" if mode == 'summary' else "data"
-    
-    where_clauses = []
-    params: List[Any] = []
+    try:
+        if mode == 'full' and id:
+            result = fivetools_get_by_id(id)
+            if not result:
+                return f"Source: 5eTools Local\n---\nNo entry found for id: {id}"
+            return json.dumps(result, indent=2)
+        
+        else:
+            # Summary mode or search
+            results = fivetools_search(query=query, item_type=item_type, source=source, mode=mode, max_results=max_results)
+            if not results:
+                return f"Source: 5eTools Local\n---\nNo entries found matching your criteria."
+            
+            return json.dumps(results, indent=2)
 
-    if id:
-        where_clauses.append("id = ?")
-        params.append(id)
-    else:
-        if query:
-            where_clauses.append("name LIKE ?")
-            params.append(f"%{query}%")
-        if item_type:
-            where_clauses.append("type = ?")
-            params.append(item_type.lower())
-        if source:
-            where_clauses.append("source = ?")
-            params.append(source.upper())
-        if data_query:
-            for key, value in data_query.items():
-                path = f"$.{key}"
-                where_clauses.append("json_extract(data, ?) = ?")
-                params.append(path)
-                if isinstance(value, bool):
-                    params.append(1 if value else 0)
-                else:
-                    params.append(value)
+    except Exception as e:
+        logger.error(f"Error in search_knowledge_base: {e}")
+        return f"An error occurred during search: {e}"
 
-    if not where_clauses:
-         return "Error: You must provide at least one search criterion."
-
-    sql_query = f"SELECT {select_columns} FROM knowledge_base WHERE {' AND '.join(where_clauses)} LIMIT ?"
-    params.append(max_results)
-
-    from .main_functions import execute_sql_read
-    result_json = execute_sql_read(sql_query, [str(p) for p in params])
-
-    if "returned no results" in result_json:
-        return f"Source: Local Database\n---\nNo entries found matching your criteria."
-
-    if mode == 'full':
-        try:
-            data = json.loads(result_json)
-            if data and 'data' in data[0]:
-                return json.dumps(json.loads(data[0]['data']), indent=2)
-            else:
-                return f"Source: Local Database\n---\nNo full data entry found for the given id."
-        except (json.JSONDecodeError, IndexError, KeyError) as e:
-            logger.error(f"ERROR: Failed to parse full data in search_knowledge_base: {e}")
-            return "Error: Could not parse or find the full data entry. The record may be malformed."
-    
-    return result_json
+def list_searchable_types() -> str:
+    """
+    Returns a list of all searchable D&D content types and their descriptions, 
+    dynamically discovered from the 5eTools schema.
+    """
+    logger.info("--- Discovery: Listing searchable D&D types ---")
+    try:
+        types = fivetools_list_searchable_types()
+        if not types:
+            return "Info: No searchable types found. Check 5eTools installation."
+        return json.dumps(types, indent=2)
+    except Exception as e:
+        logger.error(f"Error in list_searchable_types: {e}")
+        return f"An error occurred while discovering types: {e}"
 
 def update_character_from_web() -> str:
     """

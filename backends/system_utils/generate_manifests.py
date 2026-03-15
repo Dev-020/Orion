@@ -302,7 +302,15 @@ def main():
             generate_pending_logs_json,
             generate_db_schema_json
         ]
-        
+        # Only add knowledge_base manifest if the table exists (e.g. DND persona).
+        try:
+            check_cursor = conn.cursor()
+            check_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_base'")
+            if check_cursor.fetchone():
+                db_generators.append(generate_knowledge_base_manifest)
+        except Exception:
+            pass
+
         for generator_func in db_generators:
             # The function name (e.g., "generate_user_profile_manifest") is used for logging.
             generator_name = generator_func.__name__

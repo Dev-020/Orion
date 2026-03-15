@@ -20,6 +20,12 @@ BACKEND_ROOT = PROJECT_ROOT / "backends"
 DATA_DIR = BACKEND_ROOT / "data"
 OUTPUT_DIR = BACKEND_ROOT / "instructions"
 
+# --- 5ETOOLS PATHS ---
+FIVETOOLS_ROOT = PROJECT_ROOT / "data" / "5eTools"
+FIVETOOLS_DATA_DIR = FIVETOOLS_ROOT / "data"
+FIVETOOLS_SCHEMA_DIR = FIVETOOLS_ROOT / "utils" / "schema" / "site"
+ENABLE_5ETOOLS_LOCAL = True
+
 # --- GLOBAL VARIABLES ---
 TEXT_FILE_EXTENSIONS = ('.json', '.xml', '.txt', '.py', '.md', '.log', '.yml', '.yaml', '.sh', '.bat', '.css', '.html', '.js')
 ALLOWED_ORIGINS = [
