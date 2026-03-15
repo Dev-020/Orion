@@ -71,93 +71,138 @@ def restricted(func):
     return wrapper
 
 # --- Message Chain Helper (mirrors Discord's update_message_chain) ---
-async def update_message_chain_tg(chat, chain, full_text, parse_mode=None):
+# --- Message Chain Helper ---
+async def update_message_chain_tg(chat, chain, full_text, parse_mode=constants.ParseMode.HTML):
     """
     Telegram equivalent of Discord's update_message_chain.
-    Splits text into chunks, edits existing messages in the chain,
-    and sends new ones for overflow. Includes content-diff check
-    to prevent 'Message is not modified' errors.
+    Splits text into chunks, ensures each chunk is valid HTML/Markdown,
+    and updates the message chain.
     """
-    CHUNK_SIZE = 4000  # Leave margin for Telegram's 4096 hard limit
-    text_chunks = [full_text[i:i+CHUNK_SIZE] for i in range(0, len(full_text), CHUNK_SIZE)]
+    CHUNK_SIZE = 4000 
+    
+    # If using HTML, we must ensure each chunk is valid on its own
+    if parse_mode == constants.ParseMode.HTML:
+        # We split the raw HTML-converted text first
+        text_chunks = [full_text[i:i+CHUNK_SIZE] for i in range(0, len(full_text), CHUNK_SIZE)]
+        # Then we fix each chunk
+        text_chunks = [ensure_valid_html(chunk) for chunk in text_chunks]
+    else:
+        text_chunks = [full_text[i:i+CHUNK_SIZE] for i in range(0, len(full_text), CHUNK_SIZE)]
+
     if not text_chunks:
         text_chunks = [""]
 
     for i, chunk in enumerate(text_chunks):
         if i < len(chain):
-            # Content-diff check (Discord safeguard #2)
             try:
-                current_text = chain[i].text or ""
-            except Exception:
-                current_text = ""
-            
-            if current_text != chunk:
-                try:
-                    await chain[i].edit_text(chunk, parse_mode=parse_mode)
-                except RetryAfter as e:
-                    logger.warning(f"[Rate Limit] edit_text RetryAfter {e.retry_after}s on chain[{i}]")
-                    await asyncio.sleep(e.retry_after)
-                    try:
-                        await chain[i].edit_text(chunk, parse_mode=parse_mode)
-                    except TelegramError:
-                        pass
-                except TelegramError as e:
-                    logger.debug(f"[Chain Edit] Skipped chain[{i}]: {e}")
-            else:
-                logger.debug(f"[Chain Edit] Content unchanged for chain[{i}], skipping API call")
+                # Content diff check to reduce API calls
+                # Note: Telegram Message objects don't reliably store .text if it was HTML
+                # so we just try to edit.
+                await chain[i].edit_text(chunk, parse_mode=parse_mode)
+            except RetryAfter as e:
+                await asyncio.sleep(e.retry_after)
+                try: await chain[i].edit_text(chunk, parse_mode=parse_mode)
+                except: pass
+            except TelegramError as e:
+                if "Message is not modified" not in str(e):
+                    logger.debug(f"[Chain Edit] {e}")
         else:
-            # Overflow: send new message (Discord safeguard #1)
             try:
-                logger.info(f"[Chain Overflow] Sending new message for chunk {i} ({len(chunk)} chars)")
                 new_msg = await chat.send_message(chunk, parse_mode=parse_mode)
                 chain.append(new_msg)
             except RetryAfter as e:
-                logger.warning(f"[Rate Limit] send_message RetryAfter {e.retry_after}s")
                 await asyncio.sleep(e.retry_after)
-                try:
-                    new_msg = await chat.send_message(chunk, parse_mode=parse_mode)
-                    chain.append(new_msg)
-                except TelegramError as e2:
-                    logger.error(f"[Chain Overflow] Failed after retry: {e2}")
+                new_msg = await chat.send_message(chunk, parse_mode=parse_mode)
+                chain.append(new_msg)
             except TelegramError as e:
-                logger.error(f"[Chain Overflow] Failed to send overflow message: {e}")
+                logger.error(f"[Chain Overflow] {e}")
 
     return chain
 
 
+import html
+import re
+
+def markdown_to_html(text):
+    """
+    Markdown to HTML converter for Telegram HTML parse_mode.
+    Does NOT include auto-closing (handled by ensure_valid_html).
+    """
+    # 1. Escape HTML first
+    text = html.escape(text)
+    
+    # 2. Convert Bold: **text** -> <b>text</b>
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    
+    # 3. Convert Code: `text` -> <code>text</code>
+    text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
+    
+    # 4. Convert Links: [text](url) -> <a href="\2">\1</a>
+    text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2">\1</a>', text)
+
+    return text
+
+def ensure_valid_html(text):
+    """
+    Ghost Tag (Auto-Closer) strategy using a stack to ensure 
+    nested tags are closed in the correct order for a single message.
+    """
+    # Handle raw Markdown mid-stream artifacts first
+    if text.count("**") % 2 != 0:
+        last_idx = text.rfind("**")
+        if last_idx != -1:
+            text = text[:last_idx] + "<b>" + text[last_idx+2:]
+    
+    if text.count("`") % 2 != 0:
+        last_idx = text.rfind("`")
+        if last_idx != -1:
+            text = text[:last_idx] + "<code>" + text[last_idx+1:]
+
+    # Stack-based HTML tag closer
+    # Detects <b>, <i>, <code>, <u>, <s>, <a>, <blockquote>
+    tags = re.findall(r'<(/?)([a-z1-6]+)(?: [^>]*)?>', text, re.IGNORECASE)
+    stack = []
+    for is_closing, tag_name in tags:
+        tag_name = tag_name.lower()
+        if is_closing:
+            if stack and stack[-1] == tag_name:
+                stack.pop()
+        else:
+            stack.append(tag_name)
+    
+    # Close any remaining tags in the stack in reverse order
+    for tag_name in reversed(stack):
+        text += f"</{tag_name}>"
+
+    return text
+
+# --- Async Generator Consumer ---
 # --- Async Generator Consumer ---
 async def consume_generator_async(generator, initial_message):
     """
-    Consumes the OrionClient generator and updates the Telegram message.
-    Implements (Discord-style safeguards):
-      - Throttled edits (config.EDIT_TIME).
-      - Message chain with overflow (no truncation).
-      - Content-diff check (prevents 'Message is not modified' loop).
-      - Guaranteed last_edit_time update (prevents API spam).
-      - Thought process as file attachment on transition.
+    Generic Orion protocol consumer for Telegram.
+    Handles 'thought' and 'token' events, providing real-time feedback and clean transitions.
     """
     full_text_buffer = ""
     last_edit_time = 0
     edit_interval = config.EDIT_TIME
     
-    # Track pagination & state (Discord-style message_chain)
+    # Track pagination & chain
     message_chain = [initial_message]
     chat = initial_message.chat
     thought_buffer = ""
-    is_thinking = True
-    
-    def get_display_text():
-        """Helper to format text based on state."""
+    is_thinking = True 
+
+    def get_display_text(is_thought_phase=True):
+        """Helper to format text based on phase."""
         text = ""
-        if is_thinking:
+        if is_thought_phase:
             if thought_buffer:
-                # Format thoughts as a quote block
-                encoded_thoughts = thought_buffer.strip().replace('\n', '\n> ')
-                text += f"**Thinking Process:**\n> {encoded_thoughts}\n\n"
-            else:
-                text += "*[Orion is thinking...]*"
+                formatted_thoughts = markdown_to_html(thought_buffer.strip())
+                text += f"<b>Thinking Process:</b>\n<blockquote>{formatted_thoughts}</blockquote>\n\n"
+            text += markdown_to_html(full_text_buffer)
         else:
-            text += full_text_buffer
+            text += markdown_to_html(full_text_buffer)
         return text
 
     try:
@@ -173,118 +218,110 @@ async def consume_generator_async(generator, initial_message):
                 thought_buffer += content
                 now = time.time()
                 if now - last_edit_time > edit_interval:
-                    try:
-                        display_text = get_display_text()
-                        logger.debug(f"[Thought Edit] Updating thought display ({len(display_text)} chars, {len(message_chain)} msgs in chain)")
-                        message_chain = await update_message_chain_tg(
-                            chat, message_chain, display_text,
-                            parse_mode=constants.ParseMode.MARKDOWN
-                        )
-                    except Exception as e:
-                        logger.error(f"[Thought Edit] Unexpected error: {e}")
-                    finally:
-                        # Discord safeguard #3: ALWAYS update last_edit_time
-                        last_edit_time = now
+                    display_text = get_display_text(is_thought_phase=True)
+                    message_chain = await update_message_chain_tg(chat, message_chain, display_text)
+                    last_edit_time = now
 
             elif msg_type == "token":
-                # TRANSITION: First response token arrived
-                if is_thinking:
+                # TRANSITION DETECT
+                if is_thinking and thought_buffer:
                     is_thinking = False
-                    logger.info(f"[Transition] Thought→Response. Thought length: {len(thought_buffer)} chars, chain size: {len(message_chain)}")
+                    logger.info(f"[Transition] Thought→Response. Thought length: {len(thought_buffer)}")
                     
-                    # 1. Handle Thoughts — send as file
+                    # 1. Solidification Deduplication: 
+                    # If the backend yielded thoughts and then "promoted" them to a token,
+                    # we must strip that token from the end of the thought buffer.
+                    clean_thoughts = thought_buffer.strip()
+                    clean_token = content.strip()
+                    if clean_thoughts.endswith(clean_token):
+                        # Strip redundant answer from thoughts
+                        thought_buffer = clean_thoughts[:-len(clean_token)].strip()
+                        logger.debug("[Transition] Stripped redundant answer from thought process.")
+
+                    # 2. Convert Thoughts to File (if non-empty)
                     if thought_buffer:
                         try:
                             thought_file = io.BytesIO(thought_buffer.encode('utf-8'))
                             await initial_message.reply_document(
                                 document=thought_file,
                                 filename="thought_process.md",
-                                caption="**Thinking Process**",
-                                parse_mode=constants.ParseMode.MARKDOWN
+                                caption="<b>Thinking Process</b>",
+                                parse_mode=constants.ParseMode.HTML
                             )
-                            logger.info("[Transition] Thought file sent successfully")
                         except Exception as e:
-                            logger.error(f"[Transition] Failed to send thought file: {e}")
+                            logger.error(f"Failed to send thought file: {e}")
                     
-                    # 2. Cleanup overflow messages (mirrors Discord lines 142-148)
-                    if len(message_chain) > 1:
-                        logger.info(f"[Transition] Cleaning up {len(message_chain) - 1} overflow thought messages")
-                        for overflow_msg in message_chain[1:]:
-                            try:
-                                await overflow_msg.delete()
-                            except TelegramError:
-                                pass  # Best effort
-                        message_chain = [message_chain[0]]
-                    
-                    # 3. Reset message for the actual response
+                    # 3. Cleanup: Delete the Thinking Chain
+                    for msg in message_chain:
+                        try: await msg.delete()
+                        except: pass
+
+                    # 4. Start Response in NEW Chain
+                    new_msg = await chat.send_message(markdown_to_html(content), parse_mode=constants.ParseMode.HTML)
+                    message_chain = [new_msg]
                     full_text_buffer = content
-                    try:
-                        await message_chain[0].edit_text(full_text_buffer)
-                    except RetryAfter as e:
-                        await asyncio.sleep(e.retry_after)
-                        try:
-                            await message_chain[0].edit_text(full_text_buffer)
-                        except TelegramError:
-                            pass
-                    except TelegramError as e:
-                        logger.error(f"[Transition] Edit failed, sending new message: {e}")
-                        new_msg = await chat.send_message(full_text_buffer)
-                        message_chain = [new_msg]
                     
                     last_edit_time = time.time()
-                    continue
+                    continue 
 
+                is_thinking = False # Out of thinking mode
                 full_text_buffer += content
                 
                 # Throttled Edit
                 now = time.time()
                 if now - last_edit_time > edit_interval:
-                    try:
-                        logger.debug(f"[Token Edit] Updating response ({len(full_text_buffer)} chars, {len(message_chain)} msgs)")
-                        message_chain = await update_message_chain_tg(
-                            chat, message_chain, full_text_buffer
-                        )
-                    except Exception as e:
-                        logger.error(f"[Token Edit] Unexpected error: {e}")
-                    finally:
-                        # Discord safeguard #3: ALWAYS update last_edit_time
-                        last_edit_time = now
+                    display_text = get_display_text(is_thought_phase=False)
+                    message_chain = await update_message_chain_tg(chat, message_chain, display_text)
+                    last_edit_time = now
 
             elif msg_type == "full_response":
                 full_text_buffer = item.get("text", "")
                 should_restart = item.get("restart_pending", False)
-                logger.info(f"[Full Response] Received final text ({len(full_text_buffer)} chars)")
+
+            elif msg_type == "usage":
+                should_restart = item.get("restart_pending", False)
 
             elif msg_type == "error":
                 full_text_buffer += f"\n\n[System Error: {content}]"
-                logger.error(f"[Stream Error] {content}")
-                try:
-                    message_chain = await update_message_chain_tg(chat, message_chain, full_text_buffer)
-                except Exception:
-                    pass
+                display_text = get_display_text(is_thought_phase=is_thinking)
+                await update_message_chain_tg(chat, message_chain, display_text)
 
         # Final Flush
-        logger.info(f"[\033[92mResponse Complete\033[0m] Session: {initial_message.chat_id} | Final length: {len(full_text_buffer)} chars")
         if is_thinking and thought_buffer:
-            # Case: Only thoughts produced, no response tokens
-            logger.info("[Final Flush] Only thoughts produced, sending as file")
-            thought_file = io.BytesIO(thought_buffer.encode('utf-8'))
-            await initial_message.reply_document(document=thought_file, filename="thought_process.md")
-            await message_chain[0].edit_text("*Done Thinking.*")
+            # Case: Only thoughts (no tokens arrived before stream closed)
+            try:
+                # Same Deduplication for the final flush
+                if full_text_buffer and thought_buffer.strip().endswith(full_text_buffer.strip()):
+                    thought_buffer = thought_buffer.strip()[:-len(full_text_buffer.strip())].strip()
+
+                if thought_buffer:
+                    thought_file = io.BytesIO(thought_buffer.encode('utf-8'))
+                    await initial_message.reply_document(
+                        document=thought_file, 
+                        filename="thought_process.md",
+                        caption="<b>Thinking Process (Final)</b>",
+                        parse_mode=constants.ParseMode.HTML
+                    )
+                
+                for msg in message_chain:
+                    try: await msg.delete()
+                    except: pass
+                
+                if full_text_buffer:
+                     await chat.send_message(markdown_to_html(full_text_buffer), parse_mode=constants.ParseMode.HTML)
+                else:
+                     await chat.send_message("<b>Done Thinking.</b>", parse_mode=constants.ParseMode.HTML)
+            except: pass
         else:
-            # Final update with complete response
-            logger.info(f"[Final Flush] Updating message chain with complete response ({len(message_chain)} msgs)")
-            message_chain = await update_message_chain_tg(chat, message_chain, full_text_buffer)
+            await update_message_chain_tg(chat, message_chain, get_display_text(is_thought_phase=False))
 
         return should_restart
 
     except Exception as e:
-        logger.error(f"[Consumer Error] {e}", exc_info=True)
+        logger.error(f"[Consumer Error] {e}")
         try:
-            error_text = f"{full_text_buffer}\n\n[Bot Error: {e}]"
-            await message_chain[0].edit_text(error_text[:4096])
-        except Exception:
-            pass
+            await update_message_chain_tg(chat, message_chain, f"{full_text_buffer}\n\n[Error: {e}]")
+        except: pass
     
     return False
 
@@ -447,7 +484,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # recent_messages_buffer[chat_id].clear()
     # logger.debug(f"[\033[93mBuffer Debug\033[0m] Chat {chat_id}: Buffer cleared after context retrieval.")
 
-    wait_msg = await message.reply_text("*[Orion is thinking...]*", parse_mode=constants.ParseMode.MARKDOWN)
+    wait_msg = await message.reply_text("<i>[Orion is thinking...]</i>", parse_mode=constants.ParseMode.HTML)
     
     use_stream = streaming_preferences.get(session_id, True)
     

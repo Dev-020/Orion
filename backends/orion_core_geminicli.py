@@ -24,7 +24,8 @@ GEMINI_MD_PATH = os.path.join(PROJECT_ROOT, 'GEMINI.md')
 
 INSTRUCTIONS_FILES = [
     'Primary_Directive.md', 
-    'master_manifest.json'
+    'master_manifest.json',
+    'Operational_Protocols.md'
 ]
 
 
@@ -283,6 +284,10 @@ class OrionCoreGeminiCLI:
         token_count = 0
         new_tool_turns = []
         temp_file_path = None
+        
+        # Buffers for differentiating thoughts vs response
+        current_turn_buffer = ""
+        in_thought_phase = True # Start in thought phase
 
         try:
             # 1. Write data envelope to JSON temp file
@@ -320,7 +325,7 @@ class OrionCoreGeminiCLI:
                 encoding='utf-8',
                 bufsize=1,
                 shell=True,
-                cwd=PROJECT_ROOT  # Run from project root so GEMINI.md is found
+                cwd=PROJECT_ROOT 
             )
 
             # 4. Stream JSONL output
@@ -335,51 +340,70 @@ class OrionCoreGeminiCLI:
                     msg_type = data.get("type")
                     
                     if msg_type == "init":
-                        # Capture CLI session ID for future --resume calls
                         new_cli_session_id = data.get("session_id")
                         if new_cli_session_id:
                             self.cli_sessions[session_id] = new_cli_session_id
-                            logger.info(f"[CLI Core] Session mapped: {session_id} -> {new_cli_session_id}")
                     
                     elif msg_type == "message" and data.get("role") == "assistant":
                         content = data.get("content", "")
                         if content:
-                            yield {"type": "token", "content": content}
-                            full_response_text += content
-                            if getattr(config, 'VOICE', False):
-                                orion_tts.process_stream_chunk(content)
+                            # Accumulate content for potential promotion to token
+                            current_turn_buffer += content
+                            # ALWAYS yield as a thought for real-time feedback
+                            yield {"type": "thought", "content": content}
                                 
                     elif msg_type == "tool_use":
+                        # AI decided to use a tool, so the current messages were thoughts/planning
+                        current_turn_buffer = "" 
                         tool_name = data.get("tool_name", "unknown")
                         logger.info(f"[CLI Core] Tool Called: {tool_name}")
                         yield {"type": "status", "content": f"Running tool: {tool_name}"}
                         
                     elif msg_type == "tool_result":
+                        # Tool result received. The next message might be another tool or the answer.
                         tool_name = data.get("tool_id", "unknown")
                         output = data.get("output", "")
                         logger.info(f"[CLI Core] Tool Result: {tool_name}")
+                        args = data.get("parameters", {})
                         new_tool_turns.append({
                             "name": tool_name,
-                            "args": {},
+                            "args": args, 
                             "result": str(output)
                         })
                         yield {"type": "status", "content": f"Tool result parsed"}
                         
                     elif msg_type == "result":
-                        # Extract token usage if available
+                        # Generation is complete. Promote the final buffer to a token.
+                        if current_turn_buffer:
+                            yield {"type": "token", "content": current_turn_buffer}
+                            full_response_text = current_turn_buffer
+                            
+                            if getattr(config, 'VOICE', False):
+                                orion_tts.process_stream_chunk(current_turn_buffer)
+                        
                         usage = data.get("usage", {})
                         if usage:
                             token_count = usage.get("total_tokens", 0)
-                        logger.info(f"[CLI Core] Generation complete.")
+                        logger.info(f"[CLI Core] Turn complete.")
+                        break
+                        
+                        usage = data.get("usage", {})
+                        if usage:
+                            token_count = usage.get("total_tokens", 0)
+                        logger.info(f"[CLI Core] Turn complete.")
                         break
                         
                 except json.JSONDecodeError as jde:
                     if "{" in line:
                         logger.debug(f"[CLI JSON Error] {jde} on line: {line.strip()}")
             
-            if not full_response_text:
+            if not full_response_text and not current_turn_buffer:
                 logger.warning("[CLI Core] No content received from CLI process.")
                 yield {"type": "token", "content": "[No response from CLI core]"}
+            elif not full_response_text and current_turn_buffer:
+                # Fallback flush if result tag was missed but buffer has content
+                full_response_text = current_turn_buffer
+                yield {"type": "token", "content": full_response_text}
                     
             # Cleanup process
             cli_process.wait(timeout=30.0)

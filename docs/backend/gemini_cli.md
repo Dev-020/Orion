@@ -10,6 +10,10 @@ Unlike other cores that manually manage history and system instructions via the 
 2.  **Persona Management**: Uses a `GEMINI.md` file in the project root. The CLI automatically loads this file as persistent system context.
 3.  **Prompt Delivery**: Prompts are sent via a temporary JSON file (Data Envelope) using the `--prompt @filename` flag.
 4.  **Output Stream**: Uses the CLI's `-o stream-json` flag to receive structured JSONL events (init, message, tool_use, tool_result, result).
+5.  **Thought/Token Promotion**: 
+    -   To provide real-time feedback, all `message` events from the CLI are yielded as `thought` packets.
+    -   A local buffer accumulates these messages but is **reset** if a `tool_use` event occurs (meaning previous messages were just planning for that tool).
+    -   Upon the final `result` event, the remaining buffer content is yielded as a `token`, signaling the final answer and triggering the transition in frontends.
 
 ## Key Components
 
@@ -37,4 +41,4 @@ Orion wraps the user prompt and semantic context into a structured JSON envelope
 ## Advantages
 -   **Reduced Latency**: Caches the CLI executable path at startup to avoid `npm root -g` overhead.
 -   **Native Capabilities**: Leverage's the CLI's built-in file handling and tool execution without redundant Python logic.
--   **Simplified Core**: The Python code is reduced to a transport layer, making it easier to maintain and faster to execute.
+-   **Generic Protocol Compliance**: Emulates the `thought`/`token` behavior of larger Orion cores, allowing it to work seamlessly with any Orion frontend.
